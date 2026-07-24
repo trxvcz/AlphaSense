@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/*
+ * Kolory idą przez klasy Tailwind (bg-*, text-*, dark:*) w komponentach,
+ * nie przez hexy tutaj — patrz docs/konwencje.md. Ten plik tylko mapuje
+ * fonty next/font na tokeny Tailwind.
+ */
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}

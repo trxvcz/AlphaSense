@@ -14,3 +14,5 @@ coverage/
 *.dump
 secrets/
 .claude/settings.local.json
+.idea/
+.mcp.json

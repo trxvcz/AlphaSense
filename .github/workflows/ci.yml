@@ -24,7 +24,7 @@ jobs:
       - run: pip install -r backend/requirements-dev.txt
       - run: ruff format --check backend
       - run: ruff check backend
-      - run: mypy backend/app
+      - run: cd backend && mypy app
       - name: Migracje
         run: cd backend && alembic upgrade head
         env: { DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test' }
@@ -34,6 +34,8 @@ jobs:
           DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
           REDIS_URL: 'redis://localhost:6379/0'
       - name: Test izolacji dwóch użytkowników (bramka bezpieczeństwa)
+        # Plik powstaje w kroku 15 planu (etap 2) — do tego czasu krok pomija się bez błędu.
+        if: hashFiles('backend/tests/test_isolation.py') != ''
         run: cd backend && pytest -q tests/test_isolation.py
         env:
           DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
