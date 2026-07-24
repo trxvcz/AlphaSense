@@ -1,0 +1,12 @@
+{
+  "table": "A",
+  "currency": "dolar amerykański",
+  "code": "USD",
+  "rates": [
+    {"no": "138/A/NBP/2026", "effectiveDate": "2026-07-20", "mid": 3.7906},
+    {"no": "139/A/NBP/2026", "effectiveDate": "2026-07-21", "mid": 3.7885},
+    {"no": "140/A/NBP/2026", "effectiveDate": "2026-07-22", "mid": 3.7945},
+    {"no": "141/A/NBP/2026", "effectiveDate": "2026-07-23", "mid": 3.7946},
+    {"no": "142/A/NBP/2026", "effectiveDate": "2026-07-24", "mid": 3.8000}
+  ]
+}

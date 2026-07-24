@@ -49,6 +49,8 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 `GET /assets/search?q=`, `GET /assets/{id}`, `PATCH /assets/{id}/metadata` (override), `GET /meta/freshness`, `GET /health`
 
+`GET /assets/search` i `GET /meta/freshness` są **publiczne** (bez `Authorization`) — `assets`/`markets`/`ingestion_runs` to słowniki globalne, nie zasoby użytkownika (żaden FK do `users`), więc nie ma tu czego chronić przez `get_owned_*`. Pierwsze publiczne trasy pod `/api` poza `/health`.
+
 ## Kształty odpowiedzi
 
 ```jsonc
@@ -90,6 +92,23 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 // GET /portfolios/{portfolio_id}/concentration
 { "top5_share": "0.61", "count": 14, "hhi": "0.19", "interpretation": "średnia" }
+
+// GET /assets/search?q=cdr  (min. 2 znaki; brak/za krótkie q → 422, patrz „Błędy")
+// szuka po symbol/name (ILIKE '%q%', case-insensitive), max 20 trafień, tylko aktywa is_active=true.
+// aktywom bez sector/country zleca uzupełnienie metadanych w tle (nie blokuje odpowiedzi)
+[
+  { "id": "uuid", "symbol": "CDR", "name": "CD Projekt", "asset_class": "equity", "market_code": "GPW", "currency": "PLN" }
+]
+
+// GET /meta/freshness
+// świeże = jest przebieg ingestii (dowolnego statusu) z dzisiaj lub wczoraj (UTC);
+// rynek bez żadnego ingestion_run → stale: true, last_run_at/status: null (nie błąd)
+{
+  "markets": [
+    { "code": "GPW", "name": "Giełda Papierów Wartościowych", "last_run_at": "2026-07-23T18:31:04.221000Z", "status": "ok", "stale": false },
+    { "code": "CRYPTO", "name": "Rynek krypto (24/7)", "last_run_at": null, "status": null, "stale": true }
+  ]
+}
 ```
 
 ## Rate limiting

@@ -44,12 +44,19 @@ class Settings(BaseSettings):
     # --- dostawcy danych ---
     finnhub_api_key: str = ""
     alphavantage_api_key: str = ""
-    coingecko_api_key: str = ""
 
     # --- limity dostawców (zapytania na minutę) ---
     rate_limit_stooq: int = 60
     rate_limit_yfinance: int = 30
     rate_limit_finnhub: int = 60
+    # Binance: publiczne REST, bez klucza, limit oparty o wagę (1200/min na
+    # IP przy wadze 2 dla `/klines` — 60/min to konserwatywny, spójny domyślny
+    # limit z resztą dostawców, nie twardy limit Binance).
+    rate_limit_binance: int = 60
+    # NBP nie publikuje twardego limitu zapytań (API publiczne, bez klucza)
+    # — 60/min to ten sam konserwatywny domyślny limit co reszta dostawców
+    # bez udokumentowanego limitu (Binance wyżej), nie wartość zmierzona.
+    rate_limit_nbp: int = 60
     circuit_failure_threshold: int = 5
     circuit_reset_seconds: int = 600
 

@@ -1,8 +1,8 @@
 # docker-compose.yml — środowisko dev (hot reload, porty wystawione).
 # Wersja produkcyjna: docker-compose.prod.yml (etap 7).
 #
-# Zakres tego etapu (krok 6 planu): postgres, redis, api, frontend.
-# `worker` i `caddy` — etapy 4 i 7, świadomie poza zakresem.
+# Zakres: postgres, redis, api, worker, frontend.
+# `caddy` — etap 7, świadomie poza zakresem.
 
 services:
   postgres:
@@ -40,6 +40,20 @@ services:
         condition: service_started
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "worker.scheduler"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./backend:/app
 

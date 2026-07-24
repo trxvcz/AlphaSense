@@ -19,13 +19,13 @@ seed:
 	docker compose exec api python -m app.cli seed
 
 test:
-	docker compose exec api pytest -q
+	docker compose exec api pytest -q -m "not network"
 
 check:     ## bramka jakości — musi być zielona przed „gotowe"
 	docker compose exec api ruff format --check .
 	docker compose exec api ruff check .
 	docker compose exec api mypy app
-	docker compose exec api pytest -q
+	docker compose exec api pytest -q -m "not network"
 	cd frontend && npm run lint && npx tsc --noEmit && npm run build
 
 fmt:

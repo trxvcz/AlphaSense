@@ -92,13 +92,13 @@ backend/
       analytics/   allocation, concentration, risk, performance
       news/
     db/            base.py, session.py
+  worker/          scheduler.py, jobs/ (ten sam obraz Dockera co API, inny `command:` w compose)
   alembic/versions/
   tests/           unit/, integration/, test_isolation.py
 frontend/
   app/             App Router: (auth)/, dashboard/, portfel/, rynki/, struktura/
   components/      ui/, charts/, forms/
   lib/             api client, query keys, formatery Decimal
-worker/            scheduler.py, jobs/
 docs/              projekt, plan, adr/, konwencje, model danych, kontrakt API
 .claude/           agents/, commands/, skills/
 ```

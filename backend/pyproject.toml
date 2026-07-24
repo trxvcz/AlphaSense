@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["app"]
+src = ["app", "worker"]
 
 [tool.ruff.lint]
 select = [
@@ -25,7 +25,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["app"]
+known-first-party = ["app", "worker"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -34,7 +34,10 @@ quote-style = "double"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["app"]
+# `worker/` (plan krok 23) dzieli obraz Dockera z `app/` (docker-compose,
+# inny `command:`) i podlega tym samym regułom strict — dopisane obok `app`
+# zamiast osobnej sekcji, bo to jedna baza kodu backendu, nie osobny pakiet.
+files = ["app", "worker"]
 
 # Authlib nie publikuje py.typed/stuby (stan na 1.7.2) — bez tego mypy strict
 # odmawia analizy modułu w ogóle (import-untyped). Klienta OAuth trzymamy za
@@ -42,6 +45,21 @@ files = ["app"]
 # lokalna, nie rozlewa się po resztcie `app/modules/auth`.
 [[tool.mypy.overrides]]
 module = "authlib.*"
+ignore_missing_imports = true
+
+# yfinance nie publikuje py.typed/stuby (stan na 1.5.2) — bez tego mypy strict
+# odmawia analizy modułu w ogóle (import-untyped), tak samo jak przy Authlib
+# wyżej. Klienta trzymamy za jedną granicą
+# (`app/modules/marketdata/providers/yfinance.py`).
+[[tool.mypy.overrides]]
+module = "yfinance.*"
+ignore_missing_imports = true
+
+# APScheduler (3.11.x) nie publikuje py.typed/stuby — tak samo jak Authlib/
+# yfinance wyżej. Granica ograniczona do `worker/scheduler.py` (jedyne
+# miejsce, które go importuje).
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -53,3 +71,9 @@ asyncio_mode = "auto"
 # "Future attached to a different loop" z asyncpg.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+markers = [
+    # Testy dymne na realne API dostawców (NBP, Stooq, yfinance, ...) —
+    # wyłączone z CI (`ci.yml`: `pytest -q -m "not network"`), uruchamiane
+    # tylko ręcznie/lokalnie (SKILL `data-provider`, sekcja „Testy").
+    "network: testy wymagające prawdziwego dostępu do sieci",
+]

@@ -4,8 +4,9 @@ ruff==0.16.0
 mypy==2.3.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
-httpx==0.28.1
-# Mockuje żądania HTTP klienta Authlib (httpx) do Google w testach OAuth —
+# httpx: już w requirements.txt (zależność produkcyjna providerów NBP/
+# Stooq/Finnhub/Binance, etap 4) — tu tylko dopisek, po co jej używają testy:
+# mockuje żądania HTTP klienta Authlib (httpx) do Google w testach OAuth —
 # bez tego jedyną alternatywą byłoby monkeypatchowanie wnętrza Authlib albo
 # realne wywołania sieciowe (zabronione w testach, docs/konwencje.md).
 respx==0.23.1

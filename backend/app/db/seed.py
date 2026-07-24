@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.modules.auth.models import User
-from app.modules.marketdata.models import Asset, Market
+from app.modules.marketdata.models import Asset, AssetSourceMap, Market
 from app.modules.portfolio.models import Holding, Portfolio
 
 # .example: RFC 2606, gwarantowana nierozwiązywalna domena demo
@@ -77,6 +77,27 @@ class AssetSeed:
     sector: str | None = None
     country: str | None = None
     region: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceMapSeed:
+    """Jedno mapowanie aktywa na symbol u konkretnego dostawcy
+    (`asset_source_map`) — bez tego `worker/jobs/ingest_market.py` (plan
+    krok 23) nie ma czego przetłumaczyć przez `get_provider_symbol` dla
+    żadnego z aktywów/indeksów zasianych niżej (CLAUDE.md #4, zasada 4:
+    „Symbol zewnętrzny nigdy nie jest sklejany w kodzie"). Wartości wprost
+    z `docs/slownik-rynkow.md`, kolejność (`priority`) zgodna z kolejnością
+    dostawców w `build_fallback_chain` dla danego rynku (`service.py`) —
+    dziś informacyjna (`build_fallback_chain` nie czyta jeszcze
+    `priority`, patrz jego docstring), ale poprawna względem docelowego
+    zachowania.
+    """
+
+    asset_symbol: str
+    market_code: str
+    provider: str
+    provider_symbol: str
+    priority: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +210,42 @@ DEMO_HOLDINGS: tuple[HoldingSeed, ...] = (
     HoldingSeed("bitcoin", "CRYPTO", Decimal("0.1"), Decimal("60000.00"), "USD"),
 )
 
+# Mapowania `asset_source_map` dla wszystkich indeksów referencyjnych i
+# aktywów demo zasianych wyżej — symbole dostawców wprost z
+# `docs/slownik-rynkow.md` (kolumna „symbol indeksu”) i z testów providerów
+# kroku 21-22 (`tests/unit/test_*_provider.py`, `test_marketdata_get_
+# provider_symbol.py`), np. `cdr`/`CDR.WA` dla CD Projekt. Złoto (`XAU`) i
+# rynek `FX` (bez własnych `assets`, patrz `repository.list_fx_currencies`)
+# mają wyłącznie dostawcę `nbp` (CLAUDE.md #3.5).
+SOURCE_MAPS: tuple[SourceMapSeed, ...] = (
+    # GPW
+    SourceMapSeed("WIG20", "GPW", "stooq", "wig20", 1),
+    SourceMapSeed("CDR", "GPW", "stooq", "cdr", 1),
+    SourceMapSeed("CDR", "GPW", "yfinance", "CDR.WA", 2),
+    SourceMapSeed("PKN", "GPW", "stooq", "pkn", 1),
+    SourceMapSeed("PKN", "GPW", "yfinance", "PKN.WA", 2),
+    # US / US_TECH
+    SourceMapSeed("^GSPC", "US", "yfinance", "^GSPC", 1),
+    SourceMapSeed("^NDX", "US_TECH", "yfinance", "^NDX", 1),
+    SourceMapSeed("AAPL", "US", "yfinance", "AAPL", 1),
+    SourceMapSeed("AAPL", "US", "finnhub", "AAPL", 2),
+    SourceMapSeed("MSFT", "US", "yfinance", "MSFT", 1),
+    SourceMapSeed("MSFT", "US", "finnhub", "MSFT", 2),
+    # inne indeksy zagraniczne (tylko yfinance — jeden dostawca w łańcuchu
+    # dla tych rynków, `finnhub` w łańcuchu wyłącznie dla akcji AAPL/MSFT)
+    SourceMapSeed("^GDAXI", "XETRA", "yfinance", "^GDAXI", 1),
+    SourceMapSeed("^FTSE", "LSE", "yfinance", "^FTSE", 1),
+    SourceMapSeed("^FCHI", "EURONEXT", "yfinance", "^FCHI", 1),
+    SourceMapSeed("^SSMI", "SIX", "yfinance", "^SSMI", 1),
+    SourceMapSeed("^N225", "TSE", "yfinance", "^N225", 1),
+    SourceMapSeed("^HSI", "HKEX", "yfinance", "^HSI", 1),
+    # CRYPTO — ten sam rekord `Asset` co holding demo `bitcoin`
+    SourceMapSeed("bitcoin", "CRYPTO", "binance", "BTCUSDT", 1),
+    SourceMapSeed("bitcoin", "CRYPTO", "yfinance", "BTC-USD", 2),
+    # COMMODITY (złoto — wyłącznie NBP)
+    SourceMapSeed("XAU", "COMMODITY", "nbp", "XAU", 1),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SeedResult:
@@ -291,6 +348,27 @@ async def _get_or_create_holding(
     )
 
 
+async def _get_or_create_source_map(
+    session: AsyncSession, *, asset_id: uuid.UUID, seed: SourceMapSeed
+) -> None:
+    """Klucz naturalny idempotencji: `(asset_id, provider)` — `PRIMARY KEY`
+    realny w `asset_source_map` (`models.py`), więc `session.get` z krotką
+    wystarcza (w odróżnieniu od `_get_or_create_asset` powyżej, gdzie taki
+    klucz w schemacie nie istnieje).
+    """
+    existing = await session.get(AssetSourceMap, (asset_id, seed.provider))
+    if existing is not None:
+        return
+    session.add(
+        AssetSourceMap(
+            asset_id=asset_id,
+            provider=seed.provider,
+            provider_symbol=seed.provider_symbol,
+            priority=seed.priority,
+        )
+    )
+
+
 async def seed_all(session: AsyncSession) -> SeedResult:
     """Zasiej rynki, indeksy referencyjne, demo aktywa i demo użytkownika z
     portfelem. Commituje na końcu (jedna transakcja, wszystko albo nic).
@@ -325,6 +403,23 @@ async def seed_all(session: AsyncSession) -> SeedResult:
         await _get_or_create_holding(
             session, portfolio_id=portfolio.id, asset_id=asset.id, seed=holding_seed
         )
+
+    # 5. asset_source_map (plan krok 23) — bez tego `worker/jobs/
+    # ingest_market.py` nie ma dla żadnego z aktywów wyżej co przetłumaczyć
+    # na symbol dostawcy; wszystkie `assets` istnieją już w tym momencie
+    # (kroki 2/4 wyżej), stąd na końcu.
+    all_assets_by_symbol: dict[str, Asset] = {
+        asset.symbol: asset for asset in index_assets_by_market.values()
+    }
+    all_assets_by_symbol.update(demo_assets_by_symbol)
+    for source_map_seed in SOURCE_MAPS:
+        asset = all_assets_by_symbol[source_map_seed.asset_symbol]
+        if asset.market_code != source_map_seed.market_code:
+            raise RuntimeError(
+                f"SOURCE_MAPS: {source_map_seed.asset_symbol!r} zadeklarowany na rynku "
+                f"{source_map_seed.market_code!r}, ale aktywo jest na {asset.market_code!r}"
+            )
+        await _get_or_create_source_map(session, asset_id=asset.id, seed=source_map_seed)
 
     await session.commit()
     return SeedResult(demo_user_email=user.email, demo_password=raw_password)

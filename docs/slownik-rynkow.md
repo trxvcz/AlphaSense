@@ -13,7 +13,7 @@ Startowa zawartość tabeli `markets`. Zasilana seedem (krok 19). Godziny EOD s�
 | SIX | SIX Swiss Exchange | SMI | `^SSMI` | Europe/Zurich | 18:00 |
 | TSE | Tokyo Stock Exchange | Nikkei 225 | `^N225` | Asia/Tokyo | 09:00 |
 | HKEX | Hong Kong | Hang Seng | `^HSI` | Asia/Hong_Kong | 10:30 |
-| CRYPTO | Rynek krypto (24/7) | Bitcoin | `bitcoin` (CoinGecko) | UTC | 00:30 |
+| CRYPTO | Rynek krypto (24/7) | Bitcoin | `BTCUSDT` (Binance), fallback `BTC-USD` (yfinance) | UTC | 00:30 |
 | COMMODITY | Surowce | złoto (NBP) | `XAU` | Europe/Warsaw | 12:35 |
 | FX | Waluty (NBP tabela A) | — | — | Europe/Warsaw | 12:35 |
 

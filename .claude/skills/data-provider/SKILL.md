@@ -1,6 +1,6 @@
 ---
 name: data-provider
-description: Wzorzec integracji z darmowymi źródłami danych rynkowych w AlphaSense — NBP, Stooq, yfinance, Finnhub, CoinGecko — wraz z RateLimiter, CircuitBreaker, FallbackChain i mapowaniem symboli. Użyj gdy dodajesz nowego dostawcę danych, pobierasz ceny lub kursy walut, obsługujesz błędy 429 i awarie źródeł, albo gdy notowania nie zgadzają się z rzeczywistością.
+description: Wzorzec integracji z darmowymi źródłami danych rynkowych w AlphaSense — NBP, Stooq, yfinance, Finnhub, Binance (krypto, zastępuje CoinGecko) — wraz z RateLimiter, CircuitBreaker, FallbackChain i mapowaniem symboli. Użyj gdy dodajesz nowego dostawcę danych, pobierasz ceny lub kursy walut, obsługujesz błędy 429 i awarie źródeł, albo gdy notowania nie zgadzają się z rzeczywistością.
 ---
 
 # Warstwa danych rynkowych
@@ -21,12 +21,26 @@ Dostawca nie zna bazy danych, nie zna aktywów, zna tylko symbol swojego API. T�
 ## Kompozycja
 
 ```
+# rynek GPW
 FallbackChain([
     Guarded(StooqProvider(),   limiter=RateLimiter(60/min), breaker=CircuitBreaker(5, 10*60)),
     Guarded(YFinanceProvider(), limiter=RateLimiter(30/min), breaker=CircuitBreaker(5, 10*60)),
-    Guarded(FinnhubProvider(),  limiter=RateLimiter(60/min), breaker=CircuitBreaker(5, 10*60)),
+])
+
+# rynki zagraniczne (US/XETRA/LSE/...)
+FallbackChain([
+    Guarded(YFinanceProvider(), limiter=RateLimiter(30/min), breaker=CircuitBreaker(5, 10*60)),
+    Guarded(FinnhubProvider(),  limiter=RateLimiter(60/min), breaker=CircuitBreaker(5, 10*60)),  # pomiń, jeśli brak FINNHUB_API_KEY
+])
+
+# rynek CRYPTO
+FallbackChain([
+    Guarded(BinanceProvider(),  limiter=RateLimiter(60/min), breaker=CircuitBreaker(5, 10*60)),
+    Guarded(YFinanceProvider(), limiter=RateLimiter(30/min), breaker=CircuitBreaker(5, 10*60)),  # symbol BTC-USD
 ])
 ```
+
+Przykładowa implementacja (nie podłączona do żadnego joba/endpointu, wzorzec do reużycia przez workera): `app/modules/marketdata/service.py::build_fallback_chain`.
 
 - **RateLimiter** — token bucket, limit z konfiguracji per dostawca. 429 → backoff wykładniczy z jitterem, maksymalnie N prób.
 - **CircuitBreaker** — po `failure_threshold` błędach pod rząd otwiera się na `reset_timeout`; potem jedno zapytanie próbne. Stan w Redisie (przeżywa restart workera).
@@ -37,10 +51,10 @@ FallbackChain([
 | Źródło | Zakres | Uwagi |
 |---|---|---|
 | NBP | kursy walut (tabela A), złoto | jedyne źródło FX; brak notowania w D → `max(date) <= D`; weekendy i święta |
-| Stooq | GPW, indeksy PL | CSV, symbole typu `cdr`, `wig20`; brak `close_adj` → przyjmij `close` i odnotuj |
-| yfinance | rynki zagraniczne, metadane | nieoficjalne API, potrafi milczeć; sektor/kraj tylko dla akcji, dla ETF przybliżenie |
-| Finnhub | fallback dla zagranicy, dywidendy | klucz API, limit darmowy |
-| CoinGecko | krypto | identyfikatory nie są tickerami (`bitcoin`, nie `BTC`) |
+| Stooq | GPW, indeksy PL | CSV, symbole typu `cdr`, `wig20`; brak `close_adj` → przyjmij `close` i odnotuj; endpoint bywa chroniony wyzwaniem anty-bot (JS PoW) — traktuj HTML zamiast CSV jako porażkę providera |
+| yfinance | rynki zagraniczne, metadane, fallback krypto (`BTC-USD`) | nieoficjalne API, potrafi milczeć; sektor/kraj tylko dla akcji, dla ETF przybliżenie; blokujące I/O — zawsze przez `asyncio.to_thread` |
+| Finnhub | fallback dla zagranicy, dywidendy | klucz API, limit darmowy; brak klucza → provider zgłasza `ProviderUnavailableError` przy wywołaniu, nie przy imporcie |
+| Binance | krypto (główny dostawca) | REST publiczne bez klucza (`/api/v3/klines`); symbol to para (`BTCUSDT`), nie identyfikator jak w CoinGecko (`bitcoin`) — **CoinGecko zamieniony na Binance**, darmowy plan CoinGecko się wyczerpał |
 
 ## Reguły twarde
 
