@@ -12,6 +12,6 @@ Kolejność (deleguj do subagenta `backend-fastapi`):
 3. Route: parametry ścieżki **wyłącznie** przez `Depends(get_owned_*)`. Jeśli brakuje odpowiedniej zależności — dodaj ją w `core/deps.py`.
 4. Logika w `service.py`, zapytania w warstwie repozytorium.
 5. Cache tylko jeśli odczyt jest kosztowny; klucz wersjonowany.
-6. Testy: szczęśliwa ścieżka, walidacja wejścia, 401 bez tokenu, 403/404 dla cudzego zasobu.
+6. Testy: szczęśliwa ścieżka, walidacja wejścia, 401 bez tokenu, 404 dla cudzego zasobu (nie 403 — patrz skill `izolacja-danych`).
 7. Dopisz do parametryzowanego testu izolacji, jeśli to nowy typ zasobu.
 8. `make check` i krótkie podsumowanie z przykładową odpowiedzią JSON.

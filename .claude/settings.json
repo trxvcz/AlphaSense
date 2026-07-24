@@ -15,7 +15,6 @@
       "Bash(git log:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Read(//home/**)",
       "Edit(backend/**)",
       "Edit(frontend/**)",
       "Edit(worker/**)",
@@ -27,11 +26,12 @@
       "Bash(docker compose -f docker-compose.prod.yml:*)",
       "Bash(pip install:*)",
       "Bash(npm install:*)",
-      "Edit(alembic/versions/**)"
+      "Edit(backend/alembic/versions/**)"
     ],
     "deny": [
       "Read(./.env)",
-      "Read(./.env.*)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
       "Read(./secrets/**)",
       "Bash(alembic downgrade:*)",
       "Bash(git push --force:*)",

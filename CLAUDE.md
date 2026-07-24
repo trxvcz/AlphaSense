@@ -122,7 +122,7 @@ make logs s=worker
 
 **TypeScript:** brak `any`. Kwoty jako `string` z API, konwersja przez `lib/decimal.ts` — nigdy `parseFloat` na kwocie do wyświetlenia obliczeń. Server Components domyślnie; `"use client"` tylko gdzie potrzebna interakcja. Dane przez TanStack Query z kluczami z `lib/queryKeys.ts`.
 
-**Testy:** każdy endpoint — test szczęśliwej ścieżki + test 403 dla obcego zasobu. Logika obliczeniowa (wycena, HHI, zwroty, drawdown) — testy jednostkowe na znanych liczbach, bez mocków bazy.
+**Testy:** każdy endpoint — test szczęśliwej ścieżki + test 404 dla obcego zasobu (nie zdradzamy istnienia zasobu innego użytkownika, patrz skill `izolacja-danych`). Logika obliczeniowa (wycena, HHI, zwroty, drawdown) — testy jednostkowe na znanych liczbach, bez mocków bazy.
 
 **Commity:** konwencjonalne, po polsku lub angielsku, konsekwentnie. `feat(analytics): ranking rynków wg wagi`.
 

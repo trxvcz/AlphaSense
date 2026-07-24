@@ -1,6 +1,6 @@
 # ADR-102: Mapowanie rynków i indeksów referencyjnych
 
-**Status:** Proponowana
+**Status:** Zatwierdzona (2026-07-24)
 **Data:** 2026-07-20
 **Dotyczy kroków:** 2, 17, 19, 23, 30, 34
 

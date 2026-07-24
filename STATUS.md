@@ -3,7 +3,7 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 0 — Decyzje i przygotowanie
+**Aktualny etap:** 1 — Fundament projektu
 **Ostatnia aktualizacja:** 2026-07-24
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
@@ -11,7 +11,7 @@
 
 | Etap | Zakres | Status |
 |---|---|---|
-| 0 | Decyzje i przygotowanie | 🟡 w toku |
+| 0 | Decyzje i przygotowanie | 🟢 zrobiony |
 | 1 | Fundament projektu | ⚪ nie zaczęty |
 | 2 | Auth i izolacja danych | ⚪ |
 | 3 | Model danych | ⚪ |
@@ -27,10 +27,10 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 ## Kroki 1–50
 
 ```
-[ ] 1  ADR-101 zatwierdzony (semantyka historii)
-[ ] 2  ADR-102 zatwierdzony (słownik rynków)
-[ ] 3  Klucze API: Finnhub, Alpha Vantage, CoinGecko
-[ ] 4  VPS + domena + DNS
+[x] 1  ADR-101 zatwierdzony (semantyka historii)
+[x] 2  ADR-102 zatwierdzony (słownik rynków)
+[x] 3  Klucze API: Finnhub, Alpha Vantage, CoinGecko
+[x] 4  VPS + domena + DNS
 [ ] 5  Monorepo
 [ ] 6  Docker Compose dev
 [ ] 7  Szkielet FastAPI (moduły)
@@ -81,11 +81,11 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
 ## Decyzje oczekujące na użytkownika
 
-- [ ] ADR-101 — semantyka historii: rekomendacja **opcja A** (snapshoty append-only + pole `valid_from` na zapas)
-- [ ] ADR-102 — startowa lista rynków: patrz `docs/slownik-rynkow.md`, do potwierdzenia
+Brak — etap 0 zamknięty.
 
 ## Dziennik sesji
 
 | Data | Co zrobione | Notatki / blokery |
 |---|---|---|
 | 2026-07-24 | Struktura agentowa repo (CLAUDE.md, agenci, skille, komendy, docs) | — |
+| 2026-07-24 | Etap 0 zamknięty: ADR-101 i ADR-102 zatwierdzone, klucze API i VPS/domena/DNS potwierdzone przez użytkownika. Code-reviewer wykrył blokujące niespójności 403 vs 404 (CLAUDE.md, backend-fastapi.md, code-reviewer.md, endpoint.md) i luki w `.claude/settings.json` (`Read(//home/**)` zbyt szerokie, `deny .env.*` blokował `.env.example`, ścieżka `alembic/versions/**` nie odpowiadała realnej strukturze) — wszystkie naprawione. Otwarte „do poprawy" bez blokady: błędne relatywne odnośniki `../STATUS.md` w `.claude/agents\|commands`, rozgraniczenie kroku 48 (import CSV pozycji) od wykluczonego importu transakcji, `make test` bez filtra `-m "not network"`. | Start etapu 1 (Fundament) odblokowany. |

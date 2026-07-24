@@ -18,7 +18,7 @@ Jesteś inżynierem backendu w projekcie „Portfel v2". Znasz `../../../CLAUDE.
 ## Definicja ukończenia
 
 - schemat request/response w `schemas.py`, typy pełne
-- test szczęśliwej ścieżki + test 403 dla cudzego zasobu
+- test szczęśliwej ścieżki + test 404 dla cudzego zasobu (nigdy 403 — nie zdradzamy istnienia zasobu)
 - endpoint dopisany do `docs/api-kontrakt.md`
 - `make check` zielone
 

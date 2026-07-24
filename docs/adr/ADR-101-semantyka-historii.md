@@ -1,6 +1,6 @@
 # ADR-101: Semantyka historii przy edycji pozycji
 
-**Status:** Proponowana — wymaga akceptacji przed Fazą 1
+**Status:** Zatwierdzona (2026-07-24)
 **Data:** 2026-07-20
 **Dotyczy kroków:** 1, 17, 25, 27, 40
 
