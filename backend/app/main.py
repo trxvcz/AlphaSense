@@ -22,7 +22,7 @@ from app.modules.portfolio.routes import router as portfolio_router
 
 settings = get_settings()
 
-app = FastAPI(title="Portfel v2 API", debug=settings.env == "dev")
+app = FastAPI(title="AlphaSense API", debug=settings.env == "dev")
 
 app.add_middleware(
     CORSMiddleware,

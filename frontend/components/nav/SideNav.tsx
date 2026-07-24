@@ -9,7 +9,7 @@ export function SideNav() {
   return (
     <aside className="hidden w-56 shrink-0 border-r border-zinc-200 md:flex md:flex-col dark:border-zinc-800">
       <div className="px-4 py-5 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-        Portfel v2
+        AlphaSense
       </div>
       <nav aria-label="Nawigacja główna">
         <ul className="flex flex-col gap-1 px-2">

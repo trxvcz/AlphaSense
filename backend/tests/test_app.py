@@ -8,4 +8,4 @@ def test_openapi_schema_available() -> None:
         response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    assert response.json()["info"]["title"] == "Portfel v2 API"
+    assert response.json()["info"]["title"] == "AlphaSense API"

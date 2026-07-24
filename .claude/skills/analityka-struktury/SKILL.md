@@ -1,6 +1,6 @@
 ---
 name: analityka-struktury
-description: Definicje i implementacja obliczeń analitycznych Portfela v2 — wycena w PLN, alokacja wg klasy/sektora/geografii/waluty/rynku, koncentracja i HHI, ranking rynków, zwroty ze snapshotów, zmienność, Sharpe, max drawdown, beta. Użyj gdy implementujesz lub weryfikujesz jakiekolwiek obliczenie portfelowe, gdy liczby na dashboardzie nie zgadzają się z oczekiwaniem, albo gdy piszesz testy metryk.
+description: Definicje i implementacja obliczeń analitycznych AlphaSense — wycena w PLN, alokacja wg klasy/sektora/geografii/waluty/rynku, koncentracja i HHI, ranking rynków, zwroty ze snapshotów, zmienność, Sharpe, max drawdown, beta. Użyj gdy implementujesz lub weryfikujesz jakiekolwiek obliczenie portfelowe, gdy liczby na dashboardzie nie zgadzają się z oczekiwaniem, albo gdy piszesz testy metryk.
 ---
 
 # Obliczenia portfela

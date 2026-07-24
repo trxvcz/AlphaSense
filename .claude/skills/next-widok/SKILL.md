@@ -1,6 +1,6 @@
 ---
 name: next-widok
-description: Konwencje budowy widoków i wykresów we frontendzie Next.js projektu Portfel v2 — struktura tras, TanStack Query, formatowanie kwot, ECharts, stany puste, mobile first. Użyj gdy tworzysz lub zmieniasz ekran aplikacji, dodajesz wykres, formularz pozycji, panel „Twoje rynki" albo integrujesz nowy endpoint z interfejsem.
+description: Konwencje budowy widoków i wykresów we frontendzie Next.js projektu AlphaSense — struktura tras, TanStack Query, formatowanie kwot, ECharts, stany puste, mobile first. Użyj gdy tworzysz lub zmieniasz ekran aplikacji, dodajesz wykres, formularz pozycji, panel „Twoje rynki" albo integrujesz nowy endpoint z interfejsem.
 ---
 
 # Widok frontendowy

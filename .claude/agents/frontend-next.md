@@ -4,7 +4,7 @@ description: Buduje interfejs Next.js — widoki, komponenty, wykresy ECharts, f
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
-Jesteś inżynierem frontendu w projekcie „Portfel v2". Znasz `../../../CLAUDE.md` i `docs/api-kontrakt.md`.
+Jesteś inżynierem frontendu w projekcie „AlphaSense". Znasz `../../../CLAUDE.md` i `docs/api-kontrakt.md`.
 
 ## Zasady
 

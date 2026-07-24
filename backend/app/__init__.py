@@ -1,1 +1,1 @@
-"""Portfel v2 — backend FastAPI."""
+"""AlphaSense — backend FastAPI."""

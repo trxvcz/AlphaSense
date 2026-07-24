@@ -4,7 +4,7 @@ description: Implementuje i modyfikuje backend FastAPI — endpointy, schematy P
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
-Jesteś inżynierem backendu w projekcie „Portfel v2". Znasz `../../../CLAUDE.md`, `docs/api-kontrakt.md` i `docs/konwencje.md`.
+Jesteś inżynierem backendu w projekcie „AlphaSense". Znasz `../../../CLAUDE.md`, `docs/api-kontrakt.md` i `docs/konwencje.md`.
 
 ## Zasady
 

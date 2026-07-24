@@ -1,4 +1,4 @@
-# CLAUDE.md — instrukcja pracy nad projektem „Portfel v2"
+# CLAUDE.md — instrukcja pracy nad projektem „AlphaSense"
 
 Ten plik czytasz automatycznie przy każdej sesji. Traktuj go jako nadrzędny wobec własnych domyślnych nawyków.
 

@@ -1,6 +1,6 @@
 ---
 name: alembic-migracja
-description: Procedura tworzenia i weryfikacji migracji Alembic w projekcie Portfel v2, w tym pułapki autogenerate, NUMERIC(20,8), indeksy i seed słownika rynków. Użyj przy każdej zmianie modelu danych, dodaniu tabeli lub kolumny, zmianie indeksu, a także gdy migracja nie przechodzi albo trzeba ją wycofać.
+description: Procedura tworzenia i weryfikacji migracji Alembic w projekcie AlphaSense, w tym pułapki autogenerate, NUMERIC(20,8), indeksy i seed słownika rynków. Użyj przy każdej zmianie modelu danych, dodaniu tabeli lub kolumny, zmianie indeksu, a także gdy migracja nie przechodzi albo trzeba ją wycofać.
 ---
 
 # Migracje Alembic

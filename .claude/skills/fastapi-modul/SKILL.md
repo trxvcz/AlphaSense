@@ -1,6 +1,6 @@
 ---
 name: fastapi-modul
-description: Struktura i konwencje modułu backendu FastAPI w projekcie Portfel v2 — podział na routes/schemas/service/models, obsługa Decimal, błędy domenowe, cache. Użyj gdy tworzysz nowy moduł backendu, dodajesz endpoint, refaktorujesz warstwy albo zastanawiasz się, gdzie umieścić logikę lub jak serializować kwoty.
+description: Struktura i konwencje modułu backendu FastAPI w projekcie AlphaSense — podział na routes/schemas/service/models, obsługa Decimal, błędy domenowe, cache. Użyj gdy tworzysz nowy moduł backendu, dodajesz endpoint, refaktorujesz warstwy albo zastanawiasz się, gdzie umieścić logikę lub jak serializować kwoty.
 ---
 
 # Moduł backendu FastAPI

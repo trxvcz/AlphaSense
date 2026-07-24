@@ -1,6 +1,6 @@
 ---
 name: job-eod
-description: Procedura pisania jobów harmonogramu w workerze Portfela v2 — APScheduler, blokady doradcze Postgresa, ingestia cen per rynek, snapshoty portfeli, idempotencja i zapis do ingestion_runs. Użyj gdy dodajesz zadanie cykliczne, zmieniasz harmonogram pobierania danych, debugujesz brakujące notowania lub snapshoty, albo gdy job wykonał się dwa razy.
+description: Procedura pisania jobów harmonogramu w workerze AlphaSense — APScheduler, blokady doradcze Postgresa, ingestia cen per rynek, snapshoty portfeli, idempotencja i zapis do ingestion_runs. Użyj gdy dodajesz zadanie cykliczne, zmieniasz harmonogram pobierania danych, debugujesz brakujące notowania lub snapshoty, albo gdy job wykonał się dwa razy.
 ---
 
 # Joby EOD w workerze

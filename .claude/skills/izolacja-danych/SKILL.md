@@ -1,6 +1,6 @@
 ---
 name: izolacja-danych
-description: Wzorzec autoryzacji zasobowej i testowania izolacji danych między użytkownikami w projekcie Portfel v2. Użyj ZAWSZE gdy dodajesz lub zmieniasz endpoint przyjmujący identyfikator zasobu (portfel, pozycja, watchlista, tag), gdy piszesz zależności FastAPI, gdy weryfikujesz bezpieczeństwo API albo gdy pojawia się pytanie o RLS, wielodostęp, 403/404 lub „czy użytkownik A widzi dane użytkownika B".
+description: Wzorzec autoryzacji zasobowej i testowania izolacji danych między użytkownikami w projekcie AlphaSense. Użyj ZAWSZE gdy dodajesz lub zmieniasz endpoint przyjmujący identyfikator zasobu (portfel, pozycja, watchlista, tag), gdy piszesz zależności FastAPI, gdy weryfikujesz bezpieczeństwo API albo gdy pojawia się pytanie o RLS, wielodostęp, 403/404 lub „czy użytkownik A widzi dane użytkownika B".
 ---
 
 # Izolacja danych między użytkownikami

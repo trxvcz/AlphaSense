@@ -1,7 +1,7 @@
 [project]
 name = "portfel-backend"
 version = "0.1.0"
-description = "Portfel v2 — backend FastAPI"
+description = "AlphaSense — backend FastAPI"
 requires-python = ">=3.12"
 
 [tool.ruff]

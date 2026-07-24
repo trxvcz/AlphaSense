@@ -1,6 +1,6 @@
 ---
 name: data-provider
-description: Wzorzec integracji z darmowymi źródłami danych rynkowych w Portfel v2 — NBP, Stooq, yfinance, Finnhub, CoinGecko — wraz z RateLimiter, CircuitBreaker, FallbackChain i mapowaniem symboli. Użyj gdy dodajesz nowego dostawcę danych, pobierasz ceny lub kursy walut, obsługujesz błędy 429 i awarie źródeł, albo gdy notowania nie zgadzają się z rzeczywistością.
+description: Wzorzec integracji z darmowymi źródłami danych rynkowych w AlphaSense — NBP, Stooq, yfinance, Finnhub, CoinGecko — wraz z RateLimiter, CircuitBreaker, FallbackChain i mapowaniem symboli. Użyj gdy dodajesz nowego dostawcę danych, pobierasz ceny lub kursy walut, obsługujesz błędy 429 i awarie źródeł, albo gdy notowania nie zgadzają się z rzeczywistością.
 ---
 
 # Warstwa danych rynkowych

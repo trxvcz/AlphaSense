@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Portfel v2",
+  title: "AlphaSense",
   description:
     "Monitoring i analiza składu portfela inwestycyjnego — wycena, struktura, rynki.",
 };

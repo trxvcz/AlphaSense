@@ -1,4 +1,4 @@
-# Portfel v2
+# AlphaSense
 
 Aplikacja do monitoringu i analizy składu portfela inwestycyjnego. Bez rejestru transakcji: wpisujesz co masz, aplikacja wycenia, rozkłada na czynniki i pokazuje rynki, na których jesteś zainwestowany.
 
