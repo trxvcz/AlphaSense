@@ -7,3 +7,8 @@ pydantic-settings==2.14.2
 alembic==1.18.5
 structlog==26.1.0
 redis==8.0.1
+pyjwt==2.13.0
+argon2-cffi==25.1.0
+email-validator==2.3.0
+authlib==1.7.2
+slowapi==0.1.10

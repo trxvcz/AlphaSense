@@ -14,7 +14,7 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 
 | Tabela | Klucz | Istotne kolumny | Uwagi |
 |---|---|---|---|
-| `users` | id | email (unique), password_hash, created_at | argon2id |
+| `users` | id | email (unique), password_hash (**nullable**), created_at | argon2id; `password_hash IS NULL` = konto OAuth-only (Google, dopasowane po `email`) |
 | `refresh_tokens` | id | user_id, token_hash, expires_at, revoked_at, replaced_by | rotacja, wykrywanie ponownego użycia |
 | `portfolios` | id | user_id, name, type, holdings_version | `holdings_version` = znacznik do klucza cache |
 | `holdings` | id | portfolio_id, asset_id, quantity, avg_cost, cost_currency, valid_from, note | `UNIQUE(portfolio_id, asset_id)` |

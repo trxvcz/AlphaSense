@@ -28,6 +28,13 @@ class DomainError(Exception):
         self.details = details
 
 
+class UnauthorizedError(DomainError):
+    """Brak, niepoprawny lub wygasły token uwierzytelniający (401)."""
+
+    code = "unauthorized"
+    status_code = 401
+
+
 class NotFoundError(DomainError):
     """Zasób nie istnieje lub należy do innego użytkownika (404, konsekwentnie —
     nigdy 403, żeby nie zdradzać istnienia cudzego zasobu, patrz skill

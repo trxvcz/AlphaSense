@@ -35,3 +35,21 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["app"]
+
+# Authlib nie publikuje py.typed/stuby (stan na 1.7.2) — bez tego mypy strict
+# odmawia analizy modułu w ogóle (import-untyped). Klienta OAuth trzymamy za
+# jedną granicą (`app/modules/auth/oauth.py`), więc utrata typowania jest
+# lokalna, nie rozlewa się po resztcie `app/modules/auth`.
+[[tool.mypy.overrides]]
+module = "authlib.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Jedna pętla zdarzeń na całą sesję testów — silnik SQLAlchemy/asyncpg
+# (`app.db.session.engine`) jest tworzony raz przy imporcie modułu i wiąże
+# pierwsze połączenie z pętlą, w której zostało otwarte; osobna pętla per
+# test (domyślne zachowanie pytest-asyncio) powoduje
+# "Future attached to a different loop" z asyncpg.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

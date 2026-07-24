@@ -5,7 +5,8 @@ Connection string pochodzi wyłącznie z `app.core.config.Settings`
 URL-a w `alembic.ini`. `target_metadata = Base.metadata` zasila
 `alembic revision --autogenerate`; import wszystkich modułów z modelami
 ORM musi nastąpić przed użyciem `target_metadata`, żeby zarejestrowały się
-w `Base.metadata` (na razie brak modeli — etapy 2–3 dopiszą importy niżej).
+w `Base.metadata` (etap 2: `auth`; etap 3: `portfolio`, `marketdata` —
+kolejne etapy dopiszą `analytics`/`news`, gdy dostaną modele).
 """
 
 import asyncio
@@ -18,11 +19,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.db.base import Base
-
-# TODO(etap 2-3): importować tu moduły z modelami ORM (np.
-# `from app.modules.auth import models as auth_models`), żeby zarejestrowały
-# się w `Base.metadata` przed autogenerate. Sam import wystarcza —
-# `DeclarativeBase` rejestruje podklasy automatycznie.
+from app.modules.auth import models as auth_models  # noqa: F401  (rejestracja w Base.metadata)
+from app.modules.marketdata import models as marketdata_models  # noqa: F401
+from app.modules.portfolio import models as portfolio_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

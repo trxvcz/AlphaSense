@@ -12,7 +12,13 @@ from __future__ import annotations
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Wartość przykładowa z `.env.example` — publiczna, nigdy nie wolno jej użyć
+# poza `env=dev` (audyt bezpieczeństwa, etap 2).
+_INSECURE_DEFAULT_SECRET_KEY = "zmien-mnie"
+_MIN_SECRET_KEY_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -47,9 +53,18 @@ class Settings(BaseSettings):
     circuit_failure_threshold: int = 5
     circuit_reset_seconds: int = 600
 
+    # --- rate limiting API (slowapi, krok 16) ---
+    # Liczniki w Redisie (`storage_uri=redis_url`), nie w pamięci procesu —
+    # przetrwają restart/wiele replik API (patrz `core/rate_limit.py`).
+    rate_limit_default_per_minute: int = 100
+    rate_limit_auth_per_minute: int = 5
+
     # --- OAuth ---
     google_client_id: str = ""
     google_client_secret: str = ""
+    # Musi dosłownie zgadzać się z „Authorized redirect URI" skonfigurowanym
+    # w Google Cloud Console — Google odrzuci wymianę kodu przy niezgodności.
+    google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
 
     # --- parametry analityczne (Decimal, nigdy float — CLAUDE.md #3.1) ---
     risk_free_rate: Decimal = Decimal("0.055")
@@ -58,6 +73,30 @@ class Settings(BaseSettings):
 
     # --- obserwowalność ---
     sentry_dsn: str = ""
+
+    @model_validator(mode="after")
+    def _validate_secret_key_outside_dev(self) -> Settings:
+        """Odmawia startu poza `env=dev`, jeśli `secret_key` nie jest bezpieczny.
+
+        Bezpieczeństwo (audyt etap 2, znalezisko WYSOKIE): pusty, publiczny
+        (ten sam co w `.env.example`) albo za krótki `secret_key` podpisuje
+        access tokeny i cookie stanu OAuth (`core/security.py`) — cichy
+        fallback na taką wartość na produkcji to możliwość podrobienia
+        tokenu przez kogokolwiek, kto przeczytał ten plik.
+        """
+        if self.env == "dev":
+            return self
+        if (
+            not self.secret_key
+            or self.secret_key == _INSECURE_DEFAULT_SECRET_KEY
+            or len(self.secret_key) < _MIN_SECRET_KEY_LENGTH
+        ):
+            raise ValueError(
+                "SECRET_KEY musi być ustawiony na losową wartość o długości "
+                f"co najmniej {_MIN_SECRET_KEY_LENGTH} znaków, gdy ENV != 'dev' "
+                "(nie wolno używać wartości domyślnej z .env.example)"
+            )
+        return self
 
 
 @lru_cache
