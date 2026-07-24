@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(docker compose:*)",
+      "Bash(alembic:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Read(//home/**)",
+      "Edit(backend/**)",
+      "Edit(frontend/**)",
+      "Edit(worker/**)",
+      "Edit(docs/**)",
+      "Edit(STATUS.md)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(docker compose -f docker-compose.prod.yml:*)",
+      "Bash(pip install:*)",
+      "Bash(npm install:*)",
+      "Edit(alembic/versions/**)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Bash(alembic downgrade:*)",
+      "Bash(git push --force:*)",
+      "Bash(rm -rf:*)",
+      "Bash(dropdb:*)"
+    ]
+  },
+  "env": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "TZ": "Europe/Warsaw"
+  }
+}
