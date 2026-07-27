@@ -13,6 +13,11 @@ gałęzie `FX`/`COMMODITY` (NBP), patrz TODO/uwagi w docstringu funkcji.
 (`GET /assets/search`, `GET /meta/freshness`) — `routes.py` woła wyłącznie
 te dwie funkcje (plus `refresh_asset_metadata_background` jako
 `BackgroundTasks`), zero SQL bezpośrednio w routingu (skill `fastapi-modul`).
+
+**`get_market_index_series`** to logika kroku 30 (etap 6, ADR-102):
+`GET /markets/{code}/index?range=`. Trasa **publiczna** (bez
+`get_owned_*`/`get_current_user`) — `market_code` nie jest zasobem
+użytkownika, tak jak `search_assets`/`get_markets_freshness` wyżej.
 """
 
 from __future__ import annotations
@@ -25,9 +30,10 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.errors import NotFoundError
 from app.db.session import AsyncSessionLocal
 from app.modules.marketdata import repository
-from app.modules.marketdata.models import Asset
+from app.modules.marketdata.models import Asset, Price
 from app.modules.marketdata.providers.binance import BinanceProvider
 from app.modules.marketdata.providers.circuit_breaker import CircuitBreaker
 from app.modules.marketdata.providers.finnhub import FinnhubProvider
@@ -208,6 +214,30 @@ async def get_markets_freshness(db: AsyncSession) -> list[MarketFreshness]:
     return result
 
 
+async def get_market_index_series(
+    db: AsyncSession, market_code: str, *, range_: str
+) -> list[Price]:
+    """`GET /markets/{code}/index?range=` — seria `close_adj` rosnąco po
+    dacie dla indeksu referencyjnego `market_code` (krok 30, ADR-102).
+
+    `NotFoundError` (404), jeśli `market_code` nie istnieje w słowniku
+    `markets` **lub** istnieje, ale nie ma `index_asset_id` — w obu
+    przypadkach nie ma czego zwrócić (pojęcia „indeks tego rynku" po prostu
+    nie ma), więc to brak zasobu, nie pusta lista 200 (patrz raport
+    zadania: rozróżnienie „rynek bez indeksu" od „indeks bez jeszcze
+    zaciągniętych cen" — to drugie zwraca `200` z pustą/krótką listą, bo
+    pojęcie indeksu istnieje, tylko dane EOD jeszcze nie napłynęły).
+    """
+    market = await repository.get_market(db, market_code)
+    if market is None or market.index_asset_id is None:
+        raise NotFoundError(f"Rynek {market_code!r} nie ma zdefiniowanego indeksu referencyjnego")
+
+    today = datetime.now(UTC).date()
+    return await repository.list_prices_in_range(
+        db, market.index_asset_id, range_=range_, today=today
+    )
+
+
 def _guarded(provider_name: str, requests_per_minute: int) -> Guarded:
     provider: BinanceProvider | FinnhubProvider | NbpProvider | StooqProvider | YFinanceProvider
     if provider_name == "binance":
@@ -294,6 +324,7 @@ __all__ = [
     "MarketFreshness",
     "build_fallback_chain",
     "ensure_asset_metadata",
+    "get_market_index_series",
     "get_markets_freshness",
     "refresh_asset_metadata_background",
     "search_assets",

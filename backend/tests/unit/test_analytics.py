@@ -19,7 +19,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from app.modules.analytics.service import allocation_from_valued, concentration_from_valued
+from app.modules.analytics.service import (
+    allocation_from_valued,
+    concentration_from_valued,
+    market_weights_from_valued,
+)
 from app.modules.marketdata.models import Asset
 from app.modules.portfolio.models import Holding
 from app.modules.portfolio.service import ValuedHolding
@@ -259,3 +263,60 @@ def test_concentration_interpretation_thresholds() -> None:
     # 2 pozycje równe -> hhi = 1/2 = 0.5 -> wysoka
     two_equal = [_valued(value_pln=Decimal("1"), asset=_asset(symbol=f"L{i}")) for i in range(2)]
     assert concentration_from_valued(two_equal).interpretation == "wysoka"
+
+
+# ---------------------------------------------------------------------------
+# Ranking rynków — waga po market_code (krok 30, ADR-102)
+# ---------------------------------------------------------------------------
+
+
+def test_market_weights_sums_to_one_and_groups_by_market_code() -> None:
+    valued = [
+        _valued(value_pln=Decimal("500"), asset=_asset(market_code="GPW", symbol="A")),
+        _valued(value_pln=Decimal("300"), asset=_asset(market_code="GPW", symbol="B")),
+        _valued(value_pln=Decimal("200"), asset=_asset(market_code="US", symbol="C")),
+    ]
+
+    weights = market_weights_from_valued(valued)
+
+    assert set(weights) == {"GPW", "US"}
+    assert sum(weights.values()) == Decimal("1")
+    assert weights["GPW"] == Decimal("0.8000")
+    assert weights["US"] == Decimal("0.2000")
+
+
+def test_market_weights_uneven_split_sums_to_one() -> None:
+    """Podział nietrywialny (1/3 vs 2/3) — zaokrąglenia MUSZĄ trafić do
+    jednego rynku, żeby suma wyszła dokładnie `1` (ta sama zasada co
+    `allocation_from_valued`, patrz `_distribute_weights`)."""
+    valued = [
+        _valued(value_pln=Decimal("100"), asset=_asset(market_code="GPW", symbol="A")),
+        _valued(value_pln=Decimal("100"), asset=_asset(market_code="US", symbol="B")),
+        _valued(value_pln=Decimal("100"), asset=_asset(market_code="CRYPTO", symbol="C")),
+    ]
+
+    weights = market_weights_from_valued(valued)
+
+    assert sum(weights.values()) == Decimal("1")
+    assert len(weights) == 3
+
+
+def test_market_weights_excludes_unvalued_positions_from_denominator() -> None:
+    valued = [
+        _valued(value_pln=Decimal("100"), asset=_asset(market_code="GPW", symbol="A")),
+        _valued(value_pln=None, asset=_asset(market_code="US", symbol="B")),
+    ]
+
+    weights = market_weights_from_valued(valued)
+
+    assert weights == {"GPW": Decimal("1")}
+
+
+def test_market_weights_empty_portfolio_returns_empty_dict() -> None:
+    assert market_weights_from_valued([]) == {}
+
+
+def test_market_weights_only_unvalued_positions_returns_empty_dict() -> None:
+    valued = [_valued(value_pln=None, asset=_asset(market_code="GPW"))]
+
+    assert market_weights_from_valued(valued) == {}

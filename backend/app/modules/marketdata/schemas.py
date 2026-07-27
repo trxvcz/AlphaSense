@@ -1,20 +1,27 @@
 """Schematy Pydantic modułu `marketdata` (request/response) — plan krok 24,
-etap 4: `GET /assets/search`, `GET /meta/freshness`.
+etap 4: `GET /assets/search`, `GET /meta/freshness`. Rozszerzone w kroku 30
+(etap 6) o `PricePointOut` — `GET /markets/{code}/index` i mini-seria
+`series_30d` w `GET /portfolios/{portfolio_id}/markets`
+(`app/modules/analytics/schemas.py`, ten sam kształt, reużyty stamtąd).
 
-Bez kwot pieniężnych w tym pliku — `assets`/`markets`/`ingestion_runs` nie
-niosą wartości portfela, tylko metadane instrumentów i status ingestii.
-Znaczniki czasu (`last_run_at`) zostają jako `datetime` (Pydantic serializuje
-je do ISO 8601 domyślnie, spójnie z `UserOut.created_at` w
-`modules/auth/schemas.py`) — kontrakt API mówi „Daty w formacie YYYY-MM-DD"
-o `date`, nie o `datetime` ze strefą, więc to nie jest odstępstwo.
+Bez kwot pieniężnych w większości tego pliku — `assets`/`markets`/
+`ingestion_runs` nie niosą wartości portfela, tylko metadane instrumentów i
+status ingestii. `close_adj` (`PricePointOut`) to wyjątek — to cena
+instrumentu (indeksu), `Decimal`/string jak każda kwota (skill
+`fastapi-modul`), nie procent ani metadana. Znaczniki czasu (`last_run_at`)
+zostają jako `datetime` (Pydantic serializuje je do ISO 8601 domyślnie,
+spójnie z `UserOut.created_at` w `modules/auth/schemas.py`) — kontrakt API
+mówi „Daty w formacie YYYY-MM-DD" o `date`, nie o `datetime` ze strefą, więc
+to nie jest odstępstwo.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 class AssetSearchResultOut(BaseModel):
@@ -59,3 +66,20 @@ class FreshnessOut(BaseModel):
     """Wyjście `GET /meta/freshness`."""
 
     markets: list[MarketFreshnessOut]
+
+
+class PricePointOut(BaseModel):
+    """Jeden punkt serii cenowej (`close_adj`, CLAUDE.md #4 — nigdy `close`
+    surowe) — wyjście `GET /markets/{code}/index?range=` (lista rosnąco po
+    dacie) i element `series_30d` w `GET /portfolios/{portfolio_id}/markets`
+    (`app/modules/analytics/schemas.py` importuje ten schemat zamiast
+    duplikować kształt — ten sam punkt danych w obu miejscach, krok 30)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    close_adj: Decimal
+
+    @field_serializer("close_adj")
+    def _ser_close_adj(self, v: Decimal) -> str:
+        return format(v, "f")

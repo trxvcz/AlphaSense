@@ -1,32 +1,52 @@
 """Routing modułu `marketdata`.
 
 Plan krok 24 (etap 4): `GET /assets/search`, `GET /meta/freshness`.
-`/markets/{code}/index`, `/assets/{id}`, `PATCH /assets/{id}/metadata`
-przybędą w kolejnych krokach.
+Plan krok 30 (etap 6, ADR-102): `GET /markets/{code}/index?range=` — seria
+`close_adj` indeksu referencyjnego rynku. `/assets/{id}`, `PATCH
+/assets/{id}/metadata` wciąż poza zakresem (kolejne kroki).
 
-Oba endpointy tego kroku są **publiczne** (bez `Depends(get_current_user)`):
-`assets`/`markets`/`ingestion_runs` to słowniki globalne, nie zasoby
-użytkownika (patrz docstring `app/modules/marketdata/models.py`: „żadny FK
-w tym pliku nie kaskaduje z `users`"). Nie ma tu czego chronić `get_owned_*`
-— nie istnieje właściciel aktywa ani rynku, a wyszukiwarka aktywów musi
-działać, zanim użytkownik ma jakikolwiek portfel (dodawanie pierwszej
-pozycji). To pierwszy publiczny endpoint pod `/api` w tym repo — nie jest to
-przeoczenie autoryzacji, tylko świadoma decyzja tego kroku (patrz raport
-zadania), zgodna z resztą kontraktu (`GET /health` jest publiczne z tego
-samego powodu: brak zasobu do izolowania).
+Wszystkie trzy endpointy tego pliku są **publiczne** (bez
+`Depends(get_current_user)`): `assets`/`markets`/`ingestion_runs`/`prices` to
+słowniki/dane globalne, nie zasoby użytkownika (patrz docstring
+`app/modules/marketdata/models.py`: „żadny FK w tym pliku nie kaskaduje z
+`users`"). Nie ma tu czego chronić `get_owned_*` — nie istnieje właściciel
+aktywa, rynku ani jego notowań, a `market_code`/`{code}` w ścieżce nie jest
+identyfikatorem zasobu użytkownika (`tests/test_isolation.py` świadomie go
+nie łapie — `RESOURCE_PARAMS` zawiera tylko `portfolio_id`/`holding_id`/
+`watchlist_id`/`tag_id`). Ten sam wzorzec co `GET /health`: brak zasobu do
+izolowania.
 """
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.db.session import DbSession
 from app.modules.marketdata import service
-from app.modules.marketdata.schemas import AssetSearchResultOut, FreshnessOut, MarketFreshnessOut
+from app.modules.marketdata.schemas import (
+    AssetSearchResultOut,
+    FreshnessOut,
+    MarketFreshnessOut,
+    PricePointOut,
+)
 
 router = APIRouter(tags=["marketdata"])
+
+
+class MarketIndexRangeParam(StrEnum):
+    """`?range=` w `GET /markets/{code}/index` — sam zestaw wartości i ten
+    sam wzorzec 422-na-nieznaną-wartość co `ValuationRangeParam`
+    (`modules/portfolio/routes.py`, `GET /valuations`)."""
+
+    ONE_MONTH = "1M"
+    THREE_MONTHS = "3M"
+    ONE_YEAR = "1Y"
+    YTD = "YTD"
+    MAX = "max"
+
 
 # Poniżej dwóch znaków ILIKE '%q%' skanuje niemal całą tabelę i zwraca szum
 # (np. "a" trafia w połowę symboli/nazw) — 422 zamiast pustej listy, żeby
@@ -67,3 +87,19 @@ async def get_freshness(db: DbSession) -> FreshnessOut:
     """
     freshness = await service.get_markets_freshness(db)
     return FreshnessOut(markets=[MarketFreshnessOut.model_validate(item) for item in freshness])
+
+
+@router.get("/markets/{code}/index", response_model=list[PricePointOut])
+async def get_market_index(
+    code: str,
+    db: DbSession,
+    range_: Annotated[MarketIndexRangeParam, Query(alias="range")] = MarketIndexRangeParam.MAX,
+) -> list[PricePointOut]:
+    """Seria `close_adj` (rosnąco po dacie) indeksu referencyjnego rynku
+    `code` — krok 30, ADR-102. `404`, jeśli `code` nie istnieje w słowniku
+    `markets` albo nie ma `index_asset_id` przypisanego (patrz
+    `service.get_market_index_series` — to jedno rozróżnienie żyje w
+    serwisie, nie tutaj). Bez `get_owned_*`/autoryzacji, patrz docstring
+    modułu."""
+    prices = await service.get_market_index_series(db, code, range_=range_.value)
+    return [PricePointOut.model_validate(p) for p in prices]

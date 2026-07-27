@@ -36,10 +36,10 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market` | alokacja |
-| GET | `/portfolios/{portfolio_id}/concentration` | top5, liczba pozycji, HHI + interpretacja |
-| GET | `/portfolios/{portfolio_id}/markets` | ranking rynków wg wagi + dane indeksów |
-| GET | `/markets/{code}/index?range=` | seria indeksu referencyjnego |
+| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market` | alokacja (cache Redis, patrz „Cache" niżej) |
+| GET | `/portfolios/{portfolio_id}/concentration` | top5, liczba pozycji, HHI + interpretacja (cache Redis) |
+| GET | `/portfolios/{portfolio_id}/markets` | ranking rynków wg wagi + dane indeksów (cache Redis) |
+| GET | `/markets/{code}/index?range=` | seria indeksu referencyjnego — **publiczna** trasa (bez `Authorization`), patrz sekcja „Pomocnicze" niżej. **Bez cache** (świadomie poza zakresem kroku 31 — nie ma `portfolio_id`, propozycja do rozważenia osobno w `analytics/service.py`, sekcja „Krok 31") |
 
 ## Ryzyko i wyniki (Faza 2)
 
@@ -49,7 +49,7 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 `GET /assets/search?q=`, `GET /assets/{id}`, `PATCH /assets/{id}/metadata` (override), `GET /meta/freshness`, `GET /health`
 
-`GET /assets/search` i `GET /meta/freshness` są **publiczne** (bez `Authorization`) — `assets`/`markets`/`ingestion_runs` to słowniki globalne, nie zasoby użytkownika (żaden FK do `users`), więc nie ma tu czego chronić przez `get_owned_*`. Pierwsze publiczne trasy pod `/api` poza `/health`.
+`GET /assets/search`, `GET /meta/freshness` i `GET /markets/{code}/index` są **publiczne** (bez `Authorization`) — `assets`/`markets`/`ingestion_runs`/`prices` to słowniki/dane globalne, nie zasoby użytkownika (żaden FK do `users`), więc nie ma tu czego chronić przez `get_owned_*`. Pierwsze publiczne trasy pod `/api` poza `/health`.
 
 ## Kształty odpowiedzi
 
@@ -154,6 +154,45 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 // Portfel pusty / brak wycenionych pozycji → top5_share="0", count=0, hhi="0", interpretation="niska".
 { "top5_share": "0.6100", "count": 14, "hhi": "0.1900", "interpretation": "średnia" }
 
+// GET /portfolios/{portfolio_id}/markets  (etap 6, krok 30, ADR-102)
+// Ranking rynków wg wagi w wartości wycenionego portfela, malejąco po "weight" (4 miejsca).
+// Grupowanie po asset.market_code (kolumna NOT NULL — nie ma tu koszyka "nieznane").
+// "index" jest null, gdy rynek nie ma index_asset_id w słowniku markets, ALBO gdy ma go,
+// ale w "prices" nie ma jeszcze żadnego notowania (worker EOD jeszcze nie zaciągnął danych)
+// — oba przypadki to "brak danych, nie błąd", nie 200 z pustym wykresem.
+// change_1d liczone wprost z dwóch najnowszych wierszy "prices" (nie ze snapshotów portfela) —
+// null, gdy jest tylko jedno notowanie w historii. series_30d: do 30 OSTATNICH DOSTĘPNYCH
+// notowań (nie 30 dni kalendarzowych), rosnąco po dacie. Portfel pusty/bez wycenionych pozycji → [].
+[
+  {
+    "market_code": "GPW",
+    "market_name": "Giełda Papierów Wartościowych",
+    "weight": "0.6200",
+    "index": {
+      "asset_id": "uuid",
+      "symbol": "WIG20",
+      "value": "2100.00000000",
+      "change_1d": { "abs": "100.00000000", "pct": "0.0500" },
+      "as_of": "2026-07-27",
+      "series_30d": [
+        { "date": "2026-06-27", "close_adj": "2000.00000000" },
+        { "date": "2026-07-27", "close_adj": "2100.00000000" }
+      ]
+    }
+  },
+  { "market_code": "CRYPTO", "market_name": "Rynek krypto (24/7)", "weight": "0.3800", "index": null }
+]
+
+// GET /markets/{code}/index?range=1M|3M|1Y|YTD|max  (etap 6, krok 30, ADR-102)
+// Trasa PUBLICZNA (bez Authorization) — market_code nie jest zasobem użytkownika, patrz sekcja
+// „Pomocnicze". Seria close_adj rosnąco po dacie, ten sam kształt zakresu co GET /valuations.
+// 404, jeśli {code} nie istnieje w słowniku markets LUB istnieje, ale nie ma index_asset_id
+// (pojęcie indeksu tego rynku po prostu nie istnieje — nie 200 z pustą listą).
+[
+  { "date": "2026-06-27", "close_adj": "2000.00000000" },
+  { "date": "2026-07-27", "close_adj": "2100.00000000" }
+]
+
 // GET /assets/search?q=cdr  (min. 2 znaki; brak/za krótkie q → 422, patrz „Błędy")
 // szuka po symbol/name (ILIKE '%q%', case-insensitive), max 20 trafień, tylko aktywa is_active=true.
 // aktywom bez sector/country zleca uzupełnienie metadanych w tle (nie blokuje odpowiedzi)
@@ -171,6 +210,20 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
   ]
 }
 ```
+
+## Cache
+
+`GET /allocation`, `GET /concentration` i `GET /markets` (plan krok 31, CLAUDE.md #3.7) są owinięte cache'em Redis w `analytics/service.py` — klucz wersjonowany, brak inwalidacji:
+
+```
+allocation:{portfolio_id}:{by}:{holdings_version}:{eod_marker}
+concentration:{portfolio_id}:{holdings_version}:{eod_marker}
+markets:{portfolio_id}:{holdings_version}:{eod_marker}
+```
+
+`holdings_version` to znacznik ostatniej zmiany składu portfela (`Portfolio.holdings_version`, bumpowany przy każdym CRUD `holdings`). `eod_marker` to `MAX(prices.date)` wśród aktywów **faktycznie trzymanych** w tym portfelu (`"none"`, jeśli portfel jest pusty albo żadne z jego aktywów nie ma jeszcze notowania) — zmienia się dopiero, gdy dla tego portfela realnie przyjdą nowe dane EOD, nie o północy jak `today()`. TTL: 6 godzin (Redis nie puchnie starymi kluczami; dane EOD i tak nie zmieniają się śróddziennie).
+
+Redis można wyczyścić w każdej chwili — awaria/brak Redisa nie zwraca błędu, endpoint liczy wynik na żywo (wolniej, nie: `500`).
 
 ## Rate limiting
 

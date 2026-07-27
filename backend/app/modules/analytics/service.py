@@ -36,20 +36,103 @@ też w podsumowaniu zadania):
   `top5_share="0"` dla koncentracji. Nie ma nic sensownego do pokazania jako
   proporcja z mianownikiem `0` — brzegowy przypadek, nie wyjątek (zgodnie z
   instrukcją zadania).
+
+Krok 30 (ranking rynków, `GET /portfolios/{portfolio_id}/markets`,
+ADR-102), decyzje nieprecyzowane wprost przez skill/kontrakt:
+
+- Grupowanie po `asset.market_code` wprost (nie przez `_bucket_key`/
+  `by="market"`): `market_code` jest kolumną `NOT NULL` (`marketdata/
+  models.py`), więc koszyk „nieznane" fizycznie nie może wystąpić —
+  `_bucket_key`/`_distribute_weights` są reużyte tam, gdzie faktycznie się
+  zgadzają (kwantyzacja wag do sumy `1`), nie tam, gdzie dodałyby martwą
+  gałąź kodu.
+- Rynek z niezerową wagą, ale bez `index_asset_id` → `index=None` w
+  odpowiedzi (skill: „pokaż samą wagę, bez pustego wykresu").
+- Rynek **z** `index_asset_id`, ale bez jeszcze żadnego wiersza `prices`
+  (np. świeżo dodany rynek do słownika, worker EOD jeszcze nie zaciągnął
+  danych) → traktowany identycznie jak brak indeksu, `index=None` — to nie
+  błąd (CLAUDE.md, zasada Redisa uogólniona na dane rynkowe: „brak danych,
+  nie błąd"), tylko że tu dotyczy chwilowego braku notowań, nie samego
+  Redisa.
+- Zmiana d/d indeksu (`change_1d`) liczona wprost z dwóch najnowszych
+  wierszy `prices` (nie ze snapshotów jak `portfolio_service._change`) —
+  `None`, gdy jest tylko jedno notowanie w historii (nic do porównania) albo
+  starsze `close_adj == 0` (matematycznie niemożliwe wobec `CHECK
+  close_adj > 0`, ale zabezpieczone obronnie tak samo jak
+  `portfolio_service._change` zabezpiecza dzielenie przez `0`).
+- `series_30d` to do 30 **ostatnich dostępnych** wierszy `prices` (nie 30
+  dni kalendarzowych) — spójne z tym, jak `close_adj`/`fx_pln` wszędzie
+  indziej w silniku wyceny cofają się do najnowszego dostępnego notowania,
+  a nie żądają dokładnej daty kalendarzowej.
+
+Krok 31 (cache Redis, CLAUDE.md #3.7): `allocation`/`concentration`/
+`market_ranking` są dokładnie te trzy funkcje orkiestrujące I/O owinięte
+cache'em — każde wywołanie liczy najpierw `_eod_marker` (tani, osobny od
+`current_value`) i klucz (`core.cache.cache_key`), próbuje odczytać z
+Redisa, na trafienie zwraca zdeserializowany wynik bez dotykania
+`portfolio_service.current_value` (ten kosztowny per-pozycja silnik wyceny
+to właśnie to, co cache ma omijać), na pudło liczy normalnie i zapisuje.
+
+Decyzje nieprecyzowane wprost przez zadanie:
+
+- `eod_marker` = `MAX(prices.date)` **tylko** dla `asset_id` faktycznie
+  trzymanych w tym portfelu (`marketdata_repository.
+  get_latest_price_date_for_assets`), NIE `portfolio_service.today()` ani
+  najnowszy `IngestionRun` per rynek. Uzasadnienie: `today()` zmienia się o
+  północy niezależnie od tego, czy worker EOD faktycznie coś zaciągnął (dałby
+  cache miss każdego dnia nawet bez nowych danych, ale też fałszywe trafienie
+  cały dzień, zanim worker zdąży dociągnąć dane wieczorem — token nie odróżnia
+  „już są nowe dane” od „jeszcze nie"). `IngestionRun` per `market_code`
+  wymagałby JOIN-a przez rynek i przejmowania się rynkami spoza portfela.
+  `MAX(date)` na faktycznie trzymanych aktywach odpowiada wprost na pytanie
+  „czy dla TEGO portfela przyszło coś nowego" i nie wymaga dodatkowej tabeli.
+  Portfel bez pozycji / bez żadnej ceny → marker deterministyczny `"none"`
+  (nigdy crash pustym `MAX()`).
+- Dla `market_ranking` ten sam `eod_marker` (z aktywów trzymanych, nie z
+  indeksów rynków) jest wystarczający w praktyce: worker EOD ingestuje w
+  jednym przebiegu **wszystkie** aktywne aktywa danego `market_code`,
+  włącznie z aktywem indeksu referencyjnego tego rynku (`marketdata.
+  repository.list_active_assets`) — jeśli portfel trzyma choć jedną pozycję
+  na danym rynku, data jej najnowszej ceny pokrywa się z datą najnowszej ceny
+  indeksu tego rynku. Rynek bez żadnej trzymanej pozycji nie wpływa na
+  `eod_marker` w ogóle, ale też nie pojawia się w rankingu (`market_ranking`
+  grupuje tylko po rynkach obecnych w wycenionych pozycjach) — spójne.
+- TTL = 6 godzin (`_CACHE_TTL_SECONDS`) — dane EOD nie zmieniają się
+  śróddziennie, a klucz i tak jest wersjonowany (zmiana `holdings_version`/
+  `eod_marker` daje nowy klucz, „nie ma inwalidacji", skill `fastapi-modul`);
+  TTL istnieje wyłącznie, żeby Redis nie puchł starymi kluczami po dniach,
+  gdy portfel/dane już się zmieniły. 6h jest krótsze niż typowy odstęp
+  między przebiegami EOD (raz dziennie), więc w najgorszym razie dokłada
+  jedno dodatkowe przeliczenie w ciągu dnia, nie realne opóźnienie danych.
+- `GET /markets/{code}/index` (marketdata, publiczna, bez `portfolio_id`)
+  ŚWIADOMIE nie jest cache'owana w tym kroku — poza zakresem zadania kroku
+  31 (dotyczy portfela per-user). Propozycja do rozważenia osobno: mogłaby
+  używać klucza `f"market_index:{code}:{range}:{eod_marker_rynku}"` (marker
+  liczony inaczej — z `IngestionRun`/`MAX(prices.date)` per rynek, nie per
+  portfel), ale to nowa decyzja projektowa, nie robię jej milcząco.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.marketdata.models import Asset
+from app.core.cache import cache_key, get_cached_json, set_cached_json
+from app.modules.marketdata import repository as marketdata_repository
+from app.modules.marketdata.models import Asset, Price
 from app.modules.portfolio import service as portfolio_service
 from app.modules.portfolio.models import Portfolio
 from app.modules.portfolio.service import ValuedHolding
+
+# Liczba punktów mini-serii w rankingu rynków (`GET /portfolios/{id}/markets`)
+# — skill `analityka-struktury`: „mini-seria 30 dni".
+_INDEX_SERIES_DAYS = 30
 
 # Ta sama precyzja co `portfolio/service.py` (`_MONEY_QUANT`/`_PCT_QUANT`) —
 # stałe lokalne, nie import prywatnych (podkreślnikowych) nazw z innego
@@ -58,6 +141,11 @@ from app.modules.portfolio.service import ValuedHolding
 # w całym API były spójne.
 _MONEY_QUANT = Decimal("0.00000001")  # 8 miejsc — precyzja NUMERIC(20,8)
 _PCT_QUANT = Decimal("0.0001")  # 4 miejsca — ułamek (waga/HHI), nie kwota PLN
+
+# Krok 31 (cache Redis, CLAUDE.md #3.7) — patrz docstring modułu, sekcja
+# „Krok 31", dla uzasadnienia markera i TTL.
+_EOD_MARKER_NONE = "none"
+_CACHE_TTL_SECONDS = 6 * 60 * 60  # 6h
 
 _UNKNOWN_BUCKET = "nieznane"
 
@@ -102,6 +190,41 @@ class Concentration:
     count: int
     hhi: Decimal
     interpretation: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexChange:
+    """Zmiana d/d indeksu referencyjnego, liczona z dwóch najnowszych
+    wierszy `prices` — nie mylić z `portfolio_service.Change` (ten liczony
+    ze snapshotów `portfolio_valuations`, patrz docstring modułu)."""
+
+    abs: Decimal
+    pct: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class MarketIndexSnapshot:
+    """Indeks referencyjny jednego rynku w rankingu — `series_30d` to do
+    30 ostatnich dostępnych wierszy `Price`, rosnąco po dacie."""
+
+    asset_id: UUID
+    symbol: str
+    value: Decimal
+    change_1d: IndexChange | None
+    as_of: date
+    series_30d: list[Price]
+
+
+@dataclass(frozen=True, slots=True)
+class MarketRankingItem:
+    """Jeden wiersz rankingu rynków — `index=None`, gdy rynek nie ma
+    `index_asset_id` albo nie ma jeszcze żadnego notowania (patrz decyzje
+    modułu)."""
+
+    market_code: str
+    market_name: str
+    weight: Decimal
+    index: MarketIndexSnapshot | None
 
 
 def _bucket_key(asset: Asset, by: str) -> str:
@@ -197,6 +320,41 @@ def allocation_from_valued(valued: list[ValuedHolding], *, by: str, as_of: date)
     return Allocation(by=by, as_of=as_of, approximate=approximate, buckets=buckets)
 
 
+def market_weights_from_valued(valued: list[ValuedHolding]) -> dict[str, Decimal]:
+    """Waga (0..1, skwantyzowana do sumy dokładnie `1`) każdego
+    `asset.market_code` obecnego w pozycjach już wycenionych `valued` —
+    funkcja czysta, bez I/O (testowana w `tests/unit/test_analytics.py` bez
+    bazy, tak jak `allocation_from_valued`).
+
+    Grupuje wprost po `asset.market_code` (kolumna `NOT NULL`,
+    `marketdata/models.py`), nie przez `_bucket_key(..., by="market")` —
+    ten koszyk fizycznie nigdy nie trafia do gałęzi „nieznane", więc
+    reużywamy tylko to, co faktycznie pasuje: `_distribute_weights`
+    (kwantyzacja do sumy dokładnie `1`, rozliczenie zaokrągleń na
+    największym koszyku).
+
+    Pozycje bez wyceny (`value_pln is None`) wykluczone z mianownika, tak
+    jak w `allocation_from_valued`. Pusty słownik dla portfela pustego /
+    bez wycenionych pozycji / sumy `0` — brzegowy przypadek, nie wyjątek.
+    """
+    included = [vh for vh in valued if vh.value_pln is not None]
+    if not included:
+        return {}
+
+    raw_totals: dict[str, Decimal] = {}
+    for vh in included:
+        assert vh.value_pln is not None  # zawężenie typu dla mypy, już odfiltrowane wyżej
+        code = vh.asset.market_code
+        raw_totals[code] = raw_totals.get(code, Decimal("0")) + vh.value_pln
+
+    total = sum(raw_totals.values(), Decimal("0"))
+    if total <= 0:
+        return {}
+
+    raw_weights = {k: v / total for k, v in raw_totals.items()}
+    return _distribute_weights(raw_weights)
+
+
 def _interpretation(hhi_value: Decimal) -> str:
     """Interpretacja opisowa HHI — jedno miejsce w kodzie (skill
     `analityka-struktury`: „nie rozsiane po UI”)."""
@@ -234,19 +392,280 @@ def concentration_from_valued(valued: list[ValuedHolding]) -> Concentration:
     )
 
 
+async def _eod_marker(db: AsyncSession, portfolio: Portfolio) -> str:
+    """Segment „data EOD" klucza cache — patrz docstring modułu, sekcja
+    „Krok 31", dla uzasadnienia wyboru `MAX(prices.date)` po aktywach
+    faktycznie trzymanych w portfelu (nie `today()`, nie `IngestionRun`).
+
+    Deterministyczny `"none"` dla portfela bez pozycji / bez jeszcze
+    żadnej zapisanej ceny — nigdy wyjątek na pustym wyniku."""
+    asset_ids = await portfolio_service.list_holding_asset_ids(db, portfolio)
+    if not asset_ids:
+        return _EOD_MARKER_NONE
+    latest = await marketdata_repository.get_latest_price_date_for_assets(db, asset_ids)
+    return latest.isoformat() if latest is not None else _EOD_MARKER_NONE
+
+
+def _allocation_to_json(result: Allocation) -> str:
+    return json.dumps(
+        {
+            "by": result.by,
+            "as_of": result.as_of.isoformat(),
+            "approximate": result.approximate,
+            "buckets": [
+                {"key": b.key, "value_pln": str(b.value_pln), "weight": str(b.weight)}
+                for b in result.buckets
+            ],
+        }
+    )
+
+
+def _allocation_from_json(raw: str) -> Allocation:
+    data = json.loads(raw)
+    return Allocation(
+        by=data["by"],
+        as_of=date.fromisoformat(data["as_of"]),
+        approximate=data["approximate"],
+        buckets=[
+            AllocationBucket(
+                key=b["key"], value_pln=Decimal(b["value_pln"]), weight=Decimal(b["weight"])
+            )
+            for b in data["buckets"]
+        ],
+    )
+
+
 async def allocation(db: AsyncSession, portfolio: Portfolio, *, by: str) -> Allocation:
     """`GET /portfolios/{portfolio_id}/allocation?by=` — orkiestracja I/O:
     wycenia portfel na „dziś" (`portfolio_service.current_value`), potem
     deleguje grupowanie do `allocation_from_valued` (czysta, testowana bez
-    bazy)."""
+    bazy). Owinięte cache'em Redis (plan krok 31, CLAUDE.md #3.7, docstring
+    modułu „Krok 31") — `by` jest osobnym segmentem klucza, bo każdy wymiar
+    ma inny wynik dla tego samego portfela/dnia."""
+    key = cache_key(
+        "allocation", portfolio.id, portfolio.holdings_version, await _eod_marker(db, portfolio), by
+    )
+    cached = await get_cached_json(key)
+    if cached is not None:
+        return _allocation_from_json(cached)
+
     d = portfolio_service.today()
     value = await portfolio_service.current_value(db, portfolio, d)
-    return allocation_from_valued(value.holdings, by=by, as_of=d)
+    result = allocation_from_valued(value.holdings, by=by, as_of=d)
+
+    await set_cached_json(key, _allocation_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
+    return result
+
+
+def _concentration_to_json(result: Concentration) -> str:
+    return json.dumps(
+        {
+            "top5_share": str(result.top5_share),
+            "count": result.count,
+            "hhi": str(result.hhi),
+            "interpretation": result.interpretation,
+        }
+    )
+
+
+def _concentration_from_json(raw: str) -> Concentration:
+    data = json.loads(raw)
+    return Concentration(
+        top5_share=Decimal(data["top5_share"]),
+        count=data["count"],
+        hhi=Decimal(data["hhi"]),
+        interpretation=data["interpretation"],
+    )
 
 
 async def concentration(db: AsyncSession, portfolio: Portfolio) -> Concentration:
     """`GET /portfolios/{portfolio_id}/concentration` — orkiestracja I/O,
-    patrz `allocation` wyżej."""
+    patrz `allocation` wyżej. Owinięte cache'em Redis tak samo (krok 31)."""
+    key = cache_key(
+        "concentration", portfolio.id, portfolio.holdings_version, await _eod_marker(db, portfolio)
+    )
+    cached = await get_cached_json(key)
+    if cached is not None:
+        return _concentration_from_json(cached)
+
     d = portfolio_service.today()
     value = await portfolio_service.current_value(db, portfolio, d)
-    return concentration_from_valued(value.holdings)
+    result = concentration_from_valued(value.holdings)
+
+    await set_cached_json(key, _concentration_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
+    return result
+
+
+def _index_change(current: Decimal, previous: Decimal) -> IndexChange | None:
+    """`None`, gdy nie ma z czym porównać (`previous <= 0` — matematycznie
+    niemożliwe wobec `CHECK close_adj > 0` w `Price`, ale zabezpieczone
+    obronnie tak samo jak `portfolio_service._change`)."""
+    if previous <= 0:
+        return None
+    delta = current - previous
+    return IndexChange(abs=_quantize_money(delta), pct=_quantize_pct(delta / previous))
+
+
+async def _index_snapshot(db: AsyncSession, index_asset_id: UUID) -> MarketIndexSnapshot | None:
+    """Wartość/zmiana d/d/mini-seria indeksu referencyjnego jednego rynku —
+    `None` gdy w `prices` nie ma jeszcze żadnego notowania (rynek świeżo w
+    słowniku, worker EOD jeszcze nie zaciągnął danych — patrz decyzje
+    modułu) albo gdy samo `index_asset_id` wskazuje na nieistniejące
+    aktywo (złamany FK — asercja obronna, degradujemy do `None` zamiast
+    wywalać cały ranking, bo to pojedynczy wiersz odpowiedzi, nie cała
+    odpowiedź)."""
+    asset = await marketdata_repository.get_asset(db, index_asset_id)
+    if asset is None:
+        return None
+
+    prices_desc = await marketdata_repository.get_latest_prices(
+        db, index_asset_id, limit=_INDEX_SERIES_DAYS
+    )
+    if not prices_desc:
+        return None
+
+    latest = prices_desc[0]
+    change = (
+        _index_change(latest.close_adj, prices_desc[1].close_adj) if len(prices_desc) >= 2 else None
+    )
+
+    return MarketIndexSnapshot(
+        asset_id=asset.id,
+        symbol=asset.symbol,
+        value=_quantize_money(latest.close_adj),
+        change_1d=change,
+        as_of=latest.date,
+        series_30d=list(reversed(prices_desc)),  # najnowsze na końcu — rosnąco po dacie
+    )
+
+
+def _market_index_to_dict(idx: MarketIndexSnapshot | None) -> dict[str, Any] | None:
+    if idx is None:
+        return None
+    return {
+        "asset_id": str(idx.asset_id),
+        "symbol": idx.symbol,
+        "value": str(idx.value),
+        "change_1d": (
+            {"abs": str(idx.change_1d.abs), "pct": str(idx.change_1d.pct)}
+            if idx.change_1d is not None
+            else None
+        ),
+        "as_of": idx.as_of.isoformat(),
+        "series_30d": [
+            {"date": p.date.isoformat(), "close_adj": str(p.close_adj)} for p in idx.series_30d
+        ],
+    }
+
+
+def _market_index_from_dict(data: dict[str, Any] | None) -> MarketIndexSnapshot | None:
+    if data is None:
+        return None
+    change = data["change_1d"]
+    series_30d: list[dict[str, Any]] = data["series_30d"]
+    return MarketIndexSnapshot(
+        asset_id=UUID(str(data["asset_id"])),
+        symbol=str(data["symbol"]),
+        value=Decimal(str(data["value"])),
+        change_1d=(
+            IndexChange(abs=Decimal(str(change["abs"])), pct=Decimal(str(change["pct"])))
+            if change is not None
+            else None
+        ),
+        as_of=date.fromisoformat(str(data["as_of"])),
+        series_30d=[
+            # Instancja `Price` transientna (nigdy dodana do sesji) — tylko
+            # `date`/`close_adj` są czytane przez `routes.py` z `series_30d`,
+            # reszta kolumn (`asset_id`, `close`, ...) zostaje `None`, co nie
+            # ma znaczenia dla żadnego konsumenta tego obiektu.
+            Price(date=date.fromisoformat(str(p["date"])), close_adj=Decimal(str(p["close_adj"])))
+            for p in series_30d
+        ],
+    )
+
+
+def _market_ranking_to_json(items: list[MarketRankingItem]) -> str:
+    return json.dumps(
+        [
+            {
+                "market_code": item.market_code,
+                "market_name": item.market_name,
+                "weight": str(item.weight),
+                "index": _market_index_to_dict(item.index),
+            }
+            for item in items
+        ]
+    )
+
+
+def _market_ranking_from_json(raw: str) -> list[MarketRankingItem]:
+    items: list[dict[str, Any]] = json.loads(raw)
+    return [
+        MarketRankingItem(
+            market_code=str(item["market_code"]),
+            market_name=str(item["market_name"]),
+            weight=Decimal(str(item["weight"])),
+            index=_market_index_from_dict(item["index"]),
+        )
+        for item in items
+    ]
+
+
+async def market_ranking(db: AsyncSession, portfolio: Portfolio) -> list[MarketRankingItem]:
+    """`GET /portfolios/{portfolio_id}/markets` — ranking rynków wg wagi w
+    wartości wycenionego portfela (krok 30, ADR-102): wycenia portfel na
+    „dziś", grupuje po rynku (`market_weights_from_valued`, czysta),
+    dociąga `Market`/indeks referencyjny per rynek obecny w wyniku (jedno
+    zapytanie `list_markets_by_codes`, nie N+1 dla samego `Market`),
+    sortuje malejąco po wadze (skill: „sortowanie malejąco po wadze").
+    Owinięte cache'em Redis (krok 31) — patrz docstring modułu, sekcja
+    „Krok 31", dla uzasadnienia, dlaczego ten sam `eod_marker` (z aktywów
+    trzymanych w portfelu) wystarcza mimo że tu liczy się też świeżość
+    indeksów rynków."""
+    key = cache_key(
+        "markets", portfolio.id, portfolio.holdings_version, await _eod_marker(db, portfolio)
+    )
+    cached = await get_cached_json(key)
+    if cached is not None:
+        return _market_ranking_from_json(cached)
+
+    d = portfolio_service.today()
+    value = await portfolio_service.current_value(db, portfolio, d)
+    weights = market_weights_from_valued(value.holdings)
+    if not weights:
+        # Pusty wynik też trafia do cache (spójnie z `allocation`/
+        # `concentration`, które cache'ują swoje brzegowe `buckets: []`/
+        # `count: 0` tak samo jak wynik niepusty) — portfel bez pozycji
+        # inaczej zawsze mijałby cache.
+        await set_cached_json(key, _market_ranking_to_json([]), ttl_seconds=_CACHE_TTL_SECONDS)
+        return []
+
+    markets = await marketdata_repository.list_markets_by_codes(db, list(weights))
+    markets_by_code = {market.code: market for market in markets}
+
+    items: list[MarketRankingItem] = []
+    for code, weight in weights.items():
+        market = markets_by_code.get(code)
+        if market is None:
+            # `assets.market_code` ma FK do `markets.code` (marketdata/
+            # models.py) — brak wpisu tutaj oznaczałby złamany FK, nie
+            # ścieżkę biznesową (ten sam wzorzec obronny co
+            # `_require_portfolio` w `portfolio/service.py`).
+            raise RuntimeError(
+                f"Rynek {code!r} nie istnieje w markets mimo FK z assets.market_code"
+            )
+        index_snapshot = (
+            await _index_snapshot(db, market.index_asset_id)
+            if market.index_asset_id is not None
+            else None
+        )
+        items.append(
+            MarketRankingItem(
+                market_code=code, market_name=market.name, weight=weight, index=index_snapshot
+            )
+        )
+
+    items.sort(key=lambda item: item.weight, reverse=True)
+
+    await set_cached_json(key, _market_ranking_to_json(items), ttl_seconds=_CACHE_TTL_SECONDS)
+    return items

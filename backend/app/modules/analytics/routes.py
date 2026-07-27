@@ -1,10 +1,14 @@
-"""Routing modułu `analytics` — alokacja, koncentracja (plan krok 29, etap 6).
-Ryzyko i wyniki (`/risk`, `/performance`) to Faza 2 (plan, krok 41 i dalej).
+"""Routing modułu `analytics` — alokacja, koncentracja (plan krok 29, etap 6)
+i ranking rynków (`/portfolios/{id}/markets`, krok 30, ADR-102). Ryzyko i
+wyniki (`/risk`, `/performance`) to Faza 2 (plan, krok 41 i dalej).
 
 Zero SQL bezpośrednio tutaj (skill `fastapi-modul`) — każdy handler woła
 `service.py`. Autoryzacja zasobowa wyłącznie przez `Depends(get_owned_
 portfolio)` (`core/deps.py`, skill `izolacja-danych`) — nigdy goły
-`portfolio_id` z path bez weryfikacji właściciela.
+`portfolio_id` z path bez weryfikacji właściciela. `GET /markets/{code}/
+index` (druga część kroku 30) żyje w `modules/marketdata/routes.py` — dotyczy
+wyłącznie danych rynkowych globalnych (bez portfela), publiczna trasa jak
+`/assets/search` (patrz raport zadania kroku 30).
 """
 
 from __future__ import annotations
@@ -21,7 +25,11 @@ from app.modules.analytics.schemas import (
     AllocationBucketOut,
     AllocationOut,
     ConcentrationOut,
+    IndexChangeOut,
+    MarketIndexOut,
+    MarketRankingItemOut,
 )
+from app.modules.marketdata.schemas import PricePointOut
 
 router = APIRouter(tags=["analytics"])
 
@@ -69,3 +77,38 @@ async def get_concentration(portfolio: PortfolioDep, db: DbSession) -> Concentra
         hhi=result.hhi,
         interpretation=result.interpretation,
     )
+
+
+@router.get("/portfolios/{portfolio_id}/markets", response_model=list[MarketRankingItemOut])
+async def get_market_ranking(portfolio: PortfolioDep, db: DbSession) -> list[MarketRankingItemOut]:
+    """Ranking rynków wg wagi w wartości wycenionego portfela (krok 30,
+    ADR-102) — posortowany malejąco po `weight`. `index=null` dla rynku bez
+    indeksu referencyjnego (skill `analityka-struktury`)."""
+    items = await service.market_ranking(db, portfolio)
+    return [
+        MarketRankingItemOut(
+            market_code=item.market_code,
+            market_name=item.market_name,
+            weight=item.weight,
+            index=(
+                MarketIndexOut(
+                    asset_id=item.index.asset_id,
+                    symbol=item.index.symbol,
+                    value=item.index.value,
+                    change_1d=(
+                        IndexChangeOut(abs=item.index.change_1d.abs, pct=item.index.change_1d.pct)
+                        if item.index.change_1d is not None
+                        else None
+                    ),
+                    as_of=item.index.as_of,
+                    series_30d=[
+                        PricePointOut(date=p.date, close_adj=p.close_adj)
+                        for p in item.index.series_30d
+                    ],
+                )
+                if item.index is not None
+                else None
+            ),
+        )
+        for item in items
+    ]

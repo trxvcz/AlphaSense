@@ -1,6 +1,11 @@
 """Zapis/odczyt danych rynkowych (`fx_rates`, `prices`) — warstwa dzieląca
 się między wszystkich dostawców (plan krok 21, etap 4).
 
+Rozszerzone w kroku 30 (etap 6, ranking rynków ADR-102) o odczyty potrzebne
+`analytics.service.market_ranking` (`get_asset`, `list_markets_by_codes`,
+`get_latest_prices`) i `GET /markets/{code}/index`
+(`get_market`, `list_prices_in_range`).
+
 Świadomie osobne, wąskie funkcje zamiast jednej klasy „repozytorium" (skill
 `data-provider`, sekcja „Reguły twarde" #3; zadanie kroku 21 wprost prosi o
 kształt łatwy do bezkonfliktowego rozszerzania, bo krok 22 — Stooq/yfinance/
@@ -16,12 +21,13 @@ ten sam dzień nadpisuje, nie duplikuje (CLAUDE.md #3.9).
 
 from __future__ import annotations
 
+import calendar
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +35,19 @@ from app.modules.marketdata.models import Asset, AssetSourceMap, FxRate, Ingesti
 from app.modules.marketdata.providers.base import FxQuote, PriceBar
 
 logger = structlog.get_logger(__name__)
+
+# `?range=` w `GET /markets/{code}/index` — ten sam zestaw wartości i ta sama
+# logika liczenia dolnej granicy daty co `portfolio/repository.py`
+# (`_RANGE_MONTHS`/`_subtract_months`/`_range_start`, `GET /valuations`).
+# Świadomie **zduplikowane**, nie zaimportowane stamtąd: to prywatne
+# (podkreślnikowe) funkcje innego modułu operujące na innej tabeli
+# (`prices` tu, `portfolio_valuations` tam) — import przekraczałby granicę
+# modułów po szczegół implementacyjny (skill `fastapi-modul`), a sama logika
+# to kilka linijek arytmetyki na datach, nie wzór analityczny z listy
+# „nie duplikuj" (skill `analityka-struktury` dotyczy wzoru wagi/HHI, nie
+# tego). Jeśli te dwie kopie kiedyś się rozjadą, warto wydzielić wspólne
+# `core/dates.py` — poza zakresem tego kroku (raportowane w podsumowaniu).
+_RANGE_MONTHS: dict[str, int] = {"1M": 1, "3M": 3, "1Y": 12}
 
 
 async def get_rate_pln(db: AsyncSession, currency: str, on_date: date) -> Decimal | None:
@@ -301,6 +320,110 @@ async def list_markets(db: AsyncSession) -> list[Market]:
     """
     result = await db.execute(select(Market).order_by(Market.code))
     return list(result.scalars().all())
+
+
+async def get_market(db: AsyncSession, code: str) -> Market | None:
+    """Lookup pojedynczego rynku po kluczu naturalnym (`markets.code`) —
+    podstawa `GET /markets/{code}/index` (krok 30): `service.py` mapuje
+    `None` na `NotFoundError` (rynek nieznany), routing nie zna tego
+    rozróżnienia (skill `fastapi-modul`)."""
+    return await db.get(Market, code)
+
+
+async def list_markets_by_codes(db: AsyncSession, codes: list[str]) -> list[Market]:
+    """Rynki dla zbioru kodów w jednym zapytaniu (nie N+1) — używane przez
+    `analytics.service.market_ranking` (krok 30) do dociągnięcia `name`/
+    `index_asset_id` dla każdego rynku obecnego w wycenionym portfelu.
+    Pusta `codes` → pusta lista bez odpytywania bazy."""
+    if not codes:
+        return []
+    stmt = select(Market).where(Market.code.in_(codes))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_asset(db: AsyncSession, asset_id: UUID) -> Asset | None:
+    """Lookup po kluczu głównym `assets.id`.
+
+    Duplikuje (celowo, jeden `db.get`) `portfolio.repository.get_asset` —
+    ten moduł jest właścicielem modelu `Asset`, więc lookup po PK ma tu
+    naturalny dom; `portfolio.repository.get_asset` zostaje nietknięty
+    (używany przy tworzeniu/wycenie pozycji), żeby nie robić cross-module
+    refaktoru poza zakresem kroku 30. Konsument: `analytics.service.
+    _index_snapshot` (indeks referencyjny rynku, `symbol`/`id` do
+    odpowiedzi `GET /portfolios/{id}/markets`)."""
+    return await db.get(Asset, asset_id)
+
+
+async def get_latest_prices(db: AsyncSession, asset_id: UUID, *, limit: int) -> list[Price]:
+    """Ostatnie `limit` notowań `asset_id`, malejąco po dacie (najnowsze
+    pierwsze) — jedno zapytanie obsługuje zarówno zmianę d/d (dwa pierwsze
+    elementy), jak i mini-serię `series_30d` (`limit=30`, wołający odwraca
+    kolejność na rosnącą) w `analytics.service._index_snapshot` (krok 30,
+    ADR-102). Mniej niż `limit` wierszy w historii → krótsza lista, nie błąd
+    (indeks świeżo dodany do słownika może mieć niepełną historię EOD)."""
+    stmt = select(Price).where(Price.asset_id == asset_id).order_by(Price.date.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+def _subtract_months(d: date, months: int) -> date:
+    """Patrz `portfolio/repository._subtract_months` — sama logika,
+    zduplikowana świadomie (patrz komentarz przy `_RANGE_MONTHS` wyżej)."""
+    month_index = d.month - 1 - months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _range_start(range_: str, today: date) -> date | None:
+    """Patrz `portfolio/repository._range_start` — `None` dla `max` (cała
+    historia dostępna w `prices`)."""
+    if range_ == "YTD":
+        return date(today.year, 1, 1)
+    if range_ == "max":
+        return None
+    return _subtract_months(today, _RANGE_MONTHS[range_])
+
+
+async def list_prices_in_range(
+    db: AsyncSession, asset_id: UUID, *, range_: str, today: date
+) -> list[Price]:
+    """Seria `prices` dla `asset_id` w `range_`, rosnąco po dacie — podstawa
+    `GET /markets/{code}/index?range=` (krok 30). Ten sam kształt zakresu co
+    `portfolio.repository.list_valuations`, tylko na tabeli `prices` zamiast
+    `portfolio_valuations`."""
+    start = _range_start(range_, today)
+    stmt = select(Price).where(Price.asset_id == asset_id)
+    if start is not None:
+        stmt = stmt.where(Price.date >= start)
+    stmt = stmt.order_by(Price.date.asc())
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_latest_price_date_for_assets(db: AsyncSession, asset_ids: list[UUID]) -> date | None:
+    """`MAX(prices.date)` dla zbiór `asset_ids` — podstawa `eod_marker`
+    (segment „data EOD" klucza cache Redis, CLAUDE.md #3.7, plan krok 31).
+
+    Decyzja (raportowana w podsumowaniu zadania kroku 31): licząc marker z
+    `MAX(date)` **tylko** aktywów faktycznie trzymanych w danym portfelu
+    (nie przez `ingestion_runs.market_code`), unikamy JOIN-a przez rynek i
+    nie przejmujemy się świeżością rynków, na których użytkownik nie jest
+    zainwestowany — bezpośrednio odpowiada pytaniu „czy dla TEGO portfela
+    przyszły nowe dane EOD".
+
+    Pusta `asset_ids` (portfel bez pozycji) → `None` bez odpytywania bazy;
+    `None` też, gdy żadne z `asset_ids` nie ma jeszcze wiersza w `prices`
+    (świeżo dodane aktywo, worker EOD jeszcze nie zaciągnął danych) —
+    wołający (`analytics.service._eod_marker`) mapuje `None` na
+    deterministyczny marker `"none"`, nigdy nie crashuje."""
+    if not asset_ids:
+        return None
+    stmt = select(func.max(Price.date)).where(Price.asset_id.in_(asset_ids))
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def get_latest_ingestion_runs(db: AsyncSession) -> dict[str, IngestionRun]:
