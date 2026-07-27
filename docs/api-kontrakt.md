@@ -130,19 +130,29 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
   { "date": "2026-07-27", "value_pln": "128450.32000000", "composition_change": true }
 ]
 
-// GET /portfolios/{portfolio_id}/allocation?by=sector
+// GET /portfolios/{portfolio_id}/allocation?by=sector  (etap 6, krok 29)
+// "by" wymagany (brak wartości domyślnej — 422 zamiast zgadywania wymiaru).
+// approximate=true TYLKO dla by=sector/by=geo, gdy w wycenionych pozycjach jest ETF
+// (sektor/geografia ETF-a to przybliżenie — klasa/waluta/rynek nie, tam zawsze false).
+// weight: 4 miejsca po przecinku (ułamek, jak change_1d.pct), value_pln: 8 miejsc
+// (jak wszędzie indziej w API) — suma "weight" po buckets zawsze dokładnie "1"
+// (poza pustym portfelem/brakiem wycenionych pozycji: buckets: []).
+// Brak atrybutu (np. sector=null) → koszyk "nieznane", pozycja nie jest pomijana.
 {
   "by": "sector",
   "as_of": "2026-07-23",
-  "approximate": true,          // gdy w portfelu są ETF-y
+  "approximate": true,
   "buckets": [
-    { "key": "Technologia", "value_pln": "42010.00", "weight": "0.327" },
-    { "key": "nieznane",    "value_pln": "1200.00",  "weight": "0.009" }
+    { "key": "Technologia", "value_pln": "42010.00000000", "weight": "0.9910" },
+    { "key": "nieznane",    "value_pln": "380.00000000",   "weight": "0.0090" }
   ]
 }
 
-// GET /portfolios/{portfolio_id}/concentration
-{ "top5_share": "0.61", "count": 14, "hhi": "0.19", "interpretation": "średnia" }
+// GET /portfolios/{portfolio_id}/concentration  (etap 6, krok 29)
+// top5_share/hhi liczone po wagach POZYCJI (nie koszyków), 4 miejsca po przecinku.
+// interpretation: hhi<0.15 "niska", 0.15-0.25 "średnia", >0.25 "wysoka".
+// Portfel pusty / brak wycenionych pozycji → top5_share="0", count=0, hhi="0", interpretation="niska".
+{ "top5_share": "0.6100", "count": 14, "hhi": "0.1900", "interpretation": "średnia" }
 
 // GET /assets/search?q=cdr  (min. 2 znaki; brak/za krótkie q → 422, patrz „Błędy")
 // szuka po symbol/name (ILIKE '%q%', case-insensitive), max 20 trafień, tylko aktywa is_active=true.
