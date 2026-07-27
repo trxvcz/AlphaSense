@@ -146,6 +146,9 @@ async def test_create_holding_happy_path_pln_asset(
     assert body["avg_cost"] is None
     assert body["unrealized_pl"] is None
     assert body["split_suspected"] is False
+    # `temp_assets` ma tylko jedno notowanie (dziś) — brak z czym porównać,
+    # `price_change_1d` jest `None`, nie błąd (świeżo dodane aktywo).
+    assert body["price_change_1d"] is None
 
 
 async def test_create_holding_with_avg_cost_computes_unrealized_pl(
@@ -276,6 +279,41 @@ async def test_list_holdings_happy_path(client: AsyncClient, temp_assets: TempAs
     assert len(rows) == 2
     total = sum(Decimal(r["value_pln"]) for r in rows)
     assert total == Decimal("500") + Decimal("800")  # 10×50 + 2×100×4
+
+
+async def test_list_holdings_computes_price_change_1d_from_two_quotes(
+    client: AsyncClient, db_session: AsyncSession, temp_assets: TempAssets
+) -> None:
+    """Drugie notowanie (wczoraj) dopisane do `temp_assets.pln_asset`
+    (dziś już ma `close_adj=50` z fixture'a) → `price_change_1d` policzony
+    jako `(dziś - wczoraj) / wczoraj`, NIE mylony z `value_pln`/
+    `unrealized_pl` (te liczą się inaczej, patrz `service.py`)."""
+    d = today()
+    db_session.add(
+        Price(
+            asset_id=temp_assets.pln_asset.id,
+            date=d - timedelta(days=1),
+            close=Decimal("40"),
+            close_adj=Decimal("40"),
+        )
+    )
+    await db_session.commit()
+
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await client.post(
+        f"/api/portfolios/{portfolio_id}/holdings",
+        json={"asset_id": str(temp_assets.pln_asset.id), "quantity": "10"},
+        headers=_auth(token),
+    )
+
+    resp = await client.get(f"/api/portfolios/{portfolio_id}/holdings", headers=_auth(token))
+
+    assert resp.status_code == 200
+    body = resp.json()[0]
+    # (50 - 40) / 40 = 0.25 — zmiana ceny instrumentu, nie value_pln portfela
+    assert Decimal(body["price_change_1d"]["abs"]) == Decimal("10")
+    assert Decimal(body["price_change_1d"]["pct"]) == Decimal("0.25")
 
 
 async def test_list_holdings_on_foreign_portfolio_is_404(client: AsyncClient) -> None:

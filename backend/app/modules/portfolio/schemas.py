@@ -123,6 +123,20 @@ class HoldingUpdateIn(BaseModel):
         return self
 
 
+class ChangeOut(BaseModel):
+    """Zmiana wartości (d/d albo YTD) — `abs`olutna i procentowa. Używana
+    zarówno dla zmiany wartości portfela (`SummaryOut`), jak i zmiany ceny
+    instrumentu d/d per pozycja (`HoldingOut.price_change_1d`) — to samo
+    kształt danych, inny mianownik."""
+
+    abs: Decimal
+    pct: Decimal
+
+    @field_serializer("abs", "pct")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+
 class HoldingOut(BaseModel):
     """Wyjście reprezentujące wycenioną pozycję — `GET/POST .../holdings`,
     `PATCH /holdings/{holding_id}`. Budowane w `routes.py` z
@@ -142,6 +156,11 @@ class HoldingOut(BaseModel):
     as_of: date | None
     unrealized_pl: Decimal | None
     split_suspected: bool
+    price_change_1d: ChangeOut | None
+    """Zmiana ceny instrumentu d/d (`close_adj` dziś vs poprzednie
+    notowanie) — NIE zmiana `value_pln` portfela ani `unrealized_pl`.
+    `null`, gdy jest mniej niż dwa notowania w historii (świeżo dodane
+    aktywo, przygotowanie pod plan krok 32 „top ruchy dnia")."""
 
     @field_serializer("quantity")
     def _ser_quantity(self, v: Decimal) -> str:
@@ -150,17 +169,6 @@ class HoldingOut(BaseModel):
     @field_serializer("avg_cost", "value_pln", "unrealized_pl")
     def _ser_optional(self, v: Decimal | None) -> str | None:
         return _ser_optional_decimal(v)
-
-
-class ChangeOut(BaseModel):
-    """Zmiana wartości portfela (d/d albo YTD) — `abs`olutna i procentowa."""
-
-    abs: Decimal
-    pct: Decimal
-
-    @field_serializer("abs", "pct")
-    def _ser(self, v: Decimal) -> str:
-        return _ser_decimal(v)
 
 
 class SummaryOut(BaseModel):

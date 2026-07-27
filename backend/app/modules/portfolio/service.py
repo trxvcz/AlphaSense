@@ -105,6 +105,10 @@ class ValuedHolding:
     as_of: date | None
     unrealized_pl: Decimal | None
     split_suspected: bool
+    price_change_1d: Change | None
+    """Zmiana ceny instrumentu d/d (`close_adj` dziś vs poprzednie notowanie),
+    NIE zmiana `value_pln` portfela ani `unrealized_pl` — `None`, gdy jest
+    mniej niż dwa notowania w historii (świeżo dodane aktywo)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +197,15 @@ async def _value_pairs(
     o dany dzień raz, nie N razy. `"PLN"` jest w cache z góry jako `1` —
     nigdy nie odpytujemy NBP o złotówkę (CLAUDE.md, skill
     `analityka-struktury`: „Dla aktywów w PLN fx_pln = 1").
-    """
+
+    `price_change_1d` — zmiana **ceny instrumentu** (`close_adj` dziś vs
+    poprzednie notowanie), nie zmiana `value_pln` portfela i nie
+    `unrealized_pl` (ten liczy się względem `avg_cost`, nie względem
+    wczoraj). Ten sam wzorzec co `analytics.service._index_snapshot` dla
+    zmiany d/d indeksu rynku: `marketdata_repository.get_latest_prices`
+    (2 najnowsze notowania malejąco po dacie), `None` gdy jest mniej niż
+    dwa wiersze — świeżo dodane aktywo bez historii, nie błąd (przygotowanie
+    pod krok 32, „top ruchy dnia" na dashboardzie, plan etap 6)."""
     settings = get_settings()
     fx_cache: dict[str, Decimal | None] = {"PLN": Decimal("1")}
 
@@ -210,6 +222,9 @@ async def _value_pairs(
         price = await marketdata_repository.get_latest_price(db, asset.id, on_date)
         close_adj = price.close_adj if price is not None else None
         price_date = price.date if price is not None else None
+
+        prices_desc = await marketdata_repository.get_latest_prices(db, asset.id, limit=2)
+        price_change_1d = price_change_from_closes([p.close_adj for p in prices_desc])
 
         fx_pln: Decimal | None = None
         if close_adj is not None:
@@ -242,6 +257,7 @@ async def _value_pairs(
                 as_of=as_of,
                 unrealized_pl=unrealized_pl,
                 split_suspected=split_suspected,
+                price_change_1d=price_change_1d,
             )
         )
     return result
@@ -294,6 +310,27 @@ def _change(current: Decimal, previous: Decimal | None) -> Change | None:
         return None
     delta = current - previous
     return Change(abs=_quantize_money(delta), pct=_quantize_pct(delta / previous))
+
+
+def price_change_from_closes(closes_desc: list[Decimal]) -> Change | None:
+    """Zmiana ceny instrumentu d/d z listy `close_adj` malejąco po dacie
+    (najnowsza cena pierwsza — kształt zwracany przez
+    `marketdata_repository.get_latest_prices`).
+
+    Funkcja czysta (bez I/O), jądro logiki wołane przez `_value_pairs` po
+    pobraniu ostatnich dwóch notowań — analogiczny podział na
+    silnik-bez-I/O (testowany w `tests/unit/test_valuation.py`, bez bazy)
+    i orkiestrację I/O (`_value_pairs`, pokryta integracyjnie) co
+    `value_position`/`_value_pairs`, oraz ten sam wzorzec co
+    `analytics.service._index_change`/`_index_snapshot` dla zmiany d/d
+    indeksu rynku — tu dla ceny pojedynczej pozycji, nie indeksu.
+
+    Zwraca `None`, gdy `closes_desc` ma mniej niż dwa elementy — brak
+    poprzedniego notowania z czym porównać (świeżo dodane aktywo albo
+    aktywo bez jeszcze żadnej historii EOD), to normalny stan, nie błąd."""
+    if len(closes_desc) < 2:
+        return None
+    return _change(closes_desc[0], closes_desc[1])
 
 
 async def get_summary(db: AsyncSession, portfolio: Portfolio) -> Summary:

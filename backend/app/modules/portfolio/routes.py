@@ -60,6 +60,11 @@ def _to_holding_out(vh: ValuedHolding) -> HoldingOut:
         as_of=vh.as_of,
         unrealized_pl=vh.unrealized_pl,
         split_suspected=vh.split_suspected,
+        price_change_1d=(
+            ChangeOut(abs=vh.price_change_1d.abs, pct=vh.price_change_1d.pct)
+            if vh.price_change_1d is not None
+            else None
+        ),
     )
 
 

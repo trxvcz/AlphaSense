@@ -75,11 +75,15 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 // body: { "asset_id": "uuid", "quantity": "10", "avg_cost": "180.00", "cost_currency": "USD", "note": "opcjonalna notatka" }
 // avg_cost/cost_currency opcjonalne razem (jeśli avg_cost podany, cost_currency wymagany — 422 inaczej)
 // unrealized_pl liczony kursem NBP z dnia bieżącej wyceny (nie z historycznej daty zakupu — transakcji nie przechowujemy)
+// price_change_1d — zmiana CENY instrumentu d/d (close_adj dziś vs poprzednie notowanie), NIE zmiana value_pln
+// portfela ani unrealized_pl (ten liczy się względem avg_cost, nie względem wczoraj); null, gdy jest mniej niż
+// dwa notowania w historii (świeżo dodane aktywo) — przygotowanie pod krok 32 ("top ruchy dnia" na dashboardzie)
 {
   "id": "uuid", "asset_id": "uuid", "symbol": "AAPL",
   "quantity": "10.00000000", "avg_cost": "180.00000000", "cost_currency": "USD", "note": "opcjonalna notatka",
   "value_pln": "7600.00000000", "stale": false, "as_of": "2026-07-27",
-  "unrealized_pl": "400.00000000", "split_suspected": false
+  "unrealized_pl": "400.00000000", "split_suspected": false,
+  "price_change_1d": { "abs": "3.50000000", "pct": "0.0185" }
 }
 // 409, jeśli pozycja dla tego asset_id już istnieje w portfelu (UNIQUE(portfolio_id, asset_id))
 
@@ -90,13 +94,15 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
     "id": "uuid", "asset_id": "uuid", "symbol": "CDR",
     "quantity": "10.00000000", "avg_cost": null, "cost_currency": null, "note": null,
     "value_pln": "1250.00000000", "stale": false, "as_of": "2026-07-27",
-    "unrealized_pl": null, "split_suspected": false
+    "unrealized_pl": null, "split_suspected": false,
+    "price_change_1d": { "abs": "-2.50000000", "pct": "-0.0196" }
   },
   {
     "id": "uuid", "asset_id": "uuid", "symbol": "bitcoin",
     "quantity": "0.10000000", "avg_cost": "60000.00000000", "cost_currency": "USD", "note": null,
     "value_pln": null, "stale": true, "as_of": null,
-    "unrealized_pl": null, "split_suspected": false
+    "unrealized_pl": null, "split_suspected": false,
+    "price_change_1d": null
   }
 ]
 
@@ -110,7 +116,8 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
   "id": "uuid", "asset_id": "uuid", "symbol": "CDR",
   "quantity": "12.00000000", "avg_cost": null, "cost_currency": null, "note": null,
   "value_pln": "1500.00000000", "stale": false, "as_of": "2026-07-27",
-  "unrealized_pl": null, "split_suspected": false
+  "unrealized_pl": null, "split_suspected": false,
+  "price_change_1d": { "abs": "-2.50000000", "pct": "-0.0196" }
 }
 
 // GET /portfolios/{portfolio_id}/summary

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from app.modules.portfolio.service import value_position
+from app.modules.portfolio.service import price_change_from_closes, value_position
 
 TODAY = date(2026, 7, 27)
 
@@ -145,3 +145,27 @@ def test_value_position_without_avg_cost_has_no_unrealized_pl() -> None:
         on_date=TODAY,
     )
     assert unrealized_pl is None
+
+
+def test_price_change_from_closes_two_quotes_computes_change() -> None:
+    """Dwa notowania (dziś, wczoraj) → policzona zmiana d/d ceny
+    instrumentu — ten sam wzór co `analytics.service._index_change`:
+    `(dziś - wczoraj) / wczoraj`."""
+    change = price_change_from_closes([Decimal("110"), Decimal("100")])
+    assert change is not None
+    assert change.abs == Decimal("10.00000000")
+    assert change.pct == Decimal("0.1000")
+
+
+def test_price_change_from_closes_single_quote_is_none() -> None:
+    """Jedno notowanie w historii (świeżo dodane aktywo) — brak z czym
+    porównać, `None`, nie błąd."""
+    assert price_change_from_closes([Decimal("100")]) is None
+
+
+def test_price_change_from_closes_no_quotes_is_none() -> None:
+    """Zero notowań (aktywo bez jakiejkolwiek historii EOD) — `None`,
+    to samo `stale`/brak-danych, co pokrywa
+    `test_value_position_missing_price_is_stale_and_excluded` dla
+    `value_position`."""
+    assert price_change_from_closes([]) is None
