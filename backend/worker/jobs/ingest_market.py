@@ -51,6 +51,7 @@ from app.modules.marketdata.repository import (
     upsert_prices,
 )
 from app.modules.marketdata.service import build_fallback_chain
+from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
 logger = structlog.get_logger(__name__)
 
@@ -115,7 +116,19 @@ async def ingest_market(market_code: str, run_date: date | None = None) -> str |
                 return None
 
             async with AsyncSessionLocal() as db:
-                return await _run_ingestion(db, market_code=market_code, run_date=effective_date)
+                status = await _run_ingestion(db, market_code=market_code, run_date=effective_date)
+
+    # Snapshot portfeli *po* zwolnieniu blokady rynku (już poza blokiem
+    # `advisory_lock`/`async with lock_session`), nie w środku — snapshot ma
+    # własną blokadę doradczą (`snapshot:{run_date}`, patrz
+    # `worker/jobs/snapshot_portfolios.py`) i nie powinien trzymać blokady
+    # rynku przez cały czas swojej pracy (SKILL `job-eod`: „snapshot
+    # uruchamiany po ingestii, nie równolegle”). Wołany niezależnie od
+    # `status` — nawet `"partial"`/`"failed"` ingestii tego rynku: silnik
+    # wyceny liczy na ostatnich znanych cenach (`max(date) <= D`), więc
+    # snapshot i tak ma sens, tylko ewentualnie na starszych danych.
+    await snapshot_portfolios(run_date=effective_date)
+    return status
 
 
 async def _run_ingestion(db: AsyncSession, *, market_code: str, run_date: date) -> str:

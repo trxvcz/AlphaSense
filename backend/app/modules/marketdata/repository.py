@@ -54,6 +54,76 @@ async def get_rate_pln(db: AsyncSession, currency: str, on_date: date) -> Decima
     return result.scalar_one_or_none()
 
 
+async def get_latest_price(db: AsyncSession, asset_id: UUID, on_date: date) -> Price | None:
+    """Notowanie `asset_id` obowiązujące w dniu `on_date`.
+
+    Ta sama reguła `max(date) <= D` co `get_rate_pln` powyżej (`ORDER BY
+    date DESC LIMIT 1`) — giełdy też nie notują w weekendy/święta. Zwraca
+    **cały wiersz** `Price`, nie sam `close_adj`, bo wołający (silnik
+    wyceny, `portfolio/service.py`, plan krok 26) musi znać `Price.date`,
+    żeby ocenić, jak stara jest cena względem `on_date` — pozycja wyceniona
+    ceną starszą niż żądany dzień jest oznaczana jako `stale` w odpowiedzi
+    API (`GET /holdings`, `GET /summary`), nie liczona cicho jak świeża.
+
+    Zwraca `None`, jeśli w `prices` nie ma **żadnego** notowania `asset_id`
+    w dniu `on_date` lub wcześniej — dokładnie ten sam podział
+    odpowiedzialności co `get_rate_pln`: `None` vs „stary wiersz” to dwa
+    różne przypadki, oba obsługuje wołający, nie ta funkcja.
+    """
+    stmt = (
+        select(Price)
+        .where(Price.asset_id == asset_id, Price.date <= on_date)
+        .order_by(Price.date.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def detect_price_jump(
+    db: AsyncSession, asset_id: UUID, on_date: date, *, threshold: Decimal = Decimal("0.40")
+) -> bool:
+    """Heurystyka wykrywania nieskorygowanego splitu (plan krok 28): `True`,
+    jeśli surowe `close` skoczyło o więcej niż `threshold` (domyślnie 40%)
+    między dwoma najnowszymi notowaniami `<= on_date`.
+
+    Celowo `close`, nie `close_adj` — dostawcy (yfinance/Stooq) przeliczają
+    `close_adj` retroaktywnie dla całej historii przy splicie, więc
+    `close_adj` dnia splitu jest *ciągłe* względem dnia poprzedniego (skoku
+    nie widać). To surowe `close` faktycznie skacze o współczynnik splitu w
+    dniu zdarzenia, stąd heurystyka ma sens tylko na nim — CLAUDE.md #4
+    (wycena zawsze na `close_adj`) dotyczy liczenia wartości portfela, nie
+    tego sygnału ostrzegawczego. Wynik to tylko podpowiedź dla użytkownika
+    „sprawdź liczbę sztuk” (bez rejestru transakcji ilość nie koryguje się
+    sama po splicie, poza zakresem produktu — CLAUDE.md #1), nie automatyczna
+    korekta.
+
+    `False`, gdy nie da się ocenić: mniej niż dwa notowania w historii,
+    którykolwiek z dwóch ma `close IS NULL` (kolumna nullable w modelu — nie
+    każdy dostawca/dzień ją uzupełnia), albo starsze `close == 0` (w
+    przeciwieństwie do `close_adj` nie ma tu `CHECK > 0`, więc dzielenie
+    zabezpieczamy ręcznie) — brak danych to nie sygnał splitu.
+    """
+    stmt = (
+        select(Price.close)
+        .where(Price.asset_id == asset_id, Price.date <= on_date)
+        .order_by(Price.date.desc())
+        .limit(2)
+    )
+    result = await db.execute(stmt)
+    closes = list(result.scalars().all())
+
+    if len(closes) < 2:
+        return False
+
+    close_newer, close_older = closes
+    if close_newer is None or close_older is None or close_older == 0:
+        return False
+
+    ratio = close_newer / close_older
+    return abs(ratio - 1) > threshold
+
+
 async def upsert_fx_rates(db: AsyncSession, quotes: list[FxQuote]) -> None:
     """Zapisuje `quotes` do `fx_rates`, idempotentnie (`ON CONFLICT (currency,
     date) DO UPDATE`) — ponowne uruchomienie ingestii NBP za ten sam zakres

@@ -1,6 +1,9 @@
 """Testy repozytorium `app.modules.marketdata.repository` — `get_rate_pln`
 (reguła `max(date) <= D`, CLAUDE.md #3.5), `upsert_fx_rates`, `upsert_prices`
-(zapis idempotentny, CLAUDE.md #3.9) — plan krok 21, etap 4.
+(zapis idempotentny, CLAUDE.md #3.9), `get_latest_price` (ta sama reguła
+`max(date) <= D` co `get_rate_pln`, ale dla `prices`) i `detect_price_jump`
+(heurystyka nieskorygowanego splitu, plan krok 28) — plan krok 21/26/28,
+etap 4/5.
 
 Testy integracyjne (prawdziwa baza, jak `db_session`/`client` w
 `conftest.py`), nie jednostkowe jak `tests/unit/test_nbp_provider.py` —
@@ -23,7 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.marketdata.models import Asset, FxRate, Price
 from app.modules.marketdata.providers.base import FxQuote, PriceBar
-from app.modules.marketdata.repository import get_rate_pln, upsert_fx_rates, upsert_prices
+from app.modules.marketdata.repository import (
+    detect_price_jump,
+    get_latest_price,
+    get_rate_pln,
+    upsert_fx_rates,
+    upsert_prices,
+)
 
 _TEST_CURRENCY = "ZZZ"
 
@@ -214,6 +223,203 @@ async def test_upsert_prices_with_empty_list_is_noop(
 
     result = await db_session.execute(select(Price).where(Price.asset_id == temp_asset.id))
     assert result.scalars().all() == []
+
+
+async def test_get_latest_price_exact_match_on_requested_date(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100.5"),
+                close_adj=Decimal("100.5"),
+                volume=1000,
+            )
+        ],
+    )
+
+    price = await get_latest_price(db_session, temp_asset.id, date(2026, 7, 20))
+    assert price is not None
+    assert price.date == date(2026, 7, 20)
+    assert price.close_adj == Decimal("100.5")
+
+
+async def test_get_latest_price_falls_back_to_latest_date_not_after_requested(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    # 2026-07-17 piątek, notowanie; 2026-07-18/19 weekend (brak notowania —
+    # celowo pominięte, tak jak w teście `get_rate_pln`).
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 17),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                volume=None,
+            )
+        ],
+    )
+
+    price = await get_latest_price(db_session, temp_asset.id, date(2026, 7, 19))
+    assert price is not None
+    assert price.date == date(2026, 7, 17)
+
+
+async def test_get_latest_price_returns_none_when_no_row_on_or_before_date(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                volume=None,
+            )
+        ],
+    )
+
+    price = await get_latest_price(db_session, temp_asset.id, date(2026, 7, 1))
+    assert price is None
+
+
+async def test_detect_price_jump_true_when_close_changes_more_than_threshold(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    # split 2:1 zasymulowany na surowym `close` (przepołowione), `close_adj`
+    # celowo bez zmian — dokładnie ten przypadek, który heurystyka ma łapać.
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                volume=None,
+            ),
+            PriceBar(
+                date=date(2026, 7, 21),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("50"),
+                close_adj=Decimal("100"),
+                volume=None,
+            ),
+        ],
+    )
+
+    assert await detect_price_jump(db_session, temp_asset.id, date(2026, 7, 21)) is True
+
+
+async def test_detect_price_jump_false_when_change_within_threshold(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                volume=None,
+            ),
+            PriceBar(
+                date=date(2026, 7, 21),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("110"),
+                close_adj=Decimal("110"),
+                volume=None,
+            ),
+        ],
+    )
+
+    assert await detect_price_jump(db_session, temp_asset.id, date(2026, 7, 21)) is False
+
+
+async def test_detect_price_jump_false_with_single_candle_in_history(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                volume=None,
+            )
+        ],
+    )
+
+    assert await detect_price_jump(db_session, temp_asset.id, date(2026, 7, 20)) is False
+
+
+async def test_detect_price_jump_false_when_one_row_has_null_close(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [
+            PriceBar(
+                date=date(2026, 7, 20),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+                close_adj=Decimal("100"),
+                volume=None,
+            ),
+            PriceBar(
+                date=date(2026, 7, 21),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("150"),
+                close_adj=Decimal("100"),
+                volume=None,
+            ),
+        ],
+    )
+
+    assert await detect_price_jump(db_session, temp_asset.id, date(2026, 7, 21)) is False
+
+
+async def test_detect_price_jump_false_when_no_rows(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    assert await detect_price_jump(db_session, temp_asset.id, date(2026, 7, 20)) is False
 
 
 async def test_upsert_prices_with_all_invalid_bars_persists_nothing(

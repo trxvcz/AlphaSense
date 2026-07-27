@@ -1,6 +1,6 @@
 """Punkt wejścia CLI aplikacji (`python -m app.cli <komenda>`), wołane przez
-`make seed` (`Makefile`) i (`ingest`, plan krok 23) ręcznie do weryfikacji
-joba EOD bez czekania na harmonogram workera.
+`make seed` (`Makefile`) i (`ingest`/`snapshot`, plan kroki 23/27) ręcznie do
+weryfikacji jobów EOD bez czekania na harmonogram workera.
 
 `argparse` (stdlib) świadomie zamiast `typer`/`click` — dodanie zależności
 zewnętrznej po to, by sparsować kilka słów z `sys.argv`, byłoby przerostem
@@ -19,6 +19,7 @@ from datetime import date, datetime
 from app.db.seed import seed_all
 from app.db.session import AsyncSessionLocal
 from worker.jobs.ingest_market import ingest_market
+from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
 
 async def _run_seed() -> None:
@@ -74,6 +75,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Dzień do zaingestowania (YYYY-MM-DD); domyślnie dziś w strefie czasowej rynku",
     )
 
+    snapshot_parser = subparsers.add_parser(
+        "snapshot",
+        help=(
+            "Uruchom ręcznie job snapshotów wyceny portfeli (bez czekania na "
+            "automatyczne wywołanie po ingestii EOD, plan krok 27)"
+        ),
+    )
+    snapshot_parser.add_argument(
+        "--date",
+        type=_parse_date,
+        default=None,
+        dest="run_date",
+        help="Dzień snapshotu (YYYY-MM-DD); domyślnie dziś (`portfolio_service.today()`)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "seed":
@@ -94,6 +110,18 @@ def main(argv: list[str] | None = None) -> int:
         # sobie, więc exit 0; tylko "failed" (SKILL `job-eod`: "niepowodzenie
         # całości = alert") jest błędem ze stanowiska skryptu/CI.
         return 1 if status == "failed" else 0
+
+    if args.command == "snapshot":
+        try:
+            asyncio.run(snapshot_portfolios(args.run_date))
+        except Exception as exc:  # noqa: BLE001 — diagnostyczne narzędzie CLI, nie handler HTTP
+            # Porażka poza pętlą per-portfel (np. baza odmawia połączenia
+            # przy `list_all_portfolios`) — błędy pojedynczych portfeli
+            # `snapshot_portfolios` już łapie i loguje sama, nigdy nie
+            # rzuca ich tutaj (SKILL `job-eod` reguła 6).
+            print(f"BŁĄD: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     parser.error(
         f"Nieznana komenda: {args.command}"

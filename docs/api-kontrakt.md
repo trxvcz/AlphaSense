@@ -29,7 +29,7 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 | GET/PATCH/DELETE | `/portfolios/{portfolio_id}` | szczegóły |
 | GET/POST | `/portfolios/{portfolio_id}/holdings` | pozycje |
 | PATCH/DELETE | `/holdings/{holding_id}` | edycja ilości / usunięcie |
-| GET | `/portfolios/{portfolio_id}/summary` | wartość, zmiana d/d, YTD, skrót „Twoje rynki" |
+| GET | `/portfolios/{portfolio_id}/summary` | wartość, zmiana d/d, YTD (skrót „Twoje rynki" dochodzi w kroku 29/30) |
 | GET | `/portfolios/{portfolio_id}/valuations?range=1M\|3M\|1Y\|YTD\|max` | seria snapshotów |
 
 ## Struktura i rynki
@@ -67,17 +67,68 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 // POST /auth/logout  → 204, czyści cookie refresh_token po stronie serwera (idempotentne)
 
+// POST /portfolios  → 201
+// body: { "name": "Mój portfel", "type": "standard" }
+{ "id": "uuid", "name": "Mój portfel", "type": "standard", "holdings_version": 0, "created_at": "2026-07-27T09:12:00.000000Z" }
+
+// POST /portfolios/{portfolio_id}/holdings  → 201
+// body: { "asset_id": "uuid", "quantity": "10", "avg_cost": "180.00", "cost_currency": "USD", "note": "opcjonalna notatka" }
+// avg_cost/cost_currency opcjonalne razem (jeśli avg_cost podany, cost_currency wymagany — 422 inaczej)
+// unrealized_pl liczony kursem NBP z dnia bieżącej wyceny (nie z historycznej daty zakupu — transakcji nie przechowujemy)
+{
+  "id": "uuid", "asset_id": "uuid", "symbol": "AAPL",
+  "quantity": "10.00000000", "avg_cost": "180.00000000", "cost_currency": "USD", "note": "opcjonalna notatka",
+  "value_pln": "7600.00000000", "stale": false, "as_of": "2026-07-27",
+  "unrealized_pl": "400.00000000", "split_suspected": false
+}
+// 409, jeśli pozycja dla tego asset_id już istnieje w portfelu (UNIQUE(portfolio_id, asset_id))
+
+// GET /portfolios/{portfolio_id}/holdings
+// pozycje wycenione na "dziś" — bez ceny/kursu: value_pln=null, stale=true, wyłączona z sumy portfela (nigdy 0)
+[
+  {
+    "id": "uuid", "asset_id": "uuid", "symbol": "CDR",
+    "quantity": "10.00000000", "avg_cost": null, "cost_currency": null, "note": null,
+    "value_pln": "1250.00000000", "stale": false, "as_of": "2026-07-27",
+    "unrealized_pl": null, "split_suspected": false
+  },
+  {
+    "id": "uuid", "asset_id": "uuid", "symbol": "bitcoin",
+    "quantity": "0.10000000", "avg_cost": "60000.00000000", "cost_currency": "USD", "note": null,
+    "value_pln": null, "stale": true, "as_of": null,
+    "unrealized_pl": null, "split_suspected": false
+  }
+]
+
+// PATCH /holdings/{holding_id}  → 200
+// body: pola opcjonalne { quantity?, avg_cost?, cost_currency?, note? } — pominięte pole = bez zmian;
+// avg_cost/cost_currency/note jawnie na null = wyczyszczone; quantity jawnie na null → 422
+// (kolumna NOT NULL, "wyczyść ilość" nie ma sensu — to samo dotyczy PATCH /portfolios: name/type jawnie null → 422).
+// PATCH bez żadnego pola ({}) jest no-op — nie bumpuje holdings_version/dnia zmiany składu.
+// body: { "quantity": "12" }
+{
+  "id": "uuid", "asset_id": "uuid", "symbol": "CDR",
+  "quantity": "12.00000000", "avg_cost": null, "cost_currency": null, "note": null,
+  "value_pln": "1500.00000000", "stale": false, "as_of": "2026-07-27",
+  "unrealized_pl": null, "split_suspected": false
+}
+
 // GET /portfolios/{portfolio_id}/summary
+// bez pola "markets" (ranking rynków z indeksami referencyjnymi) — świadomie, to krok 29/30 (etap 6), poza
+// zakresem etapu 5; change_1d/change_ytd mogą być null, jeśli worker jeszcze nie zapisał żadnego snapshotu
 {
   "value_pln": "128450.32",
   "change_1d": { "abs": "-820.11", "pct": "-0.0063" },
   "change_ytd": { "abs": "9120.44", "pct": "0.0765" },
   "as_of": "2026-07-23",
-  "stale_assets": 0,
-  "markets": [
-    { "code": "GPW", "weight": "0.41", "index": { "symbol": "WIG20", "value": "2451.20", "change_1d_pct": "0.0042" } }
-  ]
+  "stale_assets": 0
 }
+
+// GET /portfolios/{portfolio_id}/valuations?range=1M  (posortowane rosnąco po dacie; brak historii → [])
+[
+  { "date": "2026-06-27", "value_pln": "120000.00000000", "composition_change": false },
+  { "date": "2026-07-27", "value_pln": "128450.32000000", "composition_change": true }
+]
 
 // GET /portfolios/{portfolio_id}/allocation?by=sector
 {

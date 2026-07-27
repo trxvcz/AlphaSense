@@ -77,13 +77,26 @@ Test przechodzi po **wszystkich** zarejestrowanych trasach automatycznie — now
 # tests/test_isolation.py
 RESOURCE_PARAMS = {"portfolio_id", "holding_id", "watchlist_id", "tag_id"}
 
-def protected_routes(app) -> list[APIRoute]:
+def protected_routes(app) -> list[RouteContext]:
+    # UWAGA WERSJI: FastAPI >= 0.139 opakowuje trasy zarejestrowane przez
+    # `include_router` w `_IncludedRouter` (leniwe rozwiązywanie efektywnych
+    # tras) — `app.routes` już NIE zawiera spłaszczonych `APIRoute`
+    # bezpośrednio. Naiwne `isinstance(r, APIRoute) for r in app.routes`
+    # milcząco zwraca PUSTĄ listę (znalezione i naprawione w etapie 5 —
+    # harness "przechodził" od etapu 2 nie testując niczego, bo zanim
+    # istniały trasy z `portfolio_id`/`holding_id`, pusta lista wyglądała
+    # identycznie jak "poprawnie nic do sprawdzenia"). Użyj
+    # `fastapi.routing.iter_route_contexts`, które spłaszcza efektywne trasy
+    # (łącznie z zagnieżdżonymi routerami) do `RouteContext` — `path`/
+    # `methods`/`param_convertors` delegują do oryginalnej `APIRoute` przez
+    # `__getattr__`/property.
+    from fastapi.routing import APIRoute, iter_route_contexts
     return [
-        r for r in app.routes
-        if isinstance(r, APIRoute) and RESOURCE_PARAMS & set(r.param_convertors)
+        ctx for ctx in iter_route_contexts(app.routes)
+        if isinstance(ctx.original_route, APIRoute) and RESOURCE_PARAMS & set(ctx.param_convertors)
     ]
 
-@pytest.mark.parametrize("route", protected_routes(app), ids=lambda r: f"{r.methods}:{r.path}")
+@pytest.mark.parametrize("route", protected_routes(app), ids=lambda r: f"{sorted(r.methods)}:{r.path}")
 async def test_user_b_cannot_touch_user_a_resources(route, client, user_a_fixtures, token_b):
     url = route.path.format(**user_a_fixtures.ids)
     for method in route.methods - {"HEAD", "OPTIONS"}:

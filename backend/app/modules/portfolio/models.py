@@ -48,6 +48,9 @@ class Portfolio(Base):
     (`{zasób}:{portfolio_id}:{holdings_version}:{data_eod}`, CLAUDE.md #3.7)
     — inkrementowany przy każdej zmianie składu `holdings` (etap 5); tutaj
     tylko kolumna, logika inkrementacji poza zakresem tego kroku.
+    `holdings_changed_at` to data ostatniej zmiany składu (dla
+    `PortfolioValuation.composition_change` w jobie snapshotów EOD, ADR-101)
+    — nullable, ustawiana logiką aplikacyjną przy CRUD pozycji (etap 5).
     """
 
     __tablename__ = "portfolios"
@@ -65,6 +68,7 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(String())
     type: Mapped[str] = mapped_column(String())
     holdings_version: Mapped[int] = mapped_column(Integer(), server_default=text("0"))
+    holdings_changed_at: Mapped[date_ | None] = mapped_column(Date(), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

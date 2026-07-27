@@ -16,7 +16,7 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 |---|---|---|---|
 | `users` | id | email (unique), password_hash (**nullable**), created_at | argon2id; `password_hash IS NULL` = konto OAuth-only (Google, dopasowane po `email`) |
 | `refresh_tokens` | id | user_id, token_hash, expires_at, revoked_at, replaced_by | rotacja, wykrywanie ponownego użycia |
-| `portfolios` | id | user_id, name, type, holdings_version | `holdings_version` = znacznik do klucza cache |
+| `portfolios` | id | user_id, name, type, holdings_version, **holdings_changed_at** | `holdings_version` = znacznik do klucza cache; `holdings_changed_at` (nullable) = data ostatniej mutacji `holdings`, podstawa `composition_change` w jobie snapshotów (etap 5, krok 27) |
 | `holdings` | id | portfolio_id, asset_id, quantity, avg_cost, cost_currency, valid_from, note | `UNIQUE(portfolio_id, asset_id)` |
 | `assets` | id | symbol, name, asset_class, **market_code**, currency, isin, sector, country, region, metadata_source, is_active | sektor/kraj z dostawcy, override użytkownika ma pierwszeństwo |
 | `markets` | code | name, index_asset_id, timezone, eod_time | ADR-102, jedno źródło prawdy |
