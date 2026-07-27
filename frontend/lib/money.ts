@@ -17,6 +17,11 @@ const pctFormatter = new Intl.NumberFormat("pl-PL", {
   maximumFractionDigits: 1,
 });
 
+const decimalFormatter = new Intl.NumberFormat("pl-PL", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 /**
  * Formatuje kwotę w PLN. Przyjmuje string dziesiętny z API, np. "128450.32".
  */
@@ -30,4 +35,13 @@ export function pln(value: string): string {
  */
 export function pct(value: string): string {
   return pctFormatter.format(Number(value));
+}
+
+/**
+ * Formatuje kwotę w nieznanej/instrumentowej walucie (np. `price_change_1d.abs`,
+ * gdzie API nie zwraca waluty aktywa) — bez symbolu waluty, tylko liczba.
+ * Wołający dokleja walutę jako osobny tekst, jeśli ją zna.
+ */
+export function decimal(value: string): string {
+  return decimalFormatter.format(Number(value));
 }
