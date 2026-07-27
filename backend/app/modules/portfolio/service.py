@@ -270,6 +270,22 @@ async def list_valued_holdings(db: AsyncSession, portfolio: Portfolio) -> list[V
     return value.holdings
 
 
+async def list_holding_asset_ids(db: AsyncSession, portfolio: Portfolio) -> list[UUID]:
+    """`asset_id` wszystkich pozycji portfela, bez wyceny — używane przez
+    `analytics.service._eod_marker` (plan krok 31, CLAUDE.md #3.7) do
+    zbudowania klucza cache **przed** ewentualnym pełnym `current_value`
+    (który per pozycja dociąga cenę/kurs/heurystykę splitu — właśnie to
+    kosztowne wywołanie ma omijać trafienie w cache). Reużywa ten sam
+    tani `JOIN` co `current_value` (`repository.list_holdings_with_assets`);
+    na trafienie w cache ta funkcja jest jedynym zapytaniem do bazy, na
+    pudło wykonuje się drugi raz wewnątrz `current_value` — świadomie
+    zaakceptowany, tani koszt podwójnego odczytu tej samej, małej tabeli
+    `holdings`, w zamian za brak refaktoru `current_value` do przyjmowania
+    już pobranych par."""
+    pairs = await repository.list_holdings_with_assets(db, portfolio.id)
+    return [holding.asset_id for holding, _ in pairs]
+
+
 def _change(current: Decimal, previous: Decimal | None) -> Change | None:
     """`None`, gdy nie ma z czym porównać (brak historii — normalne,
     zanim worker zrobi pierwszy snapshot) albo poprzednia wartość to `0`

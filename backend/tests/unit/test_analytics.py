@@ -67,7 +67,6 @@ def _valued(
         as_of=TODAY if value_pln is not None else None,
         unrealized_pl=None,
         split_suspected=False,
-        price_change_1d=None,
     )
 
 
