@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { NAV_ITEMS } from "@/components/nav/navItems";
+import { AuthStatus } from "@/components/nav/AuthStatus";
 
 /**
  * Dolna nawigacja — widoczna tylko na mobile (do `md:`), zgodnie z zasadą
- * mobile first. Server Component: same linki, bez interakcji.
+ * mobile first. Server Component: linki są statyczne, jedyny interaktywny
+ * fragment (`AuthStatus`, stan zalogowania) jest wydzielony do osobnego
+ * Client Component.
  */
 export function BottomNav() {
   return (
@@ -22,6 +25,9 @@ export function BottomNav() {
             </Link>
           </li>
         ))}
+        <li className="flex-1">
+          <AuthStatus variant="bottom" />
+        </li>
       </ul>
     </nav>
   );
