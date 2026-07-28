@@ -3,8 +3,12 @@
 
 Integracyjne, prawdziwa baza — ten sam wzorzec co
 `tests/integration/test_holdings.py`: aktywa/ceny/kursy testowe na
-`market_code` już obecnych w słowniku (`GPW` PLN, `US` USD, `FX` bez
-indeksu), losowy sufiks symbolu, sprzątanie po każdym teście. Logika
+`market_code` już obecnych w słowniku (`GPW` PLN, `US` z walutą testową
+`XTS`, `FX` bez indeksu), losowy sufiks symbolu, sprzątanie po każdym
+teście. Waluta obca to `XTS` (ISO 4217, kod zarezerwowany na testy), a nie
+`USD` — realny kurs `USD` zaciąga worker EOD, więc kurs testowy dałoby się
+ustawić tylko warunkowo, a wtedy asercje na kwotach zależą od tego, czy
+worker już zdążył. Pełne uzasadnienie w docstringu `test_holdings.py`. Logika
 grupowania/HHI/wag rynku ma już pełne pokrycie w
 `tests/unit/test_analytics.py` (bez bazy) — te testy sprawdzają tylko
 orkiestrację: autoryzację (`get_owned_portfolio`), serializację odpowiedzi
@@ -70,7 +74,7 @@ async def _create_portfolio(client: AsyncClient, token: str, name: str = "Portfe
 @dataclass
 class AnalyticsAssets:
     equity_pl: Asset  # GPW/PLN, klasa "equity", sektor "Technologia"
-    etf_us: Asset  # US/USD, klasa "etf", sektor "Finanse" — dla approximate=true
+    etf_us: Asset  # US/XTS, klasa "etf", sektor "Finanse" — dla approximate=true
 
 
 @pytest_asyncio.fixture
@@ -90,7 +94,7 @@ async def analytics_assets(db_session: AsyncSession) -> AsyncGenerator[Analytics
         name=f"Analytics ETF US {suffix}",
         asset_class="etf",
         market_code="US",
-        currency="USD",
+        currency="XTS",
         sector="Finanse",
         country="USA",
     )
@@ -106,9 +110,8 @@ async def analytics_assets(db_session: AsyncSession) -> AsyncGenerator[Analytics
             Price(asset_id=etf_us.id, date=d, close=Decimal("100"), close_adj=Decimal("100")),
         ]
     )
-    fx_created_here = await db_session.get(FxRate, ("USD", d)) is None
-    if fx_created_here:
-        db_session.add(FxRate(currency="USD", date=d, rate_pln=Decimal("4")))
+    # Bezwarunkowo — `XTS` należy wyłącznie do testów, nic innego go nie pisze.
+    db_session.add(FxRate(currency="XTS", date=d, rate_pln=Decimal("4")))
     await db_session.commit()
 
     yield AnalyticsAssets(equity_pl=equity_pl, etf_us=etf_us)
@@ -116,8 +119,7 @@ async def analytics_assets(db_session: AsyncSession) -> AsyncGenerator[Analytics
     asset_ids = [equity_pl.id, etf_us.id]
     await db_session.execute(delete(Holding).where(Holding.asset_id.in_(asset_ids)))
     await db_session.execute(delete(Price).where(Price.asset_id.in_(asset_ids)))
-    if fx_created_here:
-        await db_session.execute(delete(FxRate).where(FxRate.currency == "USD", FxRate.date == d))
+    await db_session.execute(delete(FxRate).where(FxRate.currency == "XTS", FxRate.date == d))
     await db_session.execute(delete(Asset).where(Asset.id.in_(asset_ids)))
     await db_session.commit()
 

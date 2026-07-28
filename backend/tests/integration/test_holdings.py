@@ -3,11 +3,21 @@
 (plan kroki 25-26-28, etap 5).
 
 Integracyjne, prawdziwa baza. Aktywa/ceny/kursy testowe (`temp_assets`)
-istnieją tylko na `market_code` już obecnych w słowniku (`GPW` PLN, `US`
-USD — jak `tests/integration/test_assets_search.py`/`test_meta_freshness.py`)
-— ten plik nie tworzy własnych `markets`, tylko `assets`/`prices`/
-`fx_rates` potrzebne do wyceny, z losowym sufiksem symbolu i sprzątaniem
-po każdym teście.
+istnieją tylko na `market_code` już obecnych w słowniku (`GPW`, `US` — jak
+`tests/integration/test_assets_search.py`/`test_meta_freshness.py`) — ten
+plik nie tworzy własnych `markets`, tylko `assets`/`prices`/`fx_rates`
+potrzebne do wyceny, z losowym sufiksem symbolu i sprzątaniem po każdym
+teście.
+
+Waluta obca w testach to **`XTS`**, nie `USD`: ISO 4217 rezerwuje `XTS`
+wyłącznie na testy (ta sama zasada co domena `.example` z RFC 2606 dla
+e-maili, patrz „Notatki operacyjne" w `STATUS.md`). Realny kurs `USD` na
+„dziś" pojawia się w `fx_rates`, gdy tylko worker EOD zaciągnie tabelę
+NBP — fixture, który warunkowo tworzył własny `USD = 4`, przechodził więc
+tylko dopóki worker jeszcze nie pobrał kursu, a asercje na kwotach
+(`100 × 4`) padały po każdej udanej ingestii. `XTS` jest wyłączną
+własnością testów, więc kurs jest ustawiany bezwarunkowo i wynik nie
+zależy od pory dnia ani historii kontenera.
 """
 
 from __future__ import annotations
@@ -57,15 +67,20 @@ async def _create_portfolio(client: AsyncClient, token: str, name: str = "Portfe
 @dataclass
 class TempAssets:
     pln_asset: Asset
-    usd_asset: Asset
+    fx_asset: Asset
 
 
 @pytest_asyncio.fixture
 async def temp_assets(db_session: AsyncSession) -> AsyncGenerator[TempAssets, None]:
-    """Dwa aktywa tymczasowe (PLN na `GPW`, USD na `US`) wycenione na
-    „dziś" (`service.today()`), plus kurs USD/PLN na „dziś" — nie polegamy
+    """Dwa aktywa tymczasowe (PLN na `GPW`, `XTS` na `US`) wycenione na
+    „dziś" (`service.today()`), plus kurs XTS/PLN na „dziś" — nie polegamy
     na `fx_rates`/`prices` z realnej ingestii, która może nie sięgać
-    bieżącej daty w środowisku testowym."""
+    bieżącej daty w środowisku testowym.
+
+    `XTS` (ISO 4217, kod zarezerwowany na testy) zamiast `USD`: realny kurs
+    `USD` zaciąga worker EOD, więc kurs testowy dałoby się ustawić tylko
+    warunkowo — a wtedy asercje na kwotach zależą od tego, czy worker już
+    zdążył. Patrz docstring modułu."""
     suffix = uuid.uuid4().hex[:8]
     pln_asset = Asset(
         symbol=f"HOLP{suffix}",
@@ -74,33 +89,32 @@ async def temp_assets(db_session: AsyncSession) -> AsyncGenerator[TempAssets, No
         market_code="GPW",
         currency="PLN",
     )
-    usd_asset = Asset(
+    fx_asset = Asset(
         symbol=f"HOLU{suffix}",
-        name=f"Test Holding USD {suffix}",
+        name=f"Test Holding XTS {suffix}",
         asset_class="equity",
         market_code="US",
-        currency="USD",
+        currency="XTS",
     )
-    db_session.add_all([pln_asset, usd_asset])
+    db_session.add_all([pln_asset, fx_asset])
     await db_session.commit()
     await db_session.refresh(pln_asset)
-    await db_session.refresh(usd_asset)
+    await db_session.refresh(fx_asset)
 
     d = today()
     db_session.add_all(
         [
             Price(asset_id=pln_asset.id, date=d, close=Decimal("50"), close_adj=Decimal("50")),
-            Price(asset_id=usd_asset.id, date=d, close=Decimal("100"), close_adj=Decimal("100")),
+            Price(asset_id=fx_asset.id, date=d, close=Decimal("100"), close_adj=Decimal("100")),
         ]
     )
-    fx_created_here = await db_session.get(FxRate, ("USD", d)) is None
-    if fx_created_here:
-        db_session.add(FxRate(currency="USD", date=d, rate_pln=Decimal("4")))
+    # Bezwarunkowo — `XTS` należy wyłącznie do testów, nic innego go nie pisze.
+    db_session.add(FxRate(currency="XTS", date=d, rate_pln=Decimal("4")))
     await db_session.commit()
 
-    yield TempAssets(pln_asset=pln_asset, usd_asset=usd_asset)
+    yield TempAssets(pln_asset=pln_asset, fx_asset=fx_asset)
 
-    asset_ids = [pln_asset.id, usd_asset.id]
+    asset_ids = [pln_asset.id, fx_asset.id]
     # `Holding.asset_id` nie kaskaduje z `assets` (`models.py`, docstring
     # `Holding`) — testy w tym pliku tworzą `Holding` na te aktywa przez
     # HTTP i same ich nie sprzątają (to nie ich odpowiedzialność), więc
@@ -110,8 +124,7 @@ async def temp_assets(db_session: AsyncSession) -> AsyncGenerator[TempAssets, No
     # przed *następnym* testem, nie przed tym teardownem).
     await db_session.execute(delete(Holding).where(Holding.asset_id.in_(asset_ids)))
     await db_session.execute(delete(Price).where(Price.asset_id.in_(asset_ids)))
-    if fx_created_here:
-        await db_session.execute(delete(FxRate).where(FxRate.currency == "USD", FxRate.date == d))
+    await db_session.execute(delete(FxRate).where(FxRate.currency == "XTS", FxRate.date == d))
     await db_session.execute(delete(Asset).where(Asset.id.in_(asset_ids)))
     await db_session.commit()
 
@@ -160,10 +173,10 @@ async def test_create_holding_with_avg_cost_computes_unrealized_pl(
     resp = await client.post(
         f"/api/portfolios/{portfolio_id}/holdings",
         json={
-            "asset_id": str(temp_assets.usd_asset.id),
+            "asset_id": str(temp_assets.fx_asset.id),
             "quantity": "2",
             "avg_cost": "80",
-            "cost_currency": "USD",
+            "cost_currency": "XTS",
         },
         headers=_auth(token),
     )
@@ -268,7 +281,7 @@ async def test_list_holdings_happy_path(client: AsyncClient, temp_assets: TempAs
     )
     await client.post(
         f"/api/portfolios/{portfolio_id}/holdings",
-        json={"asset_id": str(temp_assets.usd_asset.id), "quantity": "2"},
+        json={"asset_id": str(temp_assets.fx_asset.id), "quantity": "2"},
         headers=_auth(token),
     )
 
@@ -361,10 +374,10 @@ async def test_update_holding_can_clear_avg_cost(
     create_resp = await client.post(
         f"/api/portfolios/{portfolio_id}/holdings",
         json={
-            "asset_id": str(temp_assets.usd_asset.id),
+            "asset_id": str(temp_assets.fx_asset.id),
             "quantity": "1",
             "avg_cost": "50",
-            "cost_currency": "USD",
+            "cost_currency": "XTS",
         },
         headers=_auth(token),
     )
