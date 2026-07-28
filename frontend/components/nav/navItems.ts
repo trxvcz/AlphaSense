@@ -3,9 +3,10 @@
  * (desktop) renderują te same linki, patrz CLAUDE.md sekcja 6.
  *
  * `/portfolios` działa (lista portfeli + routing do `/portfolios/[id]`,
- * krok 32). `/struktura` działa od kroku 33 — sama wybiera portfel i
- * przekazuje do `/portfolios/[id]/struktura`. `/dashboard` i `/rynki`
- * powstają w kolejnych krokach planu (etap 6) — na razie linki placeholder.
+ * krok 32). `/struktura` (krok 33) i `/rynki` (krok 34) działają — same
+ * wybierają portfel i przekazują do `/portfolios/[id]/...`. `/dashboard`
+ * zostaje linkiem placeholder (osobnego ekranu zbiorczego plan nie ma —
+ * dashboard żyje pod konkretnym portfelem).
  */
 export type NavItem = {
   href: string;

@@ -207,6 +207,46 @@ test("dashboard portfela: podsumowanie, wykres, top ruchy dnia, mobile 375px, po
   await page.getByRole("link", { name: /Portfel e2e dashboard/ }).click();
   await expect(page).toHaveURL(new RegExp(`/portfolios/${portfolio.id}/struktura$`));
 
+  // --- Krok 34: panel „Twoje rynki" ---
+  await page.goto(`/portfolios/${portfolio.id}/rynki`);
+  await expect(
+    page.getByRole("heading", { name: /^Twoje rynki — Portfel e2e dashboard$/ }),
+  ).toBeVisible();
+
+  // Zawężone do listy rynków — `getByRole("listitem")` bez zawężenia łapie
+  // też pozycje dolnej nawigacji, która też jest listą.
+  const marketList = page.getByRole("list", { name: "Rynki wg udziału w portfelu" });
+  const marketRows = marketList.getByRole("listitem");
+  const marketRowCount = await marketRows.count();
+  expect(marketRowCount).toBeGreaterThan(0);
+
+  // Każdy rynek MUSI pokazać albo sparkline indeksu, albo wyjaśnienie, czemu
+  // go nie ma (skill `analityka-struktury`: „pokaż samą wagę, bez pustego
+  // wykresu"). Asercja jest sformułowana jako suma obu gałęzi, bo to, który
+  // rynek ma notowania indeksu, zależy od stanu ingestii w danym środowisku —
+  // twarde „GPW nie ma indeksu" padłoby w dniu, w którym worker zaciągnie
+  // WIG20, mimo poprawnego kodu.
+  const sparklines = await page.getByRole("img", { name: /^Notowania indeksu / }).count();
+  const withoutIndex = await page.getByText(/nie ma jeszcze indeksu referencyjnego/).count();
+  expect(sparklines + withoutIndex).toBe(marketRowCount);
+
+  // Waga rynku — sortowanie i kwantyzacja są po stronie backendu, UI ma ją
+  // tylko pokazać.
+  await expect(marketRows.first().getByText(/%/).first()).toBeVisible();
+
+  const marketsOverflow = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(marketsOverflow.scrollWidth).toBeLessThanOrEqual(marketsOverflow.clientWidth);
+  await page.screenshot({ path: "test-results/rynki-mobile-375.png", fullPage: true });
+
+  // `/rynki` z nawigacji — ten sam `PortfolioPicker` co `/struktura`.
+  await page.goto("/rynki");
+  await expect(page.getByRole("heading", { name: "Twoje rynki" })).toBeVisible();
+  await page.getByRole("link", { name: /Portfel e2e dashboard/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/portfolios/${portfolio.id}/rynki$`));
+
   // --- Krok 35: tryb ciemny/jasny ---
   // Motyw steruje klasą `dark` na <html> (`lib/theme.ts` + `app/globals.css`),
   // więc sprawdzamy dokładnie to, na czym stoją wszystkie klasy `dark:`.

@@ -3,7 +3,7 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 6 — Analityka i dashboard (kroki 29-33 i 35 zrobione, został 34)
+**Aktualny etap:** 6 — Analityka i dashboard (**wszystkie kroki 29-35 zrobione**; następny etap: 7 — wdrożenie produkcyjne)
 **Ostatnia aktualizacja:** 2026-07-28
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
@@ -17,7 +17,7 @@
 | 3 | Model danych | 🟢 zrobiony |
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
-| 6 | Analityka i dashboard | 🟡 w toku |
+| 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | ⚪ |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ |
 | 9 | Otoczka (Faza 3) | ⚪ |
@@ -60,7 +60,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 31 Cache Redis wersjonowany
 [x] 32 Dashboard + wykres wartości
 [x] 33 Widoki struktury (donut, treemap, sektor, geo)
-[ ] 34 Panel „Twoje rynki"
+[x] 34 Panel „Twoje rynki"
 [x] 35 Formularz mobile, stany puste, dark mode
 [ ] 36 Caddy + compose produkcyjny
 [ ] 37 Sentry + /health + alerty
@@ -109,9 +109,29 @@ Nowe pliki: `lib/analytics.ts` (typy + `getAllocation`/`getConcentration`), `lib
 - **Testy e2e struktury dopisane do `e2e/dashboard.spec.ts`, nie do osobnego pliku** — osobny spec to szósty `POST /auth/login` w oknie minuty, czyli 429 (ten sam powód, dla którego dopisano tam krok 35). To już drugi krok planu, który musi się podpiąć pod cudzy test — wpis o `RATE_LIMIT_AUTH_PER_MINUTE` w backlogu etapu 6 robi się pilniejszy niż „do decyzji przy etapie 7".
 - **Nowe funkcje czyste to pierwsi realni kandydaci na Vitest** (którego wciąż nie ma w repo, patrz backlog etapu 6): `toChartSlices` (sortowanie, składanie nadmiaru w „Pozostałe") i `bucketLabel` (fallback dla nieznanego klucza) są testowalne bez DOM-u i bez API.
 
+## Krok 34 — panel „Twoje rynki" (zrobiony 2026-07-28) — ZAMYKA ETAP 6
+
+Trasa `/portfolios/[id]/rynki` (Server Component → `MarketRankingPanel`, Client) plus `/rynki` z nawigacji głównej. Wiersz rynku: kod i nazwa, waga jako liczba i pasek postępu (czysty CSS — jedna wartość na wiersz nie potrzebuje kanwy), a pod spodem indeks referencyjny: symbol, wartość, zmiana d/d w kolorze wg znaku i sparkline do 30 ostatnich notowań.
+
+**Rynek bez indeksu nie znika z listy i nie dostaje pustego wykresu** — pokazuje samą wagę z jednozdaniowym wyjaśnieniem (skill `analityka-struktury`). Widok nie odróżnia „rynek nie ma `index_asset_id`" od „ma, ale worker nie zaciągnął notowań", bo API tych przypadków nie rozróżnia (oba to `index: null`), a dla użytkownika znaczą to samo.
+
+Sparkline jest **celowo neutralny kolorystycznie**, nie zielony/czerwony wg `change_1d`: seria pokazuje 30 notowań, a `change_1d` to jedna sesja — pomalowanie miesiąca kolorem ostatniego dnia sugerowałoby trend, którego ten kolor nie opisuje. Znak zmiany niesie liczba obok (`changeColorClass`). Oś Y sparkline'a idzie od `dataMin`, nie od zera — indeks o wartości kilkudziesięciu tysięcy spłaszczyłby się do prostej.
+
+Nowe pliki: `lib/analytics.ts` (+`MarketRankingItem`/`MarketIndex`/`PricePoint`/`getMarketRanking`), `components/charts/MarketSparkline.tsx`, `components/markets/MarketRankingPanel.tsx`, `components/portfolio/PortfolioPicker.tsx`, `app/rynki/{layout,page}.tsx`, `app/portfolios/[id]/rynki/page.tsx`. Ekran wyboru portfela z kroku 33 wydzielony do `PortfolioPicker` i dzielony przez `/struktura` i `/rynki` — obie trasy różniły się wyłącznie segmentem URL i tekstami.
+
+Żywa weryfikacja (`curl` + Playwright 375 px, zrzut `frontend/test-results/rynki-mobile-375.png`): portfel z bitcoinem, CDR, PKN i AAPL daje **CRYPTO 79,7% z indeksem `bitcoin` i serią 12 notowań** oraz **GPW 20,3% bez indeksu** (WIG20 nadal bez wierszy `prices` — patrz backlog danych rynkowych). `US` nie pojawia się w rankingu, bo AAPL nie ma w tym środowisku wyceny — zgodnie z zasadą „nie licz jako zero, wyklucz z mianownika". Oba warianty wiersza (z indeksem i bez) są więc pokryte żywymi danymi, nie tylko testem.
+
+### Backlog kroku 34 (nieblokujące)
+
+- **Asercja e2e na warianty wiersza jest sformułowana jako suma obu gałęzi** (`sparkline'y + wyjaśnienia == liczba wierszy`), a nie jako „GPW nie ma indeksu" — twarde przypisanie padłoby w dniu, w którym worker zaciągnie WIG20, mimo poprawnego kodu. To ten sam błąd, który wciąż siedzi w `tests/integration/test_analytics.py:400` (`test_market_ranking_happy_path_with_index` asertuje `us_item["index"] is None`) — wpis wyżej w backlogu etapu 6 jest nadal aktualny.
+- **Pierwsza wersja testu użyła `getByRole("listitem")` bez zawężenia i łapała pozycje dolnej nawigacji** (6 zamiast 2). Naprawione przez `aria-label="Rynki wg udziału w portfelu"` na liście — przy okazji realna poprawka dostępności. Warto sprawdzić, czy inne listy w UI też powinny mieć nazwę.
+- **Sparkline nie ma tabelarycznej alternatywy** — decyzja: wszystkie liczby, które niesie (wartość indeksu, zmiana d/d, data notowania), są obok jako tekst, a tabela z trzydziestoma notowaniami na każdy rynek byłaby w tym miejscu szumem. Jeśli kiedyś pojawi się pełny wykres indeksu (krok 45, Lightweight Charts), tam alternatywa będzie obowiązkowa.
+- **`GET /markets/{code}/index` (krok 30) nie ma dziś konsumenta we froncie** — panel korzysta z `series_30d` zaszytego w rankingu, co oszczędza N zapytań. Osobny endpoint przyda się dopiero przy wykresach świecowych (krok 45).
+- **`/dashboard` w nawigacji nadal jest linkiem placeholder** — plan nie przewiduje osobnego ekranu zbiorczego, dashboard żyje pod konkretnym portfelem. Do decyzji przy etapie 7: albo przekierowanie jak w `PortfolioPicker`, albo usunięcie pozycji z nawigacji (dziś prowadzi na 404).
+
 ## Plan etapu 7 — wdrożenie produkcyjne (uzgodniony 2026-07-28, przed rozpoczęciem)
 
-Etap zaplanowany na sesji 2026-07-28 (`/etap 7`). **Nie zaczęty — świadomie odłożony do domknięcia etapu 6.**
+Etap zaplanowany na sesji 2026-07-28 (`/etap 7`). **Nie zaczęty. Blokada zdjęta:** etap 6 domknięty tego samego dnia (kroki 33 i 34), więc warunek z decyzji 1 poniżej jest spełniony i etap 7 można zaczynać od kroku 36.
 
 **Decyzje użytkownika podjęte przy planowaniu:**
 
@@ -133,7 +153,7 @@ Nowy publiczny `GET /api/health` wyłączony z rate limitu: liveness + readiness
 `infra/backup/backup.sh`: `pg_dump -Fc` → kompresja → znacznik czasu → wysyłka do bucketu S3 → retencja 7 dziennych / 4 tygodniowe → alert do Sentry przy niepowodzeniu. Harmonogram przez cron na hoście (nie job w APScheduler — przy padniętym API i tak by nie zadziałał). **Dopisane do zakresu ponad plan:** `make backup-restore-test` (odtworzenie ostatniego dumpu do jednorazowej bazy) — backup, którego nikt nie odtworzył, nie jest backupem. Sekcja „odtwarzanie z backupu" w `docs/wdrozenie.md`.
 
 **Krok 39 — smoke test 375 px + desktop ← KONIEC FAZY 1** (`qa-testy` + `frontend-next`)
-`frontend/e2e/smoke.spec.ts`: rejestracja → logowanie → portfel → pozycja → wartość → struktura % → ranking rynków; projekty Playwright `Mobile Chrome` @375 px i desktop; `make smoke` (poza `make check` — wymaga żywego stacku); ręczna lista kontrolna na prawdziwym telefonie. **Zależy od kroków 33 i 34.** **Znany problem:** suita e2e zużywa dokładnie 5/5 slotów limitu `POST /auth/login` (wpis w backlogu etapu 6 niżej) — każdy nowy test z logowaniem da 429.
+`frontend/e2e/smoke.spec.ts`: rejestracja → logowanie → portfel → pozycja → wartość → struktura % → ranking rynków; projekty Playwright `Mobile Chrome` @375 px i desktop; `make smoke` (poza `make check` — wymaga żywego stacku); ręczna lista kontrolna na prawdziwym telefonie. ~~Zależy od kroków 33 i 34~~ — odblokowane 2026-07-28, oba kroki zrobione, a `e2e/dashboard.spec.ts` pokrywa już całą ścieżkę wartości (jest realnym szkieletem tego smoke testu — przy kroku 39 raczej go rozdzielić i dołożyć projekt desktopowy niż pisać od zera). **Znany problem:** suita e2e zużywa dokładnie 5/5 slotów limitu `POST /auth/login` (wpis w backlogu etapu 6 niżej) — każdy nowy test z logowaniem da 429.
 
 **Ryzyka do pilnowania przy realizacji:**
 - Pierwsze wystawienie TLS: Let's Encrypt ma ostry limit błędów — start na staging CA, przełączenie na produkcyjne po zielonym przebiegu. Rekord A domeny musi wskazywać na VPS **przed** startem Caddy.

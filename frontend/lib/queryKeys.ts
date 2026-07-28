@@ -20,4 +20,5 @@ export const qk = {
   allocation: (portfolioId: string, by: AllocationDimension) =>
     ["allocation", portfolioId, by] as const,
   concentration: (portfolioId: string) => ["concentration", portfolioId] as const,
+  markets: (portfolioId: string) => ["markets", portfolioId] as const,
 };

@@ -7,8 +7,8 @@
  * Kształty odpowiedzi 1:1 z `docs/api-kontrakt.md` i `analytics/schemas.py` —
  * kwoty i wagi to STRINGI dziesiętne, nie `number` (CLAUDE.md #3.1).
  *
- * Ranking rynków (`GET /portfolios/{id}/markets`) świadomie NIE jest tutaj —
- * to krok 34 planu (panel „Twoje rynki"), osobny widok i osobny kształt danych.
+ * Ranking rynków (`GET /portfolios/{id}/markets`, krok 34) też tutaj — to ta
+ * sama rodzina endpointów (router `analytics`), mimo że karmi osobny widok.
  */
 import { apiFetch } from "@/lib/api";
 
@@ -56,4 +56,48 @@ export function getAllocation(
 
 export function getConcentration(portfolioId: string): Promise<Concentration> {
   return apiFetch<Concentration>(`/portfolios/${portfolioId}/concentration`);
+}
+
+/** Punkt serii notowań indeksu (`PricePointOut` w `marketdata/schemas.py`). */
+export type PricePoint = {
+  date: string;
+  close_adj: string;
+};
+
+/**
+ * Zmiana d/d indeksu — liczona z dwóch najnowszych wierszy `prices`, nie ze
+ * snapshotów portfela (stąd osobny typ niż `Change` w `lib/dashboard.ts`).
+ * `null`, gdy indeks ma w bazie tylko jedno notowanie.
+ */
+export type IndexChange = {
+  abs: string;
+  pct: string;
+};
+
+export type MarketIndex = {
+  asset_id: string;
+  symbol: string;
+  value: string;
+  change_1d: IndexChange | null;
+  as_of: string;
+  /** Do 30 OSTATNICH DOSTĘPNYCH notowań, nie 30 dni kalendarzowych. */
+  series_30d: PricePoint[];
+};
+
+export type MarketRankingItem = {
+  market_code: string;
+  market_name: string;
+  weight: string;
+  /**
+   * `null`, gdy rynek nie ma indeksu referencyjnego w słowniku ALBO gdy ma,
+   * ale worker EOD nie zaciągnął jeszcze dla niego żadnego notowania. Widok
+   * nie odróżnia tych dwóch przypadków — API ich nie rozróżnia, a dla
+   * użytkownika oba znaczą to samo: nie ma czego narysować.
+   */
+  index: MarketIndex | null;
+};
+
+/** Rynki posortowane malejąco po wadze — kolejność z backendu, nie sortujemy ponownie. */
+export function getMarketRanking(portfolioId: string): Promise<MarketRankingItem[]> {
+  return apiFetch<MarketRankingItem[]>(`/portfolios/${portfolioId}/markets`);
 }
