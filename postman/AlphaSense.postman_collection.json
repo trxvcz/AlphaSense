@@ -1,0 +1,1007 @@
+{
+  "info": {
+    "name": "AlphaSense API — etapy 0-5",
+    "description": "Kolekcja testowa dla zaimplementowanych etapów (0-5): auth+izolacja, model danych/seed, warstwa danych rynkowych (publiczna), pozycje i wycena PLN. Etap 6 (analytics/markets) jeszcze nie ma endpointów, więc nie jest tu ujęty.\n\nWymagania przed uruchomieniem:\n1. `make up` (docker compose up -d --build)\n2. `make migrate`\n3. `make seed` — kolekcja korzysta z aktywa `CDR` z seeda w folderze 02\n\nUruchamiaj przez Collection Runner z zaznaczonym folderem 'AlphaSense API' całościowo, w kolejności folderów 01→07 — kolejne foldery zależą od zmiennych (`accessTokenA`, `portfolioId`, `assetId`, `holdingId`) ustawianych przez wcześniejsze requesty. Pojedyncze odpalenie pojedynczego requestu spoza kolejności nie zadziała.\n\nWszystkie zmienne są na poziomie kolekcji (nie environment) — działa z dowolnym environmentem, wystarczy ustawić `baseUrl`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "emailA", "value": "" },
+    { "key": "passwordA", "value": "" },
+    { "key": "emailB", "value": "" },
+    { "key": "passwordB", "value": "" },
+    { "key": "accessTokenA", "value": "" },
+    { "key": "accessTokenB", "value": "" },
+    { "key": "portfolioId", "value": "" },
+    { "key": "holdingId", "value": "" },
+    { "key": "assetId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Auth",
+      "item": [
+        {
+          "name": "Register User A",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('emailA')) {",
+                  "    pm.collectionVariables.set('emailA', 'user.a.' + Date.now() + '@alphasense.example');",
+                  "    pm.collectionVariables.set('passwordA', 'SuperTajneHaslo123');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.test('email w odpowiedzi zgodny', function () { pm.expect(json.email).to.eql(pm.collectionVariables.get('emailA')); });",
+                  "pm.test('brak password_hash w odpowiedzi', function () { pm.expect(json).to.not.have.property('password_hash'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register"
+          }
+        },
+        {
+          "name": "Register User A duplicate (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register"
+          }
+        },
+        {
+          "name": "Register weak password (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"ktos.inny@alphasense.example\",\n  \"password\": \"short\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register"
+          }
+        },
+        {
+          "name": "Login User A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('access_token obecny', function () { pm.expect(json.access_token).to.be.a('string').and.not.empty; });",
+                  "pm.test('token_type bearer', function () { pm.expect(json.token_type).to.eql('bearer'); });",
+                  "pm.test('refresh cookie ustawione', function () { pm.expect(pm.cookies.has('refresh_token')).to.be.true; });",
+                  "pm.collectionVariables.set('accessTokenA', json.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        },
+        {
+          "name": "Login User A wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"zleHaslo999\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        },
+        {
+          "name": "Refresh User A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('nowy access_token', function () { pm.expect(json.access_token).to.be.a('string').and.not.empty; });",
+                  "pm.collectionVariables.set('accessTokenA', json.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/refresh"
+          }
+        },
+        {
+          "name": "Logout User A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/logout"
+          }
+        },
+        {
+          "name": "Refresh after logout (401 — łańcuch unieważniony)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/refresh"
+          }
+        },
+        {
+          "name": "Register User B",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('emailB')) {",
+                  "    pm.collectionVariables.set('emailB', 'user.b.' + Date.now() + '@alphasense.example');",
+                  "    pm.collectionVariables.set('passwordB', 'SuperTajneHaslo456');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailB}}\",\n  \"password\": \"{{passwordB}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register"
+          }
+        },
+        {
+          "name": "Login User B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('accessTokenB', json.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{emailB}}\",\n  \"password\": \"{{passwordB}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Marketdata (publiczne)",
+      "item": [
+        {
+          "name": "Assets search - query za krótkie (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/assets/search?q=a" }
+        },
+        {
+          "name": "Assets search - CDR (200, zapisuje assetId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('co najmniej jedno trafienie (wymaga make seed)', function () { pm.expect(json.length).to.be.above(0); });",
+                  "if (json.length > 0) { pm.collectionVariables.set('assetId', json[0].id); }"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/assets/search?q=CDR" }
+        },
+        {
+          "name": "Meta freshness (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('pole markets to lista', function () { pm.expect(json.markets).to.be.an('array'); });"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/meta/freshness" }
+        }
+      ]
+    },
+    {
+      "name": "03 - Portfolio (User A)",
+      "item": [
+        {
+          "name": "GET /portfolios bez tokenu (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/portfolios" }
+        },
+        {
+          "name": "POST /portfolios - nazwa pusta (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"\",\n  \"type\": \"standard\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios"
+          }
+        },
+        {
+          "name": "Create portfolio (201, zapisuje portfolioId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.test('holdings_version startuje od 0', function () { pm.expect(json.holdings_version).to.eql(0); });",
+                  "pm.collectionVariables.set('portfolioId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Portfel testowy Postman\",\n  \"type\": \"standard\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios"
+          }
+        },
+        {
+          "name": "List portfolios (200, zawiera portfolioId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const ids = json.map(function (p) { return p.id; });",
+                  "pm.test('lista zawiera nowo utworzony portfel', function () { pm.expect(ids).to.include(pm.collectionVariables.get('portfolioId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios"
+          }
+        },
+        {
+          "name": "Get portfolio by id (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('id zgodne', function () { pm.expect(json.id).to.eql(pm.collectionVariables.get('portfolioId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Patch portfolio name (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('nazwa zaktualizowana', function () { pm.expect(json.name).to.eql('Portfel testowy Postman (zmieniony)'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Portfel testowy Postman (zmieniony)\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Patch portfolio name=null (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": null\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Holdings (User A)",
+      "item": [
+        {
+          "name": "Create holding avg_cost bez cost_currency (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"asset_id\": \"{{assetId}}\",\n  \"quantity\": \"10\",\n  \"avg_cost\": \"150.00\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "Create holding - nieznane asset_id (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"asset_id\": \"{{$guid}}\",\n  \"quantity\": \"1\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "Create holding CDR (201, zapisuje holdingId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.test('quantity jako string', function () { pm.expect(json.quantity).to.be.a('string'); });",
+                  "pm.collectionVariables.set('holdingId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"asset_id\": \"{{assetId}}\",\n  \"quantity\": \"10\",\n  \"avg_cost\": \"150.00\",\n  \"cost_currency\": \"PLN\",\n  \"note\": \"Test Postman\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "Create holding duplikat asset_id (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"asset_id\": \"{{assetId}}\",\n  \"quantity\": \"5\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "List holdings (200, zawiera holdingId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const ids = json.map(function (h) { return h.id; });",
+                  "pm.test('lista zawiera nową pozycję', function () { pm.expect(ids).to.include(pm.collectionVariables.get('holdingId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "Get portfolio - holdings_version == 1 po pierwszej pozycji",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('holdings_version == 1', function () { pm.expect(json.holdings_version).to.eql(1); });",
+                  "pm.collectionVariables.set('holdingsVersionBaseline', json.holdings_version);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Patch holding - body pusty {} (200, no-op)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        },
+        {
+          "name": "Get portfolio - holdings_version bez zmian po PATCH {}",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('holdings_version niezmienione (PATCH {} to no-op)', function () { pm.expect(json.holdings_version).to.eql(pm.collectionVariables.get('holdingsVersionBaseline')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Patch holding quantity=null (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"quantity\": null\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        },
+        {
+          "name": "Patch holding quantity=15 (200, realna zmiana)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('quantity zaktualizowane', function () { pm.expect(parseFloat(json.quantity)).to.eql(15); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"quantity\": \"15\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        },
+        {
+          "name": "Get portfolio - holdings_version bumpnięte po realnej zmianie",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('holdings_version wzrosło', function () { pm.expect(json.holdings_version).to.be.above(pm.collectionVariables.get('holdingsVersionBaseline')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Get summary (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('value_pln obecne', function () { pm.expect(json.value_pln).to.be.a('string'); });",
+                  "pm.test('brak pola markets (dopiero etap 6)', function () { pm.expect(json).to.not.have.property('markets'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/summary"
+          }
+        },
+        {
+          "name": "Get valuations range=max (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('odpowiedź to lista (może być pusta bez snapshotów workera)', function () { pm.expect(json).to.be.an('array'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/valuations?range=max"
+          }
+        },
+        {
+          "name": "Get valuations range nieznany (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', function () { pm.response.to.have.status(422); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/valuations?range=nonsense"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Izolacja danych (User B kontra zasoby User A)",
+      "item": [
+        {
+          "name": "List portfolios jako User B - nie zawiera portfela A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const ids = json.map(function (p) { return p.id; });",
+                  "pm.test('portfel A niewidoczny dla B', function () { pm.expect(ids).to.not.include(pm.collectionVariables.get('portfolioId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "url": "{{baseUrl}}/api/portfolios"
+          }
+        },
+        {
+          "name": "GET portfolio A jako User B (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404 (nie 403 — nie zdradzamy istnienia)', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "PATCH portfolio A jako User B (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Przejęte przez B\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "DELETE portfolio A jako User B (404, nic nie usunięte)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "List holdings portfela A jako User B (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}/holdings"
+          }
+        },
+        {
+          "name": "PATCH holding A jako User B (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"quantity\": \"999\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        },
+        {
+          "name": "DELETE holding A jako User B (404, nic nie usunięte)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Rate limiting",
+      "item": [
+        {
+          "name": "6ta próba /auth/login w tej samej minucie -> 429",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const url = pm.collectionVariables.get('baseUrl') + '/api/auth/login';",
+                  "const body = { mode: 'raw', raw: JSON.stringify({ email: 'nikt.taki@alphasense.example', password: 'cokolwiek123' }), options: { raw: { language: 'json' } } };",
+                  "for (let i = 0; i < 5; i++) {",
+                  "    await pm.sendRequest({ url: url, method: 'POST', header: { 'Content-Type': 'application/json' }, body: body });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 429 po przekroczeniu limitu 5/min', function () { pm.response.to.have.status(429); });",
+                  "const json = pm.response.json();",
+                  "pm.test('kod błędu rate_limited', function () { pm.expect(json.error.code).to.eql('rate_limited'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"nikt.taki@alphasense.example\",\n  \"password\": \"cokolwiek123\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Wymaga domyślnego RATE_LIMIT_AUTH_PER_MINUTE=5. Jeśli w .env limit inny, dostosuj liczbę iteracji w pre-request scripcie. Uwaga: to zużywa limit dla całego IP na /auth/login — kolejne testy logowania w tym samym oknie czasowym mogą dostać 429 zamiast oczekiwanego statusu; jeśli tak, odczekaj minutę albo uruchom ten request na końcu."
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Sprzątanie",
+      "item": [
+        {
+          "name": "Delete holding (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/holdings/{{holdingId}}"
+          }
+        },
+        {
+          "name": "Delete portfolio (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        },
+        {
+          "name": "Get portfolio po usunięciu (404, potwierdza kasowanie)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenA}}" } ],
+            "url": "{{baseUrl}}/api/portfolios/{{portfolioId}}"
+          }
+        }
+      ]
+    }
+  ]
+}

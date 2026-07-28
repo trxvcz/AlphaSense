@@ -13,6 +13,11 @@ dist/
 coverage/
 *.dump
 secrets/
-.claude/settings.local.json
+# Lokalne ustawienia Claude Code — na dowolnym poziomie, nie tylko w korzeniu
+# (skille instalowane per podprojekt tworzą własne `<katalog>/.claude/`).
+settings.local.json
 .idea/
 .mcp.json
+.tokensave/
+graphify-out/
+/.idea/
