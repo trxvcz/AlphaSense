@@ -9,8 +9,18 @@
  * 2. przy montażu robi cichy `POST /auth/refresh`, żeby odzyskać sesję po
  *    odświeżeniu strony (F5) — nieudany refresh = „niezalogowany", bez
  *    błędu w konsoli/UI (decyzja architektoniczna, CLAUDE.md),
- * 3. wystawia `login`/`logout` do formularzy i nawigacji.
+ * 3. wystawia `login`/`logout` do formularzy i nawigacji,
+ * 4. czyści cache TanStack Query przy każdej zmianie sesji (patrz niżej).
+ *
+ * Punkt 4 jest wymogiem izolacji danych (CLAUDE.md #3.2/#3.10), nie
+ * optymalizacją: klucze w `lib/queryKeys.ts` nie zawierają segmentu
+ * użytkownika, a `staleTime` wynosi 60 s (`app/providers.tsx`). Bez
+ * `queryClient.clear()` sekwencja „A się wyloguje → B zaloguje się w tej
+ * samej karcie" pokazywałaby B listę portfeli A prosto z cache, w ogóle bez
+ * odpytania backendu. Backend jest tu poprawny (`get_owned_portfolio`
+ * zwraca 404 na cudzy zasób) — to wyciek wyłącznie po stronie klienta.
  */
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
@@ -46,6 +56,7 @@ function getServerSnapshot(): string | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const accessToken = useSyncExternalStore(
     subscribeAccessToken,
     getAccessToken,
@@ -63,18 +74,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const data = await loginRequest(email, password);
-    setAccessToken(data.access_token);
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string) => {
+      const data = await loginRequest(email, password);
+      // Kolejność ma znaczenie: czyścimy PRZED ustawieniem tokenu. Odwrotnie
+      // `setAccessToken` przerenderowałby konsumentów, ci wystartowaliby
+      // zapytania nowego użytkownika, a `clear()` skasowałby ich wyniki w locie.
+      queryClient.clear();
+      setAccessToken(data.access_token);
+    },
+    [queryClient],
+  );
 
   const logout = useCallback(async () => {
     try {
       await logoutRequest();
     } finally {
+      // W `finally`, bo dane poprzedniego użytkownika muszą zniknąć z pamięci
+      // przeglądarki także wtedy, gdy samo `POST /auth/logout` padło.
       setAccessToken(null);
+      queryClient.clear();
     }
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
