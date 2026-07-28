@@ -6,6 +6,7 @@
  * tutaj (ten sam wzorzec co `app/portfolios/page.tsx`); `page.tsx` w tym
  * katalogu zostaje Server Component i tylko rozpakowuje `params`.
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
 import { getPortfolio } from "@/lib/portfolios";
@@ -16,6 +17,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { SummaryCard } from "@/components/dashboard/SummaryCard";
 import { TopMovers } from "@/components/dashboard/TopMovers";
 import { ValueChart } from "@/components/charts/ValueChart";
+import { HoldingForm } from "@/components/forms/HoldingForm";
 
 type PortfolioDashboardProps = {
   portfolioId: string;
@@ -26,6 +28,12 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
+  // Formularz pozycji (krok 35) jest zwijany: na 375 px stale rozwinięty
+  // spychałby wartość portfela i wykres poniżej zgięcia, a to one są powodem,
+  // dla którego użytkownik tu wchodzi. W portfelu pustym rozwija go CTA ze
+  // stanu pustego — tam formularz JEST najważniejszą treścią ekranu.
+  const [isFormOpen, setIsFormOpen] = useState(false);
+
   const portfolioQuery = useQuery({
     queryKey: qk.portfolio(portfolioId),
     queryFn: () => getPortfolio(portfolioId),
@@ -62,23 +70,56 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
         </h1>
       )}
 
-      {holdingsQuery.isSuccess && holdingsQuery.data.length === 0 ? (
-        <EmptyState
-          title="Ten portfel nie ma jeszcze żadnej pozycji"
-          description="Dodaj pierwszą pozycję, żeby zobaczyć wartość, wykres i strukturę portfela. Formularz dodawania pozycji pojawi się w kolejnym kroku."
-          action={
-            <button
-              type="button"
-              disabled
-              title="Formularz dodawania pozycji — krok 35, jeszcze niedostępny"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white opacity-60"
-            >
-              Dodaj pierwszą pozycję
-            </button>
-          }
+      {holdingsQuery.isLoading && (
+        <div
+          role="status"
+          aria-label="Ładowanie pozycji"
+          className="h-32 w-full animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800"
         />
-      ) : (
+      )}
+
+      {holdingsQuery.isSuccess && holdingsQuery.data.length === 0 ? (
+        isFormOpen ? (
+          <HoldingForm
+            portfolioId={portfolioId}
+            onAdded={() => setIsFormOpen(false)}
+            onCancel={() => setIsFormOpen(false)}
+          />
+        ) : (
+          <EmptyState
+            title="Ten portfel nie ma jeszcze żadnej pozycji"
+            description="Dodaj pierwszą pozycję, żeby zobaczyć wartość, wykres i strukturę portfela."
+            action={
+              <button
+                type="button"
+                onClick={() => setIsFormOpen(true)}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                Dodaj pierwszą pozycję
+              </button>
+            }
+          />
+        )
+      ) : holdingsQuery.isSuccess ? (
         <>
+          {isFormOpen ? (
+            <HoldingForm
+              portfolioId={portfolioId}
+              onAdded={() => setIsFormOpen(false)}
+              onCancel={() => setIsFormOpen(false)}
+            />
+          ) : (
+            <div>
+              <button
+                type="button"
+                onClick={() => setIsFormOpen(true)}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                Dodaj pozycję
+              </button>
+            </div>
+          )}
+
           <div>
             {summaryQuery.isLoading && (
               <div
@@ -102,23 +143,15 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
             <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               Top ruchy dnia
             </h2>
-            {holdingsQuery.isLoading && (
-              <div
-                role="status"
-                aria-label="Ładowanie top ruchów dnia"
-                className="h-24 w-full animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800"
-              />
-            )}
-            {holdingsQuery.isError && (
-              <ErrorState
-                message={apiErrorMessage(holdingsQuery.error, "Nie udało się wczytać pozycji.")}
-                onRetry={() => void holdingsQuery.refetch()}
-              />
-            )}
-            {holdingsQuery.isSuccess && <TopMovers holdings={holdingsQuery.data} />}
+            <TopMovers holdings={holdingsQuery.data} />
           </div>
         </>
-      )}
+      ) : holdingsQuery.isError ? (
+        <ErrorState
+          message={apiErrorMessage(holdingsQuery.error, "Nie udało się wczytać pozycji.")}
+          onRetry={() => void holdingsQuery.refetch()}
+        />
+      ) : null}
     </section>
   );
 }

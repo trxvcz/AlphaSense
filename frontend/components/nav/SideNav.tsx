@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { NAV_ITEMS } from "@/components/nav/navItems";
 import { AuthStatus } from "@/components/nav/AuthStatus";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 /**
  * Boczna nawigacja — widoczna od `md:` wzwyż. Server Component: linki są
@@ -10,8 +11,11 @@ import { AuthStatus } from "@/components/nav/AuthStatus";
 export function SideNav() {
   return (
     <aside className="hidden w-56 shrink-0 border-r border-zinc-200 md:flex md:flex-col dark:border-zinc-800">
-      <div className="px-4 py-5 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-        AlphaSense
+      <div className="flex items-center justify-between px-4 py-5">
+        <span className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+          AlphaSense
+        </span>
+        <ThemeToggle />
       </div>
       <nav aria-label="Nawigacja główna" className="flex flex-1 flex-col justify-between">
         <ul className="flex flex-col gap-1 px-2">

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { NAV_ITEMS } from "@/components/nav/navItems";
 import { AuthStatus } from "@/components/nav/AuthStatus";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 /**
  * Dolna nawigacja — widoczna tylko na mobile (do `md:`), zgodnie z zasadą
@@ -27,6 +28,13 @@ export function BottomNav() {
         ))}
         <li className="flex-1">
           <AuthStatus variant="bottom" />
+        </li>
+        {/* Stała, wąska szerokość — NIE `flex-1`: przełącznik to jedna ikona,
+            więc równy udział w podziale szerokości byłby marnotrawstwem. Na
+            375 px daje to linkom 66 px zamiast 62 px. Zmierzone — obie wersje
+            mieszczą etykiety bez przycięcia, to zapas, nie naprawa błędu. */}
+        <li className="flex w-11 shrink-0 items-center justify-center">
+          <ThemeToggle />
         </li>
       </ul>
     </nav>

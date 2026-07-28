@@ -62,3 +62,32 @@ export function listValuations(
 export function listHoldings(portfolioId: string): Promise<Holding[]> {
   return apiFetch<Holding[]>(`/portfolios/${portfolioId}/holdings`);
 }
+
+/**
+ * Wejście `POST /portfolios/{id}/holdings` (plan krok 35).
+ *
+ * Kwoty jako STRINGI, nie `number` — backend przyjmuje `Decimal` i to samo
+ * ograniczenie co przy odczycie obowiązuje przy zapisie (CLAUDE.md #3.1):
+ * `0.1` w `number` nie jest dokładnie 0,1, a przy ilościach krypto
+ * (8 miejsc po przecinku) to realna różnica, nie teoria.
+ *
+ * `avg_cost` i `cost_currency` są opcjonalne, ale RAZEM — backend zwraca 422,
+ * jeśli podasz cenę bez waluty (`HoldingCreateIn._avg_cost_needs_currency`).
+ */
+export type CreateHoldingInput = {
+  asset_id: string;
+  quantity: string;
+  avg_cost?: string;
+  cost_currency?: string;
+  note?: string;
+};
+
+export function createHolding(
+  portfolioId: string,
+  input: CreateHoldingInput,
+): Promise<Holding> {
+  return apiFetch<Holding>(`/portfolios/${portfolioId}/holdings`, {
+    method: "POST",
+    body: input,
+  });
+}

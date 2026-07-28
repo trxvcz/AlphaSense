@@ -12,7 +12,7 @@
  * mylił skoku wartości ze zwrotem. Pod wykresem jest tabelaryczna
  * alternatywa (`<details>`) — CLAUDE.md #8, dostępność.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type {
   DefaultLabelFormatterCallbackParams,
@@ -23,6 +23,7 @@ import { listValuations, type ValuationPoint, type ValuationRange } from "@/lib/
 import { qk } from "@/lib/queryKeys";
 import { pln } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { getResolvedTheme, subscribeTheme } from "@/lib/theme";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 
@@ -38,19 +39,22 @@ const RANGE_OPTIONS: { value: ValuationRange; label: string }[] = [
   { value: "max", label: "Max" },
 ];
 
-function usePrefersDark(): boolean {
-  const [isDark, setIsDark] = useState(() =>
-    typeof window !== "undefined"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-      : false,
+/**
+ * Motyw wykresu. ECharts wymaga literalnych kolorów w opcjach (nie da się go
+ * ostylować klasami Tailwind), więc jako jedyne miejsce w repo musi znać
+ * aktualny motyw jawnie.
+ *
+ * Od kroku 35 czyta ROZWIĄZANY motyw z `lib/theme.ts`, a nie samo
+ * `prefers-color-scheme` — inaczej ręczny wybór w `ThemeToggle` przestawiałby
+ * całe UI, ale nie wykres, który dalej szedłby za systemem.
+ */
+function useIsDarkTheme(): boolean {
+  const resolved = useSyncExternalStore(
+    subscribeTheme,
+    getResolvedTheme,
+    () => "light" as const,
   );
-  useEffect(() => {
-    const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const listener = (event: MediaQueryListEvent) => setIsDark(event.matches);
-    mql.addEventListener("change", listener);
-    return () => mql.removeEventListener("change", listener);
-  }, []);
-  return isDark;
+  return resolved === "dark";
 }
 
 function buildChartOption(points: ValuationPoint[], isDark: boolean) {
@@ -137,7 +141,7 @@ export function ValueChart({ portfolioId }: ValueChartProps) {
   const [range, setRange] = useState<ValuationRange>("1M");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<import("echarts").ECharts | null>(null);
-  const isDark = usePrefersDark();
+  const isDark = useIsDarkTheme();
 
   const valuationsQuery = useQuery({
     queryKey: qk.valuations(portfolioId, range),

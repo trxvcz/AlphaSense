@@ -14,4 +14,5 @@ export const qk = {
   holdings: (portfolioId: string) => ["holdings", portfolioId] as const,
   valuations: (portfolioId: string, range: string) =>
     ["valuations", portfolioId, range] as const,
+  assetSearch: (query: string) => ["assetSearch", query] as const,
 };

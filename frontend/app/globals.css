@@ -1,6 +1,18 @@
 @import "tailwindcss";
 
 /*
+ * `dark:` sterowane KLASĄ na <html>, nie `@media (prefers-color-scheme)`
+ * (plan krok 35, „tryb ciemny/jasny"). Domyślnie Tailwind v4 wiąże `dark:`
+ * z zapytaniem medialnym, czyli ręczny wybór użytkownika nie miałby jak
+ * wygrać z ustawieniem systemu. Po tej zmianie klasę ustawia `lib/theme.ts`
+ * — także dla preferencji „system", gdzie odczytuje `matchMedia` sam.
+ *
+ * Konsekwencja: bez klasy `dark` strona jest jasna, więc skrypt anty-migotanie
+ * w `app/layout.tsx` MUSI biec przed pierwszym malowaniem.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Kolory idą przez klasy Tailwind (bg-*, text-*, dark:*) w komponentach,
  * nie przez hexy tutaj — patrz docs/konwencje.md. Ten plik tylko mapuje
  * fonty next/font na tokeny Tailwind.

@@ -111,11 +111,77 @@ test("dashboard portfela: podsumowanie, wykres, top ruchy dnia, mobile 375px, po
     clientWidth: document.documentElement.clientWidth,
   }));
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+
+  // Etykiety w dolnej nawigacji nie mogą być przycięte. Brak poziomego
+  // scrolla strony tego NIE wykrywa: pasek ma stałą szerokość i ściska
+  // pozycje wewnętrznie, więc dołożenie kolejnego elementu urwie etykiety
+  // przy nadal zielonej asercji wyżej. Dziś margines jest wąski (66 px na
+  // „Dashboard", dokładnie tyle, ile zajmuje tekst), więc każdy piąty link
+  // albo szósty element paska trzeba zweryfikować tym testem.
+  const navOverflow = await page
+    .getByRole("navigation", { name: "Nawigacja główna" })
+    .last()
+    .evaluate((nav) =>
+      Array.from(nav.querySelectorAll("a")).filter(
+        (link) => link.scrollWidth > link.clientWidth,
+      ).length,
+    );
+  expect(navOverflow).toBe(0);
   await page.screenshot({ path: "test-results/dashboard-mobile-375.png", fullPage: true });
 
   // --- Portfel pusty -> EmptyState z CTA ---
   await page.goto(`/portfolios/${emptyPortfolio.id}`);
   await expect(page.getByText("Ten portfel nie ma jeszcze żadnej pozycji")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Dodaj pierwszą pozycję" })).toBeVisible();
   await page.screenshot({ path: "test-results/dashboard-empty-375.png", fullPage: true });
+
+  // --- Krok 35: formularz dodawania pozycji ---
+  // Dopisane do TEGO testu, nie osobnego: `POST /auth/login` ma limit 5/min
+  // per IP, a suita zużywa już wszystkie sloty (patrz `auth.spec.ts`).
+  await page.getByRole("button", { name: "Dodaj pierwszą pozycję" }).click();
+  await expect(page.getByRole("heading", { name: "Dodaj pozycję" })).toBeVisible();
+
+  // Autouzupełnianie tickera — debounce 300 ms, więc czekamy na wynik.
+  await page.getByLabel("Aktywo").fill("CDR");
+  await page.getByRole("option", { name: new RegExp(cdr.symbol) }).click();
+
+  await page.getByLabel("Ilość").fill("3");
+  await page.getByRole("button", { name: "Dodaj pozycję", exact: true }).click();
+
+  // Po dodaniu formularz się zamyka, a portfel przestaje być pusty —
+  // unieważnienie `qk.holdings` przeładowuje widok bez F5.
+  await expect(page.getByText("Ten portfel nie ma jeszcze żadnej pozycji")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Top ruchy dnia" })).toBeVisible();
+  await page.screenshot({ path: "test-results/dashboard-po-dodaniu-375.png", fullPage: true });
+
+  // --- Krok 35: tryb ciemny/jasny ---
+  // Motyw steruje klasą `dark` na <html> (`lib/theme.ts` + `app/globals.css`),
+  // więc sprawdzamy dokładnie to, na czym stoją wszystkie klasy `dark:`.
+  const html = page.locator("html");
+  const themeButton = page.getByRole("button", { name: /^Motyw:/ }).first();
+
+  // Cykl ma TRZY stany (system → jasny → ciemny), więc jedno kliknięcie nie
+  // musi zmienić wyglądu: Playwright startuje w schemacie jasnym, czyli
+  // „system" i „jasny" wyglądają identycznie. Klikamy aż do konkretnego stanu.
+  async function selectTheme(label: string): Promise<void> {
+    for (let i = 0; i < 3; i += 1) {
+      const current = await themeButton.getAttribute("aria-label");
+      if (current?.startsWith(label)) return;
+      await themeButton.click();
+    }
+    throw new Error(`Nie udało się ustawić motywu: ${label}`);
+  }
+
+  await selectTheme("Motyw: ciemny");
+  await expect.poll(() => html.evaluate((el) => el.classList.contains("dark"))).toBe(true);
+
+  await selectTheme("Motyw: jasny");
+  await expect.poll(() => html.evaluate((el) => el.classList.contains("dark"))).toBe(false);
+
+  // Wybór przeżywa pełne przeładowanie (localStorage + skrypt anty-migotanie
+  // w `app/layout.tsx`) — bez tego użytkownik z motywem ciemnym dostawałby
+  // błysk białego tła przy każdym wejściu.
+  await selectTheme("Motyw: ciemny");
+  await page.reload();
+  await expect.poll(() => html.evaluate((el) => el.classList.contains("dark"))).toBe(true);
+  await expect(themeButton).toHaveAttribute("aria-label", /^Motyw: ciemny/);
 });
