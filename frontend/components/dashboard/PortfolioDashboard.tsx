@@ -7,6 +7,7 @@
  * katalogu zostaje Server Component i tylko rozpakowuje `params`.
  */
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
 import { getPortfolio } from "@/lib/portfolios";
@@ -65,9 +66,20 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
         />
       )}
       {portfolioQuery.isSuccess && (
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          {portfolioQuery.data.name}
-        </h1>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            {portfolioQuery.data.name}
+          </h1>
+          {/* Wejście w widok struktury (krok 33) z kontekstem tego portfela —
+              nawigacja globalna prowadzi na `/struktura`, które musi dopiero
+              zapytać, o który portfel chodzi. */}
+          <Link
+            href={`/portfolios/${portfolioId}/struktura`}
+            className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+          >
+            Zobacz strukturę portfela →
+          </Link>
+        </div>
       )}
 
       {holdingsQuery.isLoading && (

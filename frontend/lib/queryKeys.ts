@@ -5,8 +5,10 @@
  * unieważnianie (invalidateQueries) po mutacjach (np. dodanie pozycji)
  * trafiało dokładnie w te same klucze co odczyt.
  *
- * Do rozbudowy w kolejnych etapach (allocation, markets, holdings, ...).
+ * Do rozbudowy w kolejnych etapach (markets, ...).
  */
+import type { AllocationDimension } from "@/lib/analytics";
+
 export const qk = {
   summary: (portfolioId: string) => ["summary", portfolioId] as const,
   portfolios: () => ["portfolios"] as const,
@@ -15,4 +17,7 @@ export const qk = {
   valuations: (portfolioId: string, range: string) =>
     ["valuations", portfolioId, range] as const,
   assetSearch: (query: string) => ["assetSearch", query] as const,
+  allocation: (portfolioId: string, by: AllocationDimension) =>
+    ["allocation", portfolioId, by] as const,
+  concentration: (portfolioId: string) => ["concentration", portfolioId] as const,
 };

@@ -12,7 +12,7 @@
  * mylił skoku wartości ze zwrotem. Pod wykresem jest tabelaryczna
  * alternatywa (`<details>`) — CLAUDE.md #8, dostępność.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type {
   DefaultLabelFormatterCallbackParams,
@@ -23,7 +23,7 @@ import { listValuations, type ValuationPoint, type ValuationRange } from "@/lib/
 import { qk } from "@/lib/queryKeys";
 import { pln } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
-import { getResolvedTheme, subscribeTheme } from "@/lib/theme";
+import { useIsDarkTheme } from "@/lib/useIsDarkTheme";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 
@@ -38,24 +38,6 @@ const RANGE_OPTIONS: { value: ValuationRange; label: string }[] = [
   { value: "YTD", label: "YTD" },
   { value: "max", label: "Max" },
 ];
-
-/**
- * Motyw wykresu. ECharts wymaga literalnych kolorów w opcjach (nie da się go
- * ostylować klasami Tailwind), więc jako jedyne miejsce w repo musi znać
- * aktualny motyw jawnie.
- *
- * Od kroku 35 czyta ROZWIĄZANY motyw z `lib/theme.ts`, a nie samo
- * `prefers-color-scheme` — inaczej ręczny wybór w `ThemeToggle` przestawiałby
- * całe UI, ale nie wykres, który dalej szedłby za systemem.
- */
-function useIsDarkTheme(): boolean {
-  const resolved = useSyncExternalStore(
-    subscribeTheme,
-    getResolvedTheme,
-    () => "light" as const,
-  );
-  return resolved === "dark";
-}
 
 function buildChartOption(points: ValuationPoint[], isDark: boolean) {
   const axisColor = isDark ? "#a1a1aa" : "#52525b";

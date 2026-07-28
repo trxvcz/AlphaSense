@@ -3,7 +3,7 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 6 — Analityka i dashboard (kroki 29-32 i 35 zrobione, zostały 33-34)
+**Aktualny etap:** 6 — Analityka i dashboard (kroki 29-33 i 35 zrobione, został 34)
 **Ostatnia aktualizacja:** 2026-07-28
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
@@ -59,7 +59,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 30 Ranking rynków + indeksy referencyjne
 [x] 31 Cache Redis wersjonowany
 [x] 32 Dashboard + wykres wartości
-[ ] 33 Widoki struktury (donut, treemap, sektor, geo)
+[x] 33 Widoki struktury (donut, treemap, sektor, geo)
 [ ] 34 Panel „Twoje rynki"
 [x] 35 Formularz mobile, stany puste, dark mode
 [ ] 36 Caddy + compose produkcyjny
@@ -83,6 +83,66 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
 - [x] ~~Push commitów etapu 4 na `origin/main`~~ — **nieaktualne**: po `git fetch` (2026-07-28) `origin/main == main == 0b43c54`, zero commitów różnicy. Cały etap 4 **i** etap 6 (kroki 29-32) są już na GitHubie. Ten wpis żył w STATUS.md od 2026-07-24 i wprowadzał w błąd.
 - [x] GOOGLE_CLIENT_ID/SECRET uzupełnione przez użytkownika. `/api/auth/google/start` zweryfikowany z prawdziwymi danymi (poprawny redirect do accounts.google.com, PKCE S256, state) — pozostaje do Twojej weryfikacji: pełny klik-przez-flow w przeglądarce (Google Cloud Console → Authorized redirect URIs musi mieć `http://localhost:8000/api/auth/google/callback`).
+- [ ] **Domena produkcyjna** — potrzebna przed krokiem 36 (Caddyfile, `CORS_ORIGINS`, `GOOGLE_REDIRECT_URI`). Krok 4 planu jest odhaczony, ale nazwa domeny nie jest nigdzie w repo zapisana.
+- [ ] **Bucket S3-compatible + klucz aplikacyjny** (Backblaze B2 lub Wasabi) — potrzebne przed krokiem 38. Trafiają do `.env` na VPS, nigdy do repo.
+- [ ] **Dwa DSN-y Sentry** (projekt backendowy + frontendowy) — potrzebne przed krokiem 37.
+
+## Krok 33 — widoki struktury (zrobiony 2026-07-28)
+
+Trasa `/portfolios/[id]/struktura` (Server Component → `PortfolioStructure`, Client) plus `/struktura` z nawigacji głównej, która sama wybiera portfel: przy jednym `router.replace` prosto na widok, przy kilku lista do wyboru, przy zerze stan pusty z CTA „Utwórz portfel". Nawigacja nie miała skąd znać portfela, a struktura zawsze dotyczy konkretnego — stąd ten ekran pośredni zamiast martwego linku.
+
+Jeden ekran z przełącznikiem wymiaru (klasa / sektor / geografia / waluta), nie cztery trasy: to jedno pytanie w czterech ujęciach, a na 375 px cztery pozycje w nawigacji nie mają gdzie się zmieścić. Forma wykresu zależy od wymiaru — **klasa → donut**, **waluta → treemapa**, **sektor i geografia → poziome słupki** (długie nazwy w rodzaju „Ameryka Północna" nie mieszczą się na kole, a koszyków bywa kilkanaście). Uzasadnienia w docstringach komponentów.
+
+Nowe pliki: `lib/analytics.ts` (typy + `getAllocation`/`getConcentration`), `lib/chartPalette.ts`, `lib/allocationLabels.ts`, `lib/useIsDarkTheme.ts`, `components/charts/EChart.tsx`, `AllocationDonut/Treemap/Bars.tsx`, `components/structure/{PortfolioStructure,AllocationTable,ConcentrationCard}.tsx`, `app/struktura/{layout,page}.tsx`, `app/portfolios/[id]/struktura/page.tsx`. Zmienione: `lib/queryKeys.ts` (+`allocation`/`concentration`), `lib/money.ts` (+`pctAxis`), `navItems.ts` (komentarz), `PortfolioDashboard.tsx` (link do struktury), `ValueChart.tsx` (hook motywu wyciągnięty do `lib/useIsDarkTheme.ts`).
+
+**Paleta wykresów jest policzona, nie dobrana na oko.** `lib/chartPalette.ts` używa palety kategorialnej ze skilla `dataviz`, zweryfikowanej jego walidatorem (`scripts/validate_palette.js`) na powierzchniach TEJ aplikacji (`#ffffff` / `#09090b`), sześć slotów: tryb ciemny — wszystkie sześć kontroli PASS; tryb jasny — pasmo jasności, chroma, separacja CVD (ΔE 9,1) i widzenie normalne (ΔE 19,6) PASS, kontrast WARN (morski/żółty/magenta poniżej 3:1 wobec bieli). Ostrzeżenie jest świadomie przyjęte i pokryte wymaganym „reliefem": każdy wykres ma widoczne etykiety wartości ORAZ tabelę pod spodem, więc kolor nigdy nie jest jedynym nośnikiem informacji. **Zmiana tych hexów wymaga ponownego przebiegu walidatora.**
+
+Żywa weryfikacja (`curl` + Playwright na 375 px, zrzuty w `frontend/test-results/struktura-*.png`): wszystkie cztery wymiary zwracają dane na realnym portfelu (bitcoin/XAU/CDR/PKN), etykiety po polsku (`crypto` → „Kryptowaluty", `gaming` → „Gaming", koszyk `nieznane` → „Nieznane"), portfel pusty daje `buckets: []` → stan pusty zamiast pustego wykresu, brak `?by=` to 422 (zgodnie z decyzją backendu). Dwie usterki znalezione i naprawione dopiero na zrzutach, nie przez testy: podziałki osi X zlewały się na 375 px („0,0% 20,0% 40,0%…" → `pctAxis` bez miejsc po przecinku i `splitNumber: 4`), a treemapa ucinała procent na wąskim kafelku („19,…" → font 11 px i `overflow: "break"`). Tryb ciemny zweryfikowany osobnym zrzutem — ECharts nie da się ostylować klasami `dark:`, więc to jedyne miejsce w UI, gdzie przełącznik motywu może cicho nie zadziałać.
+
+### Backlog kroku 33 (nieblokujące)
+
+- **Wybór wymiaru nie przeżywa wyjścia z widoku** — zwykły `useState`, bez URL ani `localStorage`. Świadomie: `?by=` w URL wymaga `useSearchParams` z granicą `Suspense`, a `localStorage` grozi rozjazdem hydratacji. Do rozważenia przy kroku 34, jeśli okaże się, że wraca się do jednego wymiaru częściej niż do innych.
+- **`by=geo` nie odróżnia w UI koszyków z `country` od tych z `region`** — API tej informacji nie zwraca (`_bucket_key` zwraca gotowy string), więc nie da się oznaczyć takich wierszy bez zmiany backendu. Rozwiązane przypisem pod wykresem („grupowanie po kraju; gdy nieznany — po regionie"), co domyka wpis z backlogu analityki wyżej. Gdyby to okazało się mylące, właściwą naprawą jest dodatkowe pole w `AllocationBucketOut`, nie zgadywanie po stronie UI.
+- **`by=market` świadomie pominięty w tym widoku** — rynki dostają własny panel z indeksami referencyjnymi w kroku 34 (`GET /portfolios/{id}/markets`), a sama alokacja indeksów nie zwraca. Typ `AllocationDimension` w `lib/analytics.ts` zawiera wszystkie pięć wartości z API; widok wybiera cztery.
+- **`ValueChart` (krok 32) nie został przepisany na wspólny `EChart`** — działa i jest pokryty e2e, a przenoszenie go byłoby refaktorem poza zakresem kroku (CLAUDE.md 4.3). Konsekwencja: w repo są dwa wzorce cyklu życia ECharts. Do domknięcia przy kroku 34, jeśli i tam powstanie wykres.
+- **Treemapa przy dwóch koszykach to słaba forma** (jeden szeroki kafelek + jeden wąski pasek) — plan wymieniał treemapę wprost, więc została, ale przy ≤3 walutach donut czytałby się lepiej. Do rozważenia po zobaczeniu realnych portfeli.
+- **Testy e2e struktury dopisane do `e2e/dashboard.spec.ts`, nie do osobnego pliku** — osobny spec to szósty `POST /auth/login` w oknie minuty, czyli 429 (ten sam powód, dla którego dopisano tam krok 35). To już drugi krok planu, który musi się podpiąć pod cudzy test — wpis o `RATE_LIMIT_AUTH_PER_MINUTE` w backlogu etapu 6 robi się pilniejszy niż „do decyzji przy etapie 7".
+- **Nowe funkcje czyste to pierwsi realni kandydaci na Vitest** (którego wciąż nie ma w repo, patrz backlog etapu 6): `toChartSlices` (sortowanie, składanie nadmiaru w „Pozostałe") i `bucketLabel` (fallback dla nieznanego klucza) są testowalne bez DOM-u i bez API.
+
+## Plan etapu 7 — wdrożenie produkcyjne (uzgodniony 2026-07-28, przed rozpoczęciem)
+
+Etap zaplanowany na sesji 2026-07-28 (`/etap 7`). **Nie zaczęty — świadomie odłożony do domknięcia etapu 6.**
+
+**Decyzje użytkownika podjęte przy planowaniu:**
+
+1. **Kolejność: najpierw domknąć etap 6 (kroki 33 i 34), dopiero potem cały etap 7 od 36 do 39.** Powód: krok 39 jest w planie zdefiniowany jako „wpisujesz pozycje, widzisz wartość, **skład %** i **ranking rynków**" — czyli dokładnie to, co dostarczają kroki 33 i 34. Bez nich smoke test nie ma czego sprawdzać, a Faza 1 nie może zostać formalnie zamknięta.
+2. **Sentry: tak, backend + worker + frontend.** Zgoda na dwie nowe zależności zewnętrzne (`sentry-sdk[fastapi]`, `@sentry/nextjs`) — wymagana przez CLAUDE.md §10.
+3. **Backup (krok 38): magazyn S3-compatible** (Backblaze B2 / Wasabi), wysyłka przez rclone/aws-cli.
+4. **Zakres na VPS: tylko pliki i runbook.** Przygotowuję `Caddyfile`, compose produkcyjny, Dockerfile'e, skrypty i `docs/wdrozenie.md`; samo wdrożenie wykonuje użytkownik. Nie uruchamiam poleceń na produkcyjnym serwerze.
+
+**Stan wyjściowy (zweryfikowany 2026-07-28):** istnieje wyłącznie `docker-compose.yml` w wersji dev (porty na zewnątrz, bind-mounty, `--reload`), oba Dockerfile'e są dev-owe. `Caddyfile`, `docker-compose.prod.yml`, `GET /api/health` i skrypt backupu **nie istnieją**. `sentry_dsn` jest w `core/config.py:82` i `.env.example`, ale żaden kod go nie czyta (`worker/jobs/ingest_market.py:199,267` — komentarze „Sentry w etapie 7"). Playwright zainstalowany, ale poza `make check` i bez scenariusza smoke. `.env` poprawnie nietrackowany.
+
+**Krok 36 — Caddy + compose produkcyjny + migracje przed startem API** (agent `devops` + łatka od `backend-fastapi`)
+`infra/caddy/Caddyfile` (auto-TLS, `/api/*` → `api:8000`, reszta → `frontend:3000`, HSTS i nagłówki bezpieczeństwa) · `docker-compose.prod.yml` (tylko Caddy wystawia 80/443, bez bind-mountów, healthchecki, jednorazowa usługa `migrate` z `alembic upgrade head`, `api` na `service_completed_successfully`) · produkcyjne targety w obu Dockerfile'ach (bez `requirements-dev`, nie-root, `uvicorn --proxy-headers` bez `--reload`; frontend `output: "standalone"` + `node server.js`) · `.env.prod.example` · cele `prod-*` w `Makefile` · `docs/wdrozenie.md`.
+**Blokujące w tym kroku:** poprawka `core/rate_limit.py` — za Caddym `get_remote_address` widzi IP proxy, nie klienta (wpis z backlogu bezpieczeństwa niżej przestaje być nieblokujący). **Pułapka:** `NEXT_PUBLIC_API_URL` jest wypiekany na etapie `next build` — w produkcji ustawiamy względne `/api` (same-origin przez Caddy), co znosi też CORS; wymaga weryfikacji klienta API we `frontend/lib`.
+
+**Krok 37 — Sentry + `/health` + alert workera** (`backend-fastapi` + `devops` + `frontend-next`, testy `qa-testy`)
+Nowy publiczny `GET /api/health` wyłączony z rate limitu: liveness + readiness (`SELECT 1`, Redis `PING`), `{status, db, redis, version}`, bez wycieku szczegółów przy błędzie; podpięty jako healthcheck kontenera `api`; aktualizacja `docs/api-kontrakt.md`. Sentry inicjalizowane tylko gdy `SENTRY_DSN` niepusty (dev bez zmian), `send_default_pii=False`, scrubbing tokenów. Realizacja TODO z `ingest_market.py`: `status=failed` → `capture_message(level=error)`, `partial` → `warning`. Przy okazji warto domknąć brak fallbacku yfinance dla `WIG20` — inaczej GPW będzie generować powtarzalny alert.
+
+**Krok 38 — nocny `pg_dump` poza VPS** (`devops`)
+`infra/backup/backup.sh`: `pg_dump -Fc` → kompresja → znacznik czasu → wysyłka do bucketu S3 → retencja 7 dziennych / 4 tygodniowe → alert do Sentry przy niepowodzeniu. Harmonogram przez cron na hoście (nie job w APScheduler — przy padniętym API i tak by nie zadziałał). **Dopisane do zakresu ponad plan:** `make backup-restore-test` (odtworzenie ostatniego dumpu do jednorazowej bazy) — backup, którego nikt nie odtworzył, nie jest backupem. Sekcja „odtwarzanie z backupu" w `docs/wdrozenie.md`.
+
+**Krok 39 — smoke test 375 px + desktop ← KONIEC FAZY 1** (`qa-testy` + `frontend-next`)
+`frontend/e2e/smoke.spec.ts`: rejestracja → logowanie → portfel → pozycja → wartość → struktura % → ranking rynków; projekty Playwright `Mobile Chrome` @375 px i desktop; `make smoke` (poza `make check` — wymaga żywego stacku); ręczna lista kontrolna na prawdziwym telefonie. **Zależy od kroków 33 i 34.** **Znany problem:** suita e2e zużywa dokładnie 5/5 slotów limitu `POST /auth/login` (wpis w backlogu etapu 6 niżej) — każdy nowy test z logowaniem da 429.
+
+**Ryzyka do pilnowania przy realizacji:**
+- Pierwsze wystawienie TLS: Let's Encrypt ma ostry limit błędów — start na staging CA, przełączenie na produkcyjne po zielonym przebiegu. Rekord A domeny musi wskazywać na VPS **przed** startem Caddy.
+- `GOOGLE_REDIRECT_URI` dla produkcji trzeba dopisać w Google Cloud Console (`https://<domena>/api/auth/google/callback`) — akcja użytkownika.
+- Worker na produkcji uderzy w prawdziwych dostawców; `/meta/freshness` może dawać fałszywe `stale=True` w weekend (wpisy w backlogu danych rynkowych niżej).
+- Sekrety na VPS: nowy `SECRET_KEY` i hasło Postgresa (nie te z dev), `.env` z uprawnieniami 600, poza repo.
+- Backup (krok 38) najlepiej uruchomić **zanim** w bazie produkcyjnej pojawią się realne dane.
+
+**Kryterium ukończenia etapu 7:** wchodzisz na `https://<domena>` z telefonu, rejestrujesz się, tworzysz portfel, dodajesz pozycję — i widzisz wartość w PLN, skład procentowy i ranking rynków. `/api/health` zwraca `ok`. Restart VPS-a podnosi cały stack sam. Nocny dump leży poza VPS-em i został raz odtworzony. Błąd aplikacji ląduje w Sentry.
 
 ## Backlog po code-review etapu 6 (2026-07-28, nieblokujące)
 

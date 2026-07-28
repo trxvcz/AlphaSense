@@ -153,6 +153,60 @@ test("dashboard portfela: podsumowanie, wykres, top ruchy dnia, mobile 375px, po
   await expect(page.getByRole("heading", { name: "Top ruchy dnia" })).toBeVisible();
   await page.screenshot({ path: "test-results/dashboard-po-dodaniu-375.png", fullPage: true });
 
+  // --- Krok 33: widok struktury ---
+  // Znów w TYM teście, nie osobnym — z tego samego powodu co sekcja kroku 35
+  // wyżej (limit 5 logowań na minutę per IP).
+  await page.goto(`/portfolios/${portfolio.id}/struktura`);
+  await expect(
+    page.getByRole("heading", { name: /^Struktura — Portfel e2e dashboard$/ }),
+  ).toBeVisible();
+
+  // Wymiar domyślny to „Klasa aktywów" — backend nie ma wartości domyślnej
+  // (brak `?by=` to 422), więc wybiera go frontend.
+  await expect(page.getByRole("button", { name: "Klasa aktywów" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByRole("img", { name: "Wykres kołowy alokacji" })).toBeVisible();
+  await page.screenshot({ path: "test-results/struktura-klasa-375.png", fullPage: true });
+
+  // Każdy wymiar ma własną formę wykresu — przełącznik ma realnie zmieniać
+  // to, co widać, a nie tylko parametr zapytania.
+  await page.getByRole("button", { name: "Waluta" }).click();
+  await expect(page.getByRole("img", { name: "Treemapa alokacji" })).toBeVisible();
+  await page.screenshot({ path: "test-results/struktura-waluta-375.png", fullPage: true });
+
+  await page.getByRole("button", { name: "Sektor" }).click();
+  await expect(page.getByRole("img", { name: "Wykres słupkowy alokacji" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Geografia" }).click();
+  await expect(page.getByRole("img", { name: "Wykres słupkowy alokacji" })).toBeVisible();
+  await expect(page.getByText(/Grupowanie po kraju aktywa/)).toBeVisible();
+
+  // Tabelaryczna alternatywa dla kanwy ECharts (dostępność) — musi zawierać
+  // koszyki, których czytnik ekranu nie odczyta z wykresu.
+  await page.getByText("Pokaż dane wykresu w formie tabeli").click();
+  await expect(page.getByRole("columnheader", { name: "Udział" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "Polska" })).toBeVisible();
+
+  // Koncentracja (HHI) — liczba pozycji i interpretacja liczone przez backend.
+  await expect(page.getByRole("heading", { name: "Koncentracja portfela" })).toBeVisible();
+  await expect(page.getByText("Udział top 5")).toBeVisible();
+
+  const structureOverflow = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(structureOverflow.scrollWidth).toBeLessThanOrEqual(structureOverflow.clientWidth);
+  await page.screenshot({ path: "test-results/struktura-mobile-375.png", fullPage: true });
+
+  // `/struktura` z nawigacji nie zna portfela — przy dwóch portfelach musi
+  // zapytać, przy jednym przekierowuje od razu (tu użytkownik ma dwa).
+  await page.goto("/struktura");
+  await expect(page.getByRole("heading", { name: "Struktura portfela" })).toBeVisible();
+  await page.getByRole("link", { name: /Portfel e2e dashboard/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/portfolios/${portfolio.id}/struktura$`));
+
   // --- Krok 35: tryb ciemny/jasny ---
   // Motyw steruje klasą `dark` na <html> (`lib/theme.ts` + `app/globals.css`),
   // więc sprawdzamy dokładnie to, na czym stoją wszystkie klasy `dark:`.
@@ -184,4 +238,11 @@ test("dashboard portfela: podsumowanie, wykres, top ruchy dnia, mobile 375px, po
   await page.reload();
   await expect.poll(() => html.evaluate((el) => el.classList.contains("dark"))).toBe(true);
   await expect(themeButton).toHaveAttribute("aria-label", /^Motyw: ciemny/);
+
+  // Wykresy (krok 33) mają WŁASNE kroki palety dla motywu ciemnego — ECharts
+  // nie da się ostylować klasami `dark:`, więc to jedyne miejsce w UI, gdzie
+  // przełączenie motywu może cicho nie zadziałać.
+  await page.goto(`/portfolios/${portfolio.id}/struktura`);
+  await expect(page.getByRole("img", { name: "Wykres kołowy alokacji" })).toBeVisible();
+  await page.screenshot({ path: "test-results/struktura-ciemny-375.png", fullPage: true });
 });

@@ -17,6 +17,11 @@ const pctFormatter = new Intl.NumberFormat("pl-PL", {
   maximumFractionDigits: 1,
 });
 
+const pctAxisFormatter = new Intl.NumberFormat("pl-PL", {
+  style: "percent",
+  maximumFractionDigits: 0,
+});
+
 const decimalFormatter = new Intl.NumberFormat("pl-PL", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -35,6 +40,15 @@ export function pln(value: string): string {
  */
 export function pct(value: string): string {
   return pctFormatter.format(Number(value));
+}
+
+/**
+ * Procent bez miejsc po przecinku — wyłącznie na podziałki osi wykresu, gdzie
+ * na 375 px „0,0% 20,0% 40,0%…" zlewa się w jedną kreskę. Do liczb czytanych
+ * przez użytkownika jako wartość używaj `pct`.
+ */
+export function pctAxis(value: string): string {
+  return pctAxisFormatter.format(Number(value));
 }
 
 /**
