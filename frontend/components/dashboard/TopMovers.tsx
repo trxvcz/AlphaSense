@@ -1,18 +1,11 @@
 import type { Holding } from "@/lib/dashboard";
 import { pct, decimal } from "@/lib/money";
 import { changeColorClass } from "@/lib/changeColor";
+import { hasPriceChange, splitTopMovers, type MovingHolding } from "@/lib/topMovers";
 
 type TopMoversProps = {
   holdings: Holding[];
 };
-
-type MovingHolding = Holding & { price_change_1d: NonNullable<Holding["price_change_1d"]> };
-
-function hasPriceChange(holding: Holding): holding is MovingHolding {
-  return holding.price_change_1d !== null;
-}
-
-const TOP_N = 3;
 
 function MoverRow({ holding }: { holding: MovingHolding }) {
   return (
@@ -52,14 +45,7 @@ export function TopMovers({ holdings }: TopMoversProps) {
     );
   }
 
-  const sorted = [...withChange].sort(
-    (a, b) => Number(b.price_change_1d.pct) - Number(a.price_change_1d.pct),
-  );
-  const gainers = sorted.filter((h) => Number(h.price_change_1d.pct) > 0).slice(0, TOP_N);
-  const losers = sorted
-    .filter((h) => Number(h.price_change_1d.pct) < 0)
-    .slice(-TOP_N)
-    .reverse();
+  const { gainers, losers } = splitTopMovers(holdings);
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

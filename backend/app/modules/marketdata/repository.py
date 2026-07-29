@@ -355,14 +355,28 @@ async def get_asset(db: AsyncSession, asset_id: UUID) -> Asset | None:
     return await db.get(Asset, asset_id)
 
 
-async def get_latest_prices(db: AsyncSession, asset_id: UUID, *, limit: int) -> list[Price]:
+async def get_latest_prices(
+    db: AsyncSession, asset_id: UUID, *, limit: int, on_date: date | None = None
+) -> list[Price]:
     """Ostatnie `limit` notowań `asset_id`, malejąco po dacie (najnowsze
     pierwsze) — jedno zapytanie obsługuje zarówno zmianę d/d (dwa pierwsze
     elementy), jak i mini-serię `series_30d` (`limit=30`, wołający odwraca
     kolejność na rosnącą) w `analytics.service._index_snapshot` (krok 30,
     ADR-102). Mniej niż `limit` wierszy w historii → krótsza lista, nie błąd
-    (indeks świeżo dodany do słownika może mieć niepełną historię EOD)."""
-    stmt = select(Price).where(Price.asset_id == asset_id).order_by(Price.date.desc()).limit(limit)
+    (indeks świeżo dodany do słownika może mieć niepełną historię EOD).
+
+    `on_date` obcina serię do notowań **obowiązujących w tym dniu** (`date <=
+    on_date`), tak samo jak `get_latest_price` wyżej. Wołający wyceniający
+    portfel na konkretny dzień MUSI je podać: `worker/jobs/snapshot_portfolios.py`
+    liczy wycenę za `run_date` z przeszłości, a bez tego filtra dostałby zmianę
+    d/d policzoną z najnowszych notowań w całej bazie — czyli z przyszłości
+    względem wycenianego dnia. Domyślne `None` (bez filtra) zostaje dla
+    `analytics.service._index_snapshot`, gdzie ranking rynków z definicji
+    pokazuje stan bieżący i nie ma wariantu historycznego."""
+    stmt = select(Price).where(Price.asset_id == asset_id)
+    if on_date is not None:
+        stmt = stmt.where(Price.date <= on_date)
+    stmt = stmt.order_by(Price.date.desc()).limit(limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

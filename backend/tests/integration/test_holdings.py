@@ -34,7 +34,8 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.marketdata.models import Asset, FxRate, Price
-from app.modules.portfolio.models import Holding, PortfolioValuation
+from app.modules.portfolio import service as portfolio_service
+from app.modules.portfolio.models import Holding, Portfolio, PortfolioValuation
 from app.modules.portfolio.service import today
 
 EMAIL_A = "holdings-a@example.com"
@@ -327,6 +328,59 @@ async def test_list_holdings_computes_price_change_1d_from_two_quotes(
     # (50 - 40) / 40 = 0.25 — zmiana ceny instrumentu, nie value_pln portfela
     assert Decimal(body["price_change_1d"]["abs"]) == Decimal("10")
     assert Decimal(body["price_change_1d"]["pct"]) == Decimal("0.25")
+
+
+async def test_price_change_1d_respects_historical_on_date(
+    client: AsyncClient, db_session: AsyncSession, temp_assets: TempAssets
+) -> None:
+    """Wycena na dzień z PRZESZŁOŚCI liczy zmianę d/d z notowań obowiązujących
+    w tym dniu, nie z najnowszych wierszy w bazie.
+
+    Regresja: `get_latest_prices` nie miało filtra `date <= on_date` (inaczej
+    niż `get_latest_price` linijkę wyżej w `_value_pairs`), więc
+    `worker/jobs/snapshot_portfolios.py` — jedyny wołający `current_value`
+    z `run_date` z przeszłości — dostawał zmianę d/d policzoną z przyszłości
+    względem wycenianego dnia.
+
+    Układ notowań `pln_asset`: przedwczoraj 20, wczoraj 40, dziś 50 (ostatnie
+    z fixture'a). Wycena na „wczoraj" musi dać (40-20)/20 = 1,0, a nie
+    (50-40)/40 = 0,25 — obie liczby są prawdziwe, ale tylko pierwsza dotyczy
+    wycenianego dnia."""
+    d = today()
+    db_session.add_all(
+        [
+            Price(
+                asset_id=temp_assets.pln_asset.id,
+                date=d - timedelta(days=2),
+                close=Decimal("20"),
+                close_adj=Decimal("20"),
+            ),
+            Price(
+                asset_id=temp_assets.pln_asset.id,
+                date=d - timedelta(days=1),
+                close=Decimal("40"),
+                close_adj=Decimal("40"),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await client.post(
+        f"/api/portfolios/{portfolio_id}/holdings",
+        json={"asset_id": str(temp_assets.pln_asset.id), "quantity": "10"},
+        headers=_auth(token),
+    )
+
+    portfolio = await db_session.get(Portfolio, uuid.UUID(portfolio_id))
+    assert portfolio is not None
+    value = await portfolio_service.current_value(db_session, portfolio, d - timedelta(days=1))
+
+    (valued,) = value.holdings
+    assert valued.price_change_1d is not None
+    assert valued.price_change_1d.abs == Decimal("20")  # 40 - 20, nie 50 - 40
+    assert valued.price_change_1d.pct == Decimal("1")  # 20 / 20, nie 10 / 40
 
 
 async def test_list_holdings_on_foreign_portfolio_is_404(client: AsyncClient) -> None:

@@ -25,13 +25,21 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { ListSkeleton } from "@/components/ui/ListSkeleton";
 
 type PortfolioPickerProps = {
-  /** Segment docelowy: `/portfolios/{id}/{section}`. */
+  /**
+   * Segment docelowy: `/portfolios/{id}/{section}`. Pusty string prowadzi na
+   * sam dashboard portfela (`/portfolios/{id}`), który nie ma własnego
+   * segmentu — tak działa `/dashboard` z nawigacji.
+   */
   section: string;
   title: string;
   description: string;
   /** Tekst stanu pustego — czym konkretnie jest widok, do którego nie ma jak wejść. */
   emptyDescription: string;
 };
+
+function targetHref(portfolioId: string, section: string): string {
+  return section ? `/portfolios/${portfolioId}/${section}` : `/portfolios/${portfolioId}`;
+}
 
 export function PortfolioPicker({
   section,
@@ -50,7 +58,7 @@ export function PortfolioPicker({
 
   useEffect(() => {
     if (onlyPortfolioId) {
-      router.replace(`/portfolios/${onlyPortfolioId}/${section}`);
+      router.replace(targetHref(onlyPortfolioId, section));
     }
   }, [onlyPortfolioId, router, section]);
 
@@ -94,7 +102,7 @@ export function PortfolioPicker({
           {portfolios.map((portfolio) => (
             <li key={portfolio.id}>
               <Link
-                href={`/portfolios/${portfolio.id}/${section}`}
+                href={targetHref(portfolio.id, section)}
                 className="flex items-center justify-between rounded-lg border border-zinc-200 px-4 py-3 outline-offset-2 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:border-zinc-800 dark:hover:bg-zinc-900"
               >
                 <span className="font-medium text-zinc-900 dark:text-zinc-50">

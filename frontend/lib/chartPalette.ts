@@ -11,7 +11,7 @@
  * Kolejność slotów jest mechanizmem bezpieczeństwa dla daltonistów, nie
  * kosmetyką — koszyk dostaje kolor wg swojej pozycji po posortowaniu malejąco
  * po wadze i nigdy nie zapętlamy palety (koszyki ponad limit trafiają do
- * „Pozostałe", patrz `foldBuckets` w `lib/allocationLabels.ts`).
+ * „Pozostałe", patrz `toChartSlices` w `lib/allocationLabels.ts`).
  *
  * Zweryfikowane walidatorem palety (skill `dataviz`,
  * `scripts/validate_palette.js`) na POWIERZCHNIACH TEJ APLIKACJI

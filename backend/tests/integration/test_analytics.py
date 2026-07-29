@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -289,38 +289,139 @@ async def test_concentration_of_other_user_is_404(client: AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class RankingMarkets:
+    """Dwa w pełni testowe rynki dla rankingu — każdy z własnym aktywem do
+    trzymania w portfelu i własnym indeksem referencyjnym."""
+
+    with_prices_code: str
+    with_prices_holding: Asset  # PLN, wyceniany
+    with_prices_index: Asset  # indeks Z serią notowań
+    without_prices_code: str
+    without_prices_holding: Asset  # PLN, wyceniany
+    without_prices_index: Asset  # indeks BEZ ani jednego wiersza `prices`
+
+
 @pytest_asyncio.fixture
-async def gpw_temp_index(db_session: AsyncSession) -> AsyncGenerator[Asset, None]:
-    """Podmienia tymczasowo `Market("GPW").index_asset_id` na świeże,
-    testowe aktywo — pozwala kontrolować dokładnie jego serię `prices` bez
-    dotykania prawdziwego WIG20 (dane produkcyjne/seedowe rynku `GPW`,
-    współdzielone z innymi testami/workerem EOD). Przywraca oryginalny
-    `index_asset_id` po teście."""
-    market = await db_session.get(Market, "GPW")
-    assert market is not None, "Rynek GPW musi istnieć w słowniku (make seed)"
-    original_index_asset_id = market.index_asset_id
+async def ranking_markets(db_session: AsyncSession) -> AsyncGenerator[RankingMarkets, None]:
+    """Dwa tymczasowe rynki (własne `markets.code`), nie podmiana pola w
+    rynku seedowym.
 
-    suffix = uuid.uuid4().hex[:8]
-    temp_index = Asset(
-        symbol=f"IDXT{suffix}",
-        name=f"Testowy indeks GPW {suffix}",
-        asset_class="index",
-        market_code="GPW",
-        currency="PLN",
+    Poprzednia wersja tego fixture'a (`gpw_temp_index`) na czas testu
+    nadpisywała `Market("GPW").index_asset_id` i przywracała po nim —
+    mutacja WSPÓŁDZIELONEGO wiersza słownika, która blokowała zrównoleglenie
+    testów (drugi test czytający `GPW` w tym samym momencie zobaczyłby
+    testowy indeks) i zostawiała bazę w złym stanie po przerwanym przebiegu.
+    Własny `market_code` jest tak samo tani, a nie dotyka niczyich danych.
+
+    Drugi rynek ma indeks **bez notowań** — dzięki temu przypadek
+    „`index: null`, bo worker nie zaciągnął jeszcze ceny" jest wywołany
+    warunkiem, który ustawia test, a nie stanem bazy. Wcześniej sprawdzano
+    go na rynku `US` (`^GSPC` z seeda), więc test przechodził wyłącznie
+    dopóki worker EOD nie zaciągnął S&P 500 — i padłby przy poprawnym
+    kodzie w dniu pierwszej udanej ingestii."""
+    suffix = uuid.uuid4().hex[:8].upper()
+    with_code = f"TSTA{suffix[:4]}"
+    without_code = f"TSTB{suffix[:4]}"
+
+    db_session.add_all(
+        [
+            Market(
+                code=with_code,
+                name="Testowy rynek z indeksem",
+                timezone="UTC",
+                eod_time=time(18, 0),
+            ),
+            Market(
+                code=without_code,
+                name="Testowy rynek z pustym indeksem",
+                timezone="UTC",
+                eod_time=time(18, 0),
+            ),
+        ]
     )
-    db_session.add(temp_index)
-    await db_session.commit()
-    await db_session.refresh(temp_index)
-
-    market.index_asset_id = temp_index.id
     await db_session.commit()
 
-    yield temp_index
-
-    market.index_asset_id = original_index_asset_id
+    assets = {
+        "with_holding": Asset(
+            symbol=f"RKA{suffix}",
+            name="Pozycja na rynku z indeksem",
+            asset_class="equity",
+            market_code=with_code,
+            currency="PLN",
+        ),
+        "with_index": Asset(
+            symbol=f"RKAI{suffix}",
+            name="Indeks rynku z notowaniami",
+            asset_class="index",
+            market_code=with_code,
+            currency="PLN",
+        ),
+        "without_holding": Asset(
+            symbol=f"RKB{suffix}",
+            name="Pozycja na rynku z pustym indeksem",
+            asset_class="equity",
+            market_code=without_code,
+            currency="PLN",
+        ),
+        "without_index": Asset(
+            symbol=f"RKBI{suffix}",
+            name="Indeks bez notowań",
+            asset_class="index",
+            market_code=without_code,
+            currency="PLN",
+        ),
+    }
+    db_session.add_all(list(assets.values()))
     await db_session.commit()
-    await db_session.execute(delete(Price).where(Price.asset_id == temp_index.id))
-    await db_session.execute(delete(Asset).where(Asset.id == temp_index.id))
+    for asset in assets.values():
+        await db_session.refresh(asset)
+
+    with_market = await db_session.get(Market, with_code)
+    without_market = await db_session.get(Market, without_code)
+    assert with_market is not None and without_market is not None
+    with_market.index_asset_id = assets["with_index"].id
+    without_market.index_asset_id = assets["without_index"].id
+
+    d = today()
+    db_session.add_all(
+        [
+            # Wagi rankingu: 500 PLN vs 400 PLN → rynek z indeksem pierwszy.
+            Price(
+                asset_id=assets["with_holding"].id,
+                date=d,
+                close=Decimal("50"),
+                close_adj=Decimal("50"),
+            ),
+            Price(
+                asset_id=assets["without_holding"].id,
+                date=d,
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    yield RankingMarkets(
+        with_prices_code=with_code,
+        with_prices_holding=assets["with_holding"],
+        with_prices_index=assets["with_index"],
+        without_prices_code=without_code,
+        without_prices_holding=assets["without_holding"],
+        without_prices_index=assets["without_index"],
+    )
+
+    asset_ids = [a.id for a in assets.values()]
+    # Kolejność sprzątania wymuszona przez FK: najpierw pozycje/ceny, potem
+    # zerwanie `markets.index_asset_id -> assets.id`, dopiero na końcu aktywa.
+    await db_session.execute(delete(Holding).where(Holding.asset_id.in_(asset_ids)))
+    await db_session.execute(delete(Price).where(Price.asset_id.in_(asset_ids)))
+    with_market.index_asset_id = None
+    without_market.index_asset_id = None
+    await db_session.commit()
+    await db_session.execute(delete(Asset).where(Asset.id.in_(asset_ids)))
+    await db_session.execute(delete(Market).where(Market.code.in_([with_code, without_code])))
     await db_session.commit()
 
 
@@ -355,22 +456,27 @@ async def fx_asset(db_session: AsyncSession) -> AsyncGenerator[Asset, None]:
 async def test_market_ranking_happy_path_with_index(
     client: AsyncClient,
     db_session: AsyncSession,
-    analytics_assets: AnalyticsAssets,
-    gpw_temp_index: Asset,
+    ranking_markets: RankingMarkets,
 ) -> None:
     token = await _register_and_login(client, EMAIL_A)
     portfolio_id = await _create_portfolio(client, token)
     await _add_holding(
-        client, token, portfolio_id, analytics_assets.equity_pl.id, "10"
-    )  # 500 PLN, GPW
-    await _add_holding(client, token, portfolio_id, analytics_assets.etf_us.id, "1")  # 400 PLN, US
+        client, token, portfolio_id, ranking_markets.with_prices_holding.id, "10"
+    )  # 500 PLN
+    await _add_holding(
+        client, token, portfolio_id, ranking_markets.without_prices_holding.id, "4"
+    )  # 400 PLN
 
     d = today()
     yesterday = d - timedelta(days=1)
     db_session.add_all(
         [
-            Price(asset_id=gpw_temp_index.id, date=yesterday, close_adj=Decimal("2000")),
-            Price(asset_id=gpw_temp_index.id, date=d, close_adj=Decimal("2100")),
+            Price(
+                asset_id=ranking_markets.with_prices_index.id,
+                date=yesterday,
+                close_adj=Decimal("2000"),
+            ),
+            Price(asset_id=ranking_markets.with_prices_index.id, date=d, close_adj=Decimal("2100")),
         ]
     )
     await db_session.commit()
@@ -379,28 +485,33 @@ async def test_market_ranking_happy_path_with_index(
 
     assert resp.status_code == 200
     body = resp.json()
-    # GPW 500/900, US 400/900 -> GPW sortowany pierwszy (malejąco po weight)
-    assert [item["market_code"] for item in body] == ["GPW", "US"]
+    # 500/900 vs 400/900 -> rynek z indeksem sortowany pierwszy (malejąco po weight)
+    assert [item["market_code"] for item in body] == [
+        ranking_markets.with_prices_code,
+        ranking_markets.without_prices_code,
+    ]
     assert sum(Decimal(item["weight"]) for item in body) == Decimal("1")
 
-    gpw_item = body[0]
-    assert gpw_item["index"] is not None
-    assert gpw_item["index"]["asset_id"] == str(gpw_temp_index.id)
-    assert gpw_item["index"]["symbol"] == gpw_temp_index.symbol
-    assert Decimal(gpw_item["index"]["value"]) == Decimal("2100.00000000")
-    assert Decimal(gpw_item["index"]["change_1d"]["abs"]) == Decimal("100.00000000")
-    assert Decimal(gpw_item["index"]["change_1d"]["pct"]) == Decimal("0.0500")
-    assert gpw_item["index"]["as_of"] == d.isoformat()
-    assert [p["date"] for p in gpw_item["index"]["series_30d"]] == [
+    first = body[0]
+    assert first["index"] is not None
+    assert first["index"]["asset_id"] == str(ranking_markets.with_prices_index.id)
+    assert first["index"]["symbol"] == ranking_markets.with_prices_index.symbol
+    assert Decimal(first["index"]["value"]) == Decimal("2100.00000000")
+    assert Decimal(first["index"]["change_1d"]["abs"]) == Decimal("100.00000000")
+    assert Decimal(first["index"]["change_1d"]["pct"]) == Decimal("0.0500")
+    assert first["index"]["as_of"] == d.isoformat()
+    assert [p["date"] for p in first["index"]["series_30d"]] == [
         yesterday.isoformat(),
         d.isoformat(),
     ]
 
-    # US ma index_asset_id w słowniku (^GSPC, seed), ale zero notowań
-    # zaciągniętych w bazie testowej -> index=null (nie błąd, patrz decyzje
+    # Drugi rynek MA `index_asset_id`, ale jego aktywo nie ma ani jednego
+    # wiersza w `prices` -> `index: null` (nie błąd, patrz decyzje
     # service.py: „rynek z indeksem, ale bez jeszcze żadnej ceny").
-    us_item = next(item for item in body if item["market_code"] == "US")
-    assert us_item["index"] is None
+    # Warunek ustawia fixture, więc asercja nie zależy od tego, co worker
+    # EOD zdążył zaciągnąć do bazy deweloperskiej.
+    second = body[1]
+    assert second["index"] is None
 
 
 async def test_market_ranking_market_without_index_shows_weight_only(
@@ -561,6 +672,53 @@ async def test_allocation_second_request_hits_cache(
     assert resp2.status_code == 200
     assert resp1.json() == resp2.json()
     assert calls == 1  # drugie żądanie obsłużone z cache, bez ponownej wyceny
+
+
+async def test_allocation_cache_key_separates_dimensions(
+    client: AsyncClient, analytics_assets: AnalyticsAssets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Segment `by` realnie rozdziela klucz cache — dwa wymiary tego samego
+    portfela to dwa wpisy, nie jeden.
+
+    Bez tego testu usunięcie `by` z `cache_key(...)` w `analytics/service.py`
+    nie zapaliłoby niczego w suicie, a użytkownik dostałby alokację
+    policzoną po INNYM wymiarze niż zamówił — cicho i wiarygodnie wyglądając
+    (te same wagi, tylko nie te koszyki). Stąd asercja na obu rzeczach naraz:
+    na ponownym policzeniu (`calls == 2`) i na tym, że drugie żądanie wróciło
+    z kluczami sektorów, nie klas."""
+    calls = 0
+    original_current_value = portfolio_service.current_value
+
+    async def _counting_current_value(db: object, portfolio: object, on_date: object) -> object:
+        nonlocal calls
+        calls += 1
+        return await original_current_value(db, portfolio, on_date)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(portfolio_service, "current_value", _counting_current_value)
+
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_holding(client, token, portfolio_id, analytics_assets.equity_pl.id, "10")  # 500 PLN
+    await _add_holding(client, token, portfolio_id, analytics_assets.etf_us.id, "1")  # 400 PLN
+
+    by_class = await client.get(
+        f"/api/portfolios/{portfolio_id}/allocation",
+        params={"by": "class"},
+        headers=_auth(token),
+    )
+    by_sector = await client.get(
+        f"/api/portfolios/{portfolio_id}/allocation",
+        params={"by": "sector"},
+        headers=_auth(token),
+    )
+
+    assert by_class.status_code == 200
+    assert by_sector.status_code == 200
+    assert calls == 2  # drugi wymiar policzony od nowa, nie podany z cache pierwszego
+    assert by_class.json()["by"] == "class"
+    assert by_sector.json()["by"] == "sector"
+    assert {b["key"] for b in by_class.json()["buckets"]} == {"equity", "etf"}
+    assert {b["key"] for b in by_sector.json()["buckets"]} == {"Technologia", "Finanse"}
 
 
 async def test_allocation_cache_invalidated_by_holdings_version_change(

@@ -203,7 +203,9 @@ async def _value_pairs(
     `unrealized_pl` (ten liczy się względem `avg_cost`, nie względem
     wczoraj). Ten sam wzorzec co `analytics.service._index_snapshot` dla
     zmiany d/d indeksu rynku: `marketdata_repository.get_latest_prices`
-    (2 najnowsze notowania malejąco po dacie), `None` gdy jest mniej niż
+    (2 najnowsze notowania malejąco po dacie, **obcięte do `on_date`** tak
+    samo jak `get_latest_price` — inaczej wycena historyczna z workera
+    dostawałaby zmianę d/d z przyszłości), `None` gdy jest mniej niż
     dwa wiersze — świeżo dodane aktywo bez historii, nie błąd (przygotowanie
     pod krok 32, „top ruchy dnia" na dashboardzie, plan etap 6)."""
     settings = get_settings()
@@ -223,7 +225,9 @@ async def _value_pairs(
         close_adj = price.close_adj if price is not None else None
         price_date = price.date if price is not None else None
 
-        prices_desc = await marketdata_repository.get_latest_prices(db, asset.id, limit=2)
+        prices_desc = await marketdata_repository.get_latest_prices(
+            db, asset.id, limit=2, on_date=on_date
+        )
         price_change_1d = price_change_from_closes([p.close_adj for p in prices_desc])
 
         fx_pln: Decimal | None = None

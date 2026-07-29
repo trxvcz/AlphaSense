@@ -26,7 +26,7 @@ check:     ## bramka jakości — musi być zielona przed „gotowe"
 	docker compose exec api ruff check .
 	docker compose exec api mypy app
 	docker compose exec api pytest -q -m "not network"
-	cd frontend && npm run lint && npx tsc --noEmit && npm run build
+	cd frontend && npm run lint && npx tsc --noEmit && npm run test && npm run build
 
 fmt:
 	docker compose exec api ruff format .

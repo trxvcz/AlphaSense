@@ -4,7 +4,7 @@
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
 **Aktualny etap:** 6 — Analityka i dashboard (**wszystkie kroki 29-35 zrobione**; następny etap: 7 — wdrożenie produkcyjne)
-**Ostatnia aktualizacja:** 2026-07-28
+**Ostatnia aktualizacja:** 2026-07-29
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -106,8 +106,8 @@ Nowe pliki: `lib/analytics.ts` (typy + `getAllocation`/`getConcentration`), `lib
 - **`by=market` świadomie pominięty w tym widoku** — rynki dostają własny panel z indeksami referencyjnymi w kroku 34 (`GET /portfolios/{id}/markets`), a sama alokacja indeksów nie zwraca. Typ `AllocationDimension` w `lib/analytics.ts` zawiera wszystkie pięć wartości z API; widok wybiera cztery.
 - **`ValueChart` (krok 32) nie został przepisany na wspólny `EChart`** — działa i jest pokryty e2e, a przenoszenie go byłoby refaktorem poza zakresem kroku (CLAUDE.md 4.3). Konsekwencja: w repo są dwa wzorce cyklu życia ECharts. Do domknięcia przy kroku 34, jeśli i tam powstanie wykres.
 - **Treemapa przy dwóch koszykach to słaba forma** (jeden szeroki kafelek + jeden wąski pasek) — plan wymieniał treemapę wprost, więc została, ale przy ≤3 walutach donut czytałby się lepiej. Do rozważenia po zobaczeniu realnych portfeli.
-- **Testy e2e struktury dopisane do `e2e/dashboard.spec.ts`, nie do osobnego pliku** — osobny spec to szósty `POST /auth/login` w oknie minuty, czyli 429 (ten sam powód, dla którego dopisano tam krok 35). To już drugi krok planu, który musi się podpiąć pod cudzy test — wpis o `RATE_LIMIT_AUTH_PER_MINUTE` w backlogu etapu 6 robi się pilniejszy niż „do decyzji przy etapie 7".
-- **Nowe funkcje czyste to pierwsi realni kandydaci na Vitest** (którego wciąż nie ma w repo, patrz backlog etapu 6): `toChartSlices` (sortowanie, składanie nadmiaru w „Pozostałe") i `bucketLabel` (fallback dla nieznanego klucza) są testowalne bez DOM-u i bez API.
+- ~~**Testy e2e struktury dopisane do `e2e/dashboard.spec.ts`, nie do osobnego pliku**~~ — powód (szósty `POST /auth/login` w oknie minuty = 429) **zniknął 2026-07-29**: dev/e2e ma `RATE_LIMIT_AUTH_PER_MINUTE=30`. Rozdzielenie tych scenariuszy na osobne pliki jest teraz możliwe i naturalnie wypada przy kroku 39.
+- ~~**Nowe funkcje czyste to pierwsi realni kandydaci na Vitest**~~ — zrobione 2026-07-29: `lib/allocationLabels.test.ts` pokrywa `toChartSlices` (sortowanie, składanie nadmiaru w „Pozostałe", suma wag) i `bucketLabel` (nieznany klucz, koszyk `nieznane`).
 
 ## Krok 34 — panel „Twoje rynki" (zrobiony 2026-07-28) — ZAMYKA ETAP 6
 
@@ -123,11 +123,11 @@ Nowe pliki: `lib/analytics.ts` (+`MarketRankingItem`/`MarketIndex`/`PricePoint`/
 
 ### Backlog kroku 34 (nieblokujące)
 
-- **Asercja e2e na warianty wiersza jest sformułowana jako suma obu gałęzi** (`sparkline'y + wyjaśnienia == liczba wierszy`), a nie jako „GPW nie ma indeksu" — twarde przypisanie padłoby w dniu, w którym worker zaciągnie WIG20, mimo poprawnego kodu. To ten sam błąd, który wciąż siedzi w `tests/integration/test_analytics.py:400` (`test_market_ranking_happy_path_with_index` asertuje `us_item["index"] is None`) — wpis wyżej w backlogu etapu 6 jest nadal aktualny.
+- **Asercja e2e na warianty wiersza jest sformułowana jako suma obu gałęzi** (`sparkline'y + wyjaśnienia == liczba wierszy`), a nie jako „GPW nie ma indeksu" — twarde przypisanie padłoby w dniu, w którym worker zaciągnie WIG20, mimo poprawnego kodu. To był ten sam błąd, który siedział w `test_market_ranking_happy_path_with_index` — **naprawiony 2026-07-29** (fixture `ranking_markets`, patrz backlog etapu 6).
 - **Pierwsza wersja testu użyła `getByRole("listitem")` bez zawężenia i łapała pozycje dolnej nawigacji** (6 zamiast 2). Naprawione przez `aria-label="Rynki wg udziału w portfelu"` na liście — przy okazji realna poprawka dostępności. Warto sprawdzić, czy inne listy w UI też powinny mieć nazwę.
 - **Sparkline nie ma tabelarycznej alternatywy** — decyzja: wszystkie liczby, które niesie (wartość indeksu, zmiana d/d, data notowania), są obok jako tekst, a tabela z trzydziestoma notowaniami na każdy rynek byłaby w tym miejscu szumem. Jeśli kiedyś pojawi się pełny wykres indeksu (krok 45, Lightweight Charts), tam alternatywa będzie obowiązkowa.
 - **`GET /markets/{code}/index` (krok 30) nie ma dziś konsumenta we froncie** — panel korzysta z `series_30d` zaszytego w rankingu, co oszczędza N zapytań. Osobny endpoint przyda się dopiero przy wykresach świecowych (krok 45).
-- **`/dashboard` w nawigacji nadal jest linkiem placeholder** — plan nie przewiduje osobnego ekranu zbiorczego, dashboard żyje pod konkretnym portfelem. Do decyzji przy etapie 7: albo przekierowanie jak w `PortfolioPicker`, albo usunięcie pozycji z nawigacji (dziś prowadzi na 404).
+- ~~**`/dashboard` w nawigacji nadal jest linkiem placeholder**~~ — rozstrzygnięte 2026-07-29 na korzyść przekierowania: `app/dashboard/` używa `PortfolioPicker` z pustym `section`, tak samo jak `/struktura` i `/rynki`.
 
 ## Plan etapu 7 — wdrożenie produkcyjne (uzgodniony 2026-07-28, przed rozpoczęciem)
 
@@ -164,16 +164,58 @@ Nowy publiczny `GET /api/health` wyłączony z rate limitu: liveness + readiness
 
 **Kryterium ukończenia etapu 7:** wchodzisz na `https://<domena>` z telefonu, rejestrujesz się, tworzysz portfel, dodajesz pozycję — i widzisz wartość w PLN, skład procentowy i ranking rynków. `/api/health` zwraca `ok`. Restart VPS-a podnosi cały stack sam. Nocny dump leży poza VPS-em i został raz odtworzony. Błąd aplikacji ląduje w Sentry.
 
-## Backlog po code-review etapu 6 (2026-07-28, nieblokujące)
+## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
-Dwa **blokujące** znaleziska naprawione tego samego dnia (patrz dziennik sesji). Pozostałe do rozważenia:
+Dwa **blokujące** znaleziska naprawione 2026-07-28 (patrz dziennik sesji). Pozostałe rozbrojone w sesji
+2026-07-29, przed powrotem do etapu 7 — `make check` zielony (235 testów backendu, 29 Vitest, build),
+Playwright 5/5.
 
-- `price_change_1d` ignoruje `on_date`: `portfolio/service.py:226` woła `get_latest_prices`, które — inaczej niż `get_latest_price` linijkę wyżej — nie ma filtra `date <= on_date`. Dziś bug utajony (nikt nie czyta tego pola ze ścieżki historycznej), ale `worker/jobs/snapshot_portfolios.py` woła `current_value` z `run_date` z przeszłości, więc pierwszy konsument wyceny historycznej dostanie zmianę d/d z najnowszych notowań w całej bazie zamiast z `on_date`. Naprawa: parametr `on_date` w `get_latest_prices`, przy okazji można nim zastąpić oba zapytania i zlikwidować N+1.
-- Brak testu na to, że segment `by` realnie rozdziela klucz cache. Usunięcie `by` z `cache_key(...)` w `analytics/service.py` nie zapali dziś żadnego testu, a użytkownik dostanie alokację po złym wymiarze.
-- `test_market_ranking_happy_path_with_index` (`tests/integration/test_analytics.py:400`) asertuje `us_item["index"] is None` — przechodzi tylko dlatego, że `^GSPC` nie ma jeszcze wierszy w `prices`. Gdy worker zaciągnie S&P 500, test padnie mimo poprawnego kodu. Do przepisania na wzorzec `gpw_temp_index`.
-- **Vitest z tabeli stacku (CLAUDE.md §2) nie istnieje w repo** — zero plików `*.test.ts`, `make check` uruchamia dla frontendu tylko `lint`/`tsc`/`build`. Playwright też nie jest w `make check` ani w skryptach `package.json` (uruchamiany ręcznie). Kandydaci na pierwsze testy jednostkowe: `TopMovers` (`.slice(-TOP_N).reverse()`), `lib/money.ts`, `lib/changeColor.ts`.
-- **Suita e2e zużywa dokładnie 5 z 5 slotów limitu `POST /auth/login` (5/min per IP).** Zero zapasu — każdy nowy test wymagający logowania przekroczy limit i da 429. Do decyzji przy etapie 7: osobny `RATE_LIMIT_AUTH_PER_MINUTE` dla stacku e2e/dev, albo rozdzielenie przebiegów.
-- Drobne: deserializacja cache tworzy transientne obiekty ORM `Price` zamiast dataclassa; progi HHI `0.15`/`0.25` zaszyte w kodzie (do `core/config.py` przy etapie 8); fixture `gpw_temp_index` mutuje współdzielony wiersz `markets.GPW` (blokuje zrównoleglenie testów); `PortfolioDashboard.tsx:65` nie ma gałęzi `isLoading` dla `holdings` (mignięcie pełnego widoku u nowego użytkownika); `_range_start`/`_subtract_months` już w trzech miejscach — `core/dates.py` zaczyna się opłacać.
+- [x] **`price_change_1d` ignorowało `on_date`.** `marketdata/repository.get_latest_prices` dostało
+  parametr `on_date` (filtr `date <= on_date`, ta sama reguła co `get_latest_price`), `portfolio/service.py`
+  go przekazuje. `analytics.service._index_snapshot` zostaje bez filtra — ranking rynków z definicji pokazuje
+  stan bieżący. Regresja: `test_price_change_1d_respects_historical_on_date` (notowania 20/40/50 na trzy
+  kolejne dni, wycena na „wczoraj" musi dać 100%, nie 25%). Zweryfikowane, że test pada po cofnięciu poprawki.
+  Likwidacja N+1 z oryginalnego wpisu **nie** zrobiona — to optymalizacja, nie błąd; osobny wpis niżej.
+- [x] **Brak testu na rozdzielność klucza cache po `by`.** `test_allocation_cache_key_separates_dimensions`:
+  `by=class` i `by=sector` na tym samym portfelu → dwa policzenia (`calls == 2`) i różne koszyki.
+  Zweryfikowane, że test pada po usunięciu `by` z `cache_key(...)`.
+- [x] **Kruchy `test_market_ranking_happy_path_with_index` i mutujący fixture `gpw_temp_index`** — naprawione
+  razem, bo to był jeden problem: test opierał się na współdzielonym stanie. `gpw_temp_index` (podmieniał
+  `Market("GPW").index_asset_id` i przywracał po teście) zastąpiony przez `ranking_markets`, który tworzy
+  **dwa własne rynki**: jeden z indeksem i serią notowań, drugi z indeksem bez ani jednego wiersza `prices`.
+  Przypadek `index: null` jest teraz wywołany warunkiem ustawionym przez test, a nie tym, czego worker EOD
+  nie zdążył zaciągnąć — asercja nie padnie w dniu pierwszej udanej ingestii `^GSPC`. Fixture nie dotyka
+  wiersza słownikowego, więc przestaje blokować zrównoleglenie testów.
+- [x] **Vitest istnieje.** `frontend/vitest.config.ts` (`environment: "node"`, `include: lib/**/*.test.ts`),
+  `npm run test`, dopięty do `make check` i do joba `frontend` w CI. 29 testów w czterech plikach:
+  `lib/money.test.ts` (formatowanie kwot/procentów — asercje na semantyce, nie na dokładnym stringu z
+  `Intl`, który zależy od wersji ICU), `lib/changeColor.test.ts` (trzy gałęzie znaku + obecność wariantu
+  `dark:`), `lib/allocationLabels.test.ts` (`bucketLabel` z nieznanym kluczem, `toChartSlices` — sortowanie,
+  składanie nadmiaru w „Pozostałe", suma wag = 1), `lib/topMovers.test.ts`.
+  **Zakres świadomie bez jsdom i `@testing-library`**: nowe zależności to decyzja użytkownika (CLAUDE.md §10),
+  a render pokrywa już Playwright przeciw żywemu stackowi. Logika wyboru top ruchów wyciągnięta z
+  `components/dashboard/TopMovers.tsx` do `lib/topMovers.ts` (`splitTopMovers`), żeby dała się przetestować
+  bez DOM-u — to jedyny refaktor w tej sesji i był warunkiem testowalności, nie porządkowaniem.
+  Playwright **nadal poza `make check`** (wymaga żywego stacku) — do `make smoke` w kroku 39.
+- [x] **Limit `POST /auth/login` ma zapas w devie.** `RATE_LIMIT_AUTH_PER_MINUTE=30` w `.env`/`.env.example`
+  (dev/e2e), produkcja zostaje na `5`. Domyślna wartość w `core/config.py` bez zmian (`5`) — luz jest jawną
+  decyzją środowiska deweloperskiego, nie nowym domyślnym zachowaniem. Odblokowuje pisanie osobnych plików
+  e2e w kroku 39 zamiast doklejania scenariuszy do cudzych.
+- [x] **`/dashboard` nie prowadzi już na 404.** `app/dashboard/{page,layout}.tsx` — `PortfolioPicker`
+  z pustym `section` (nowy helper `targetHref`: pusty segment → `/portfolios/{id}`, czyli sam dashboard).
+  Zachowanie identyczne z `/struktura` i `/rynki`: jeden portfel → `replace` prosto na widok, kilka → lista,
+  zero → stan pusty z CTA. Zweryfikowane: `/dashboard` zwraca 200, `/nieistniejace` nadal 404.
+- [x] **Nieaktualny odsyłacz do `foldBuckets`** w `lib/chartPalette.ts` → `toChartSlices`.
+- [x] ~~`PortfolioDashboard.tsx:65` bez gałęzi `isLoading` dla `holdings`~~ — **wpis był nieaktualny**:
+  szkielet ładowania dołożył krok 35 (commit `95f7d75`), już po napisaniu backlogu.
+
+**Świadomie NIE zrobione w tej sesji** (i powód):
+- Progi HHI `0.15`/`0.25` zaszyte w kodzie → `core/config.py` **przy etapie 8**, razem z resztą parametrów ryzyka.
+- Deserializacja cache tworzy transientne obiekty ORM `Price` zamiast dataclassa — kosmetyka bez wpływu na wynik.
+- `_range_start`/`_subtract_months` w trzech miejscach → `core/dates.py`: refaktor ponad zakres zadania
+  (CLAUDE.md §4.3), nic dziś nie jest zepsute.
+- N+1 w `_value_pairs` (`get_latest_price` + `get_latest_prices` per pozycja) — do zrobienia jednym zapytaniem,
+  ale to optymalizacja, a nie błąd poprawności; naturalne miejsce to etap 8 razem z metrykami.
 
 ## Backlog bezpieczeństwa (nieblokujące, do adresu w kolejnych etapach)
 
