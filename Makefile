@@ -1,4 +1,5 @@
-.PHONY: up down logs migrate revision seed test check fmt shell psql
+.PHONY: up down logs migrate revision seed test check fmt shell psql \
+        prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql
 
 up:        ## dev: postgres, redis, api, frontend, worker
 	docker compose up -d --build
@@ -37,3 +38,38 @@ shell:
 
 psql:
 	docker compose exec postgres psql -U portfel -d portfel
+
+# --- produkcja (krok 36) ----------------------------------------------------
+#
+# Każdy cel przechodzi przez `$(PROD)`, bo `--env-file .env.prod` NIE jest
+# opcjonalny: `${ZMIENNA}` w `docker-compose.prod.yml` podstawia compose po
+# stronie hosta i domyślnie czyta do tego `.env`, nie `.env.prod`. Bez tego
+# flagi na VPS-ie wyjdzie puste hasło Postgresa, a lokalnie po cichu wejdą
+# ustawienia deweloperskie. Pełna procedura: `docs/wdrozenie.md`.
+
+PROD = docker compose --env-file .env.prod -f docker-compose.prod.yml
+
+prod-build:   ## prod: zbuduj obrazy (NEXT_PUBLIC_* są wypiekane właśnie tutaj)
+	$(PROD) build
+
+prod-up:      ## prod: podnieś stack (migracje lecą jako usługa `migrate` przed API)
+	$(PROD) up -d
+
+prod-down:
+	$(PROD) down
+
+prod-migrate: ## prod: migracje poza cyklem `up` (np. po samej zmianie schematu)
+	$(PROD) run --rm migrate
+
+prod-seed:    ## prod: słownik rynków i indeksy — BEZ danych demo; potem restart workera
+	$(PROD) run --rm --no-deps api python -m app.cli seed --reference-only
+	$(PROD) restart worker
+
+prod-logs:    ## make prod-logs s=worker
+	$(PROD) logs -f $(s)
+
+prod-ps:
+	$(PROD) ps
+
+prod-psql:
+	$(PROD) exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'

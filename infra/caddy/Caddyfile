@@ -1,0 +1,55 @@
+# Caddy — jedyny kontener wystawiony na świat (porty 80/443).
+# Terminuje TLS, serwuje frontend i API z JEDNEGO origin i dokłada nagłówki
+# bezpieczeństwa. Plan krok 36.
+#
+# Konfiguracja przez zmienne środowiskowe (`.env.prod`, patrz
+# `.env.prod.example`) — Caddyfile nie ma instrukcji warunkowych, więc każdy
+# przełącznik musi być pojedynczym tokenem podstawianym przez `{$ZMIENNA}`.
+#
+#   DOMAIN     nazwa serwera: `localhost` lokalnie, `portfel.example` na VPS
+#   TLS_MODE   `internal` (lokalny CA Caddy'ego, zero ruchu do Let's Encrypt)
+#              albo ADRES E-MAIL → Caddy bierze certyfikat przez ACME.
+#              Oba warianty to ta sama, jednoargumentowa forma `tls <arg>`.
+#   ACME_CA    katalog ACME. Domyślnie produkcyjny Let's Encrypt; przy
+#              PIERWSZYM wystawieniu certyfikatu na nowej domenie ustaw
+#              staging (patrz `.env.prod.example`) — produkcyjny LE ma ostry
+#              limit BŁĘDÓW i źle skonfigurowany DNS potrafi zablokować
+#              domenę na tydzień.
+
+{
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+}
+
+{$DOMAIN:localhost} {
+	tls {$TLS_MODE:internal}
+
+	encode zstd gzip
+
+	header {
+		# HSTS bez `preload` — wpis na listę preload jest praktycznie
+		# nieodwracalny i wymusiłby HTTPS na wszystkich subdomenach na lata.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Aplikacja nie używa żadnego z tych API.
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+
+	# API i frontend pod tym samym origin — dzięki temu przeglądarka nie
+	# wykonuje żadnego żądania cross-origin i CORS przestaje być potrzebny
+	# (patrz `NEXT_PUBLIC_API_URL=/api` w `frontend/Dockerfile`).
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

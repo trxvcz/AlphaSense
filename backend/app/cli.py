@@ -16,13 +16,20 @@ import asyncio
 import sys
 from datetime import date, datetime
 
-from app.db.seed import seed_all
+from app.db.seed import seed_all, seed_reference
 from app.db.session import AsyncSessionLocal
 from worker.jobs.ingest_market import ingest_market
 from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
 
-async def _run_seed() -> None:
+async def _run_seed(*, reference_only: bool) -> None:
+    if reference_only:
+        async with AsyncSessionLocal() as session:
+            markets = await seed_reference(session)
+        print(f"Zasiano słownik rynków ({markets}) i indeksy referencyjne. Bez danych demo.")
+        print("Pamiętaj o restarcie workera — joby EOD czyta raz przy starcie (ADR-102).")
+        return
+
     async with AsyncSessionLocal() as session:
         result = await seed_all(session)
 
@@ -50,8 +57,17 @@ def _parse_date(value: str) -> date:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser(
+    seed_parser = subparsers.add_parser(
         "seed", help="Zasiej słownik rynków, demo aktywa i demo użytkownika z portfelem"
+    )
+    seed_parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help=(
+            "Tylko dane słownikowe: rynki, indeksy referencyjne i ich mapowania na dostawców. "
+            "Bez demo użytkownika, demo portfela i demo pozycji — wariant PRODUKCYJNY "
+            "(make prod-seed, docs/wdrozenie.md)"
+        ),
     )
 
     ingest_parser = subparsers.add_parser(
@@ -93,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "seed":
-        asyncio.run(_run_seed())
+        asyncio.run(_run_seed(reference_only=args.reference_only))
         return 0
 
     if args.command == "ingest":

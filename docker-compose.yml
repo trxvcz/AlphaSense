@@ -1,8 +1,8 @@
 # docker-compose.yml — środowisko dev (hot reload, porty wystawione).
-# Wersja produkcyjna: docker-compose.prod.yml (etap 7).
+# Wersja produkcyjna: `docker-compose.prod.yml` (Caddy, brak wystawionych
+# portów poza 80/443, migracje przed startem API).
 #
 # Zakres: postgres, redis, api, worker, frontend.
-# `caddy` — etap 7, świadomie poza zakresem.
 
 services:
   postgres:
@@ -32,6 +32,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # Dockerfile jest wielostopniowy (etap 7) — bez `target` zbudowałby
+      # się stopień OSTATNI, czyli `prod`, i dev po cichu straciłby hot
+      # reload oraz narzędzia z `requirements-dev` (ruff/mypy/pytest,
+      # których używa `make check`).
+      target: dev
     env_file: .env
     depends_on:
       postgres:
@@ -47,6 +52,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: dev
     command: ["python", "-m", "worker.scheduler"]
     env_file: .env
     depends_on:
@@ -61,6 +67,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: dev
     environment:
       # Osiągalny z PRZEGLĄDARKI (fetch leci z klienta) — `localhost:8000`,
       # nie `http://api:8000` (to działa tylko server-to-server w compose).

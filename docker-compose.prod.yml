@@ -1,0 +1,236 @@
+# docker-compose.prod.yml — środowisko produkcyjne (plan krok 36).
+#
+# Różnice wobec `docker-compose.yml` (dev), wszystkie zamierzone:
+#  - PORTY NA ZEWNĄTRZ WYSTAWIA WYŁĄCZNIE `caddy` (80/443). Postgres, Redis,
+#    API i frontend nie mają `ports:` — są osiągalne tylko wewnątrz sieci
+#    compose. W devie Postgres siedzi na 5432 otwartym na świat; na VPS-ie
+#    z publicznym IP byłoby to zaproszenie do zgadywania hasła.
+#  - Zero bind-mountów kodu i zero `--reload` (stopnie `prod` obrazów).
+#  - Migracje jako ODDZIELNA, jednorazowa usługa `migrate`, która musi
+#    zakończyć się sukcesem, zanim wystartuje `api` — nigdy `create_all()`
+#    (CLAUDE.md §3.8).
+#  - Healthchecki na każdej usłudze: restart VPS-a ma podnieść stack sam,
+#    w poprawnej kolejności, bez ręcznego dotykania czegokolwiek.
+#
+# URUCHAMIAJ WYŁĄCZNIE PRZEZ `make prod-*`, nigdy gołym `docker compose -f
+# docker-compose.prod.yml up`. Powód: `${ZMIENNA}` w tym pliku jest podstawiana
+# przez SAMO COMPOSE (na hoście, przed startem kontenerów), a compose czyta do
+# tego domyślnie plik `.env` — nie `.env.prod`. Bez `--env-file .env.prod`:
+#  - na VPS-ie (brak `.env`) `POSTGRES_PASSWORD` wychodzi puste i Postgres
+#    odmawia inicjalizacji,
+#  - na maszynie deweloperskiej podstawiłoby się DEV-owe hasło z `.env`, ciche
+#    i rozjeżdżające się z `DATABASE_URL` z `.env.prod`.
+# `--env-file` jest zaszyty w celach `prod-*` w `Makefile`, żeby nie dało się
+# tego pomylić. `env_file:` przy usługach to osobny mechanizm (zmienne WEWNĄTRZ
+# kontenera) i sam by tu nie wystarczył.
+#
+# Konfiguracja: `.env.prod` (wzorzec w `.env.prod.example`), NIGDY w repo.
+# Pełna procedura wdrożenia i odtwarzania: `docs/wdrozenie.md`.
+
+# Własna nazwa projektu — bez niej compose bierze nazwę katalogu (`files`),
+# czyli TĘ SAMĄ co dev, i obie konfiguracje dzielą wolumen `files_postgres_data`.
+# Na VPS-ie nieszkodliwe (dev tam nie stoi), lokalnie to gotowy wypadek.
+name: alphasense-prod
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    # Jawne trzy zmienne zamiast `env_file: .env.prod` — Caddy jest JEDYNYM
+    # kontenerem z publicznym portem i nie ma powodu nosić w środowisku
+    # `SECRET_KEY`, hasła bazy, `GOOGLE_CLIENT_SECRET` ani kluczy do bucketu.
+    environment:
+      DOMAIN: ${DOMAIN}
+      TLS_MODE: ${TLS_MODE}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certyfikaty MUSZĄ przeżyć restart i przebudowę kontenera — bez tego
+      # każdy `docker compose up` ponawiałby wystawienie certyfikatu i
+      # szybko wpadłby w limit Let's Encrypt.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks:
+      alphasense:
+        # Statyczny adres, żeby `FORWARDED_ALLOW_IPS` w `api` wskazywał
+        # KONKRETNE proxy, a nie całą podsieć (patrz komentarz przy `api`).
+        ipv4_address: 172.28.0.10
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # `env_file`, nie `environment: ${...}` — `POSTGRES_*` mają przyjść z
+    # `.env.prod` do WNĘTRZA kontenera, niezależnie od tego, co compose zna po
+    # stronie hosta. Wcześniejsza wersja podstawiała je na hoście i na czystym
+    # VPS-ie dawała puste hasło (obraz Postgresa wtedy odmawia startu).
+    env_file: .env.prod
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - alphasense
+    healthcheck:
+      # `$$` — ucieczka przed interpolacją compose'a: zmienne mają być
+      # rozwinięte przez powłokę W KONTENERZE, gdzie `env_file` je ustawił.
+      # Przy `${POSTGRES_USER}` healthcheck zależałby od środowiska hosta.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    # Cache można wyczyścić w każdej chwili (CLAUDE.md §3.7), więc dane
+    # Redisa świadomie nie mają wolumenu — po restarcie startuje pusty.
+    # Wyjątek do zapamiętania: liczniki rate limitu też tu żyją, więc
+    # restart Redisa zeruje limity. Akceptowalne (restart jest rzadki
+    # i ręczny), ale to powód, dla którego Redis ma `restart: unless-stopped`.
+    networks:
+      - alphasense
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env.prod
+    # Jednorazowa: ma się wykonać i zakończyć. `unless-stopped` zapętliłoby
+    # migracje w kółko.
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - alphasense
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    env_file: .env.prod
+    # Bez tego API było JEDYNĄ usługą bez polityki restartu — po reboocie
+    # VPS-a wstawał cały stack poza nim, a Caddy oddawał 502 na `/api/*`.
+    restart: unless-stopped
+    environment:
+      # Adres Caddy'ego — jedyne proxy, któremu uvicorn ma wierzyć przy
+      # odczycie `X-Forwarded-For`. Przy KONKRETNYM adresie uvicorn idzie po
+      # liście od prawej i bierze pierwszy niezaufany wpis, czyli realnego
+      # klienta; nagłówek podrobiony przez klienta zostaje po lewej i jest
+      # ignorowany. Przy `*` uvicorn wziąłby wpis SKRAJNIE LEWY, w całości
+      # kontrolowany przez klienta — i rate limiting na `/auth/login` dałoby
+      # się obejść jednym nagłówkiem (patrz `app/core/rate_limit.py`).
+      FORWARDED_ALLOW_IPS: "172.28.0.10"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - alphasense
+    healthcheck:
+      # TYMCZASOWO sprawdzenie na poziomie gniazda: czy uvicorn nasłuchuje.
+      #
+      # Docelowo ma tu być `GET /api/health` (readiness: `SELECT 1` + Redis
+      # `PING`) — to jednak KROK 37, endpoint jeszcze nie istnieje. Pierwsza
+      # wersja tego pliku już go odpytywała i kładła cały stack: 404 →
+      # `urlopen` rzuca → `api` nigdy `healthy` → `caddy` (`depends_on:
+      # service_healthy`) nigdy nie startuje → brak TLS i frontendu, przy
+      # zdrowym API. Przy kroku 37 zamień test na odpytanie `/api/health`.
+      #
+      # Obraz produkcyjny nie ma `curl` ani `wget` (python:3.12-slim), stąd
+      # sprawdzenie przez interpreter, który i tak jest w obrazie.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=5).close()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    command: ["python", "-m", "worker.scheduler"]
+    env_file: .env.prod
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - alphasense
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        # WYPIEKANE w bundle na etapie `next build` — zmiana wymaga
+        # przebudowy obrazu, nie restartu kontenera. Adres względny:
+        # przeglądarka trafia pod `https://<domena>/api/...`, ten sam origin
+        # co frontend, więc CORS w ogóle nie wchodzi w grę.
+        NEXT_PUBLIC_API_URL: /api
+    restart: unless-stopped
+    networks:
+      - alphasense
+    healthcheck:
+      # Obraz standalone nie ma `curl`/`wget` — sprawdzenie przez node.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+networks:
+  alphasense:
+    driver: bridge
+    ipam:
+      config:
+        # Jawna podsieć, bo `caddy` potrzebuje przewidywalnego adresu
+        # (patrz `FORWARDED_ALLOW_IPS` w `api`). Zmieniaj tylko przy
+        # kolizji z inną siecią na VPS-ie — wtedy zmień OBA miejsca.
+        - subnet: 172.28.0.0/24
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

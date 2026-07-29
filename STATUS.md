@@ -3,7 +3,8 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 6 — Analityka i dashboard (**wszystkie kroki 29-35 zrobione**; następny etap: 7 — wdrożenie produkcyjne)
+**Aktualny etap:** 7 — Wdrożenie produkcyjne (**krok 36 zrobiony**, niezacommitowany; następny krok 37).
+Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 **Ostatnia aktualizacja:** 2026-07-29
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
@@ -18,7 +19,7 @@
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
-| 7 | Wdrożenie produkcyjne | ⚪ |
+| 7 | Wdrożenie produkcyjne | 🟡 w toku (krok 36) |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
@@ -62,7 +63,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 33 Widoki struktury (donut, treemap, sektor, geo)
 [x] 34 Panel „Twoje rynki"
 [x] 35 Formularz mobile, stany puste, dark mode
-[ ] 36 Caddy + compose produkcyjny
+[x] 36 Caddy + compose produkcyjny (wdrożenie na VPS: po Twojej stronie)
 [ ] 37 Sentry + /health + alerty
 [ ] 38 Backup pg_dump
 [ ] 39 Smoke test 375px + desktop  ← KONIEC FAZY 1
@@ -164,6 +165,75 @@ Nowy publiczny `GET /api/health` wyłączony z rate limitu: liveness + readiness
 
 **Kryterium ukończenia etapu 7:** wchodzisz na `https://<domena>` z telefonu, rejestrujesz się, tworzysz portfel, dodajesz pozycję — i widzisz wartość w PLN, skład procentowy i ranking rynków. `/api/health` zwraca `ok`. Restart VPS-a podnosi cały stack sam. Nocny dump leży poza VPS-em i został raz odtworzony. Błąd aplikacji ląduje w Sentry.
 
+## Krok 36 — Caddy + compose produkcyjny (ZROBIONY 2026-07-29, niezacommitowany)
+
+**Co powstało:** `backend/Dockerfile` i `frontend/Dockerfile` wielostopniowe (`dev`/`build`/`prod`,
+nie-root, uvicorn bez `--reload`, Next standalone) · `frontend/next.config.ts` → `output: "standalone"` ·
+`docker-compose.yml` (dev) z `target: dev` · `infra/caddy/Caddyfile` · `docker-compose.prod.yml` ·
+`.env.prod.example` · cele `prod-*` w `Makefile` · `docs/wdrozenie.md` (runbook) ·
+`seed_reference` + `python -m app.cli seed --reference-only`.
+
+Wdrożenie na VPS wykonuje użytkownik (decyzja 4 z planu etapu) — tutaj są tylko pliki i procedura.
+
+### Blokujące z code-review — naprawione
+
+1. **`api` bez polityki restartu** → `restart: unless-stopped`. Druga połowa znaleziska (`depends_on`
+   nie działa przy starcie demona po reboocie, więc `migrate` by się nie wykonał) rozwiązana **jednostką
+   systemd**, nie polityką kontenerów: `docs/wdrozenie.md` §7 podnosi cały stack jednym `compose up`,
+   co odtwarza kolejność zależności.
+2. **`POSTGRES_*` nie pochodziło z `.env.prod`.** Usługa `postgres` dostała `env_file: .env.prod`
+   (zmienne trafiają do WNĘTRZA kontenera), healthcheck używa `$$POSTGRES_USER` (rozwijane w kontenerze,
+   nie na hoście), a wszystkie cele `prod-*` mają zaszyte `--env-file .env.prod`. Zweryfikowane
+   `docker compose config`: z wypełnionym hasłem w `.env.prod` dociera ono do wszystkich czterech miejsc.
+3. **Healthcheck `api` odpytywał nieistniejący `/api/health`** (to krok 37) → tymczasowo sprawdzenie
+   gniazda (`socket.create_connection` na 8000) z komentarzem odsyłającym do kroku 37. Wybrałem to
+   zamiast przenoszenia endpointu przed krok 36: `/api/health` to readiness z `SELECT 1` i Redis `PING`,
+   część kontraktu kroku 37 razem z Sentry — nie ma powodu robić go po kawałku. Podmiana testu przy
+   kroku 37 to jedna linia.
+4. **`COPY /app/public` przy nietrackowanym, pustym `frontend/public/`** → `RUN mkdir -p public` w stopniu
+   `build` (działa na każdym klonie, nie wymaga pilnowania pliku `.gitkeep`).
+5. **`.env.prod.example` nie do zacommitowania** → `!.env.prod.example` w `.gitignore`, z komentarzem, że
+   każdy kolejny `.env.<środowisko>.example` potrzebuje własnego wyjątku.
+6. **Brak seeda słownika rynków na produkcji.** `app/db/seed.py` rozdzielony: `seed_reference` (rynki,
+   indeksy referencyjne, mapowania dostawców) i `seed_all` (to samo + demo użytkownik/portfel/pozycje).
+   `make prod-seed` woła wariant referencyjny i **sam restartuje workera**, bo `worker/scheduler.py`
+   czyta `markets` raz przy starcie. Produkcja nie dostaje demo użytkownika z hasłem wypisywanym na
+   konsolę ani cudzych pozycji w bazie.
+
+### Znalezione dopiero przy realnej budowie obrazów
+
+7. **`useradd --create-home --uid 1000 app` w stopniu `prod` frontendu wywalał build** (kod 4, „UID
+   already in use") — obraz `node:22-slim` ma konto `node` z UID 1000 od zawsze, w odróżnieniu od
+   `python:3.12-slim`, gdzie 1000 jest wolne. Zamienione na `USER node` i `--chown=node:node`.
+   **Ten błąd nie wyszedłby z żadnej analizy statycznej ani `docker compose config`** — dopiero
+   `docker compose build` go pokazał. To argument za wpisem „CI nie buduje obrazów" niżej.
+
+**Weryfikacja (2026-07-29):** `docker compose config` przechodzi; oba obrazy `prod` budują się na drzewie
+BEZ katalogu `frontend/public` (symulacja świeżego klona); `docker run` potwierdza nie-roota
+(`uid=1000(node)` i `uid=1000(app)`), `import app.main` w obrazie API przechodzi, kontener frontendu
+oddaje `/login` z kodem 200. `make check` zielony, `make seed` i `seed --reference-only` obie działają.
+
+### Nieblokujące, świadomie zostawione
+
+- `caddy` czeka na `api: service_healthy` — awaria backendu kładzie też stronę i odnowienie certyfikatu.
+  `service_started` byłoby odporniejsze, ale przy dzisiejszym płytkim healthchecku różnica jest mała;
+  do rozważenia przy kroku 37, razem z prawdziwym `/api/health`.
+- Brak `logging: max-size` — logi JSON Caddy'ego mogą w końcu zapełnić dysk i położyć Postgresa.
+  Naturalne miejsce: krok 37 (obserwowalność) albo `/etc/docker/daemon.json` w runbooku.
+- **CI nie robi `docker build --target prod`** — znalezisko 7 przeszłoby do `main` niezauważone.
+  Najmocniejszy kandydat na dopisanie przy kroku 37.
+- `NEXT_PUBLIC_SENTRY_DSN` w `.env.prod.example` nie dotrze dziś do frontendu (musi być `args:`, bo jest
+  wypiekane w buildzie) — do domknięcia w kroku 37 razem z resztą Sentry.
+- `172.28.0.10` leży w dynamicznej puli IPAM (przydałby się `ip_range`); `backend/.dockerignore` nie
+  wyklucza `tests/`, `.claude/`, `.tokensave/`; brak CSP w Caddyfile; Redis bez `--save ""`; brak
+  `cap_drop`/`no-new-privileges`; uvicorn bez `--workers` (na jednym VPS-ie prawdopodobnie słusznie);
+  hasło Postgresa zduplikowane w `.env.prod.example` (`POSTGRES_PASSWORD` i w `DATABASE_URL`).
+- HSTS przy `TLS_MODE=internal`/`DOMAIN=localhost` przypiąłby `localhost` do HTTPS na rok i zatruł dev.
+  Runbook nie każe nigdzie uruchamiać produkcyjnego stacku pod `localhost`, więc zostaje jak jest —
+  ale gdybyś chciał spróbować lokalnie, użyj domeny typu `alphasense.test`, nie `localhost`.
+
+**Zostaje w etapie 7:** kroki 37 (Sentry + `/api/health` + alert workera), 38 (backup) i 39 (smoke test).
+
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
 Dwa **blokujące** znaleziska naprawione 2026-07-28 (patrz dziennik sesji). Pozostałe rozbrojone w sesji
@@ -219,7 +289,7 @@ Playwright 5/5.
 
 ## Backlog bezpieczeństwa (nieblokujące, do adresu w kolejnych etapach)
 
-- `get_remote_address` w rate limiterze czyta `request.client.host` — za Caddy (etap 7) to będzie adres proxy, nie klienta. Do naprawy przy wdrożeniu produkcyjnym (krok 36), inaczej rate limiting na `/auth/*` przestanie działać per-IP.
+- ~~`get_remote_address` w rate limiterze czyta `request.client.host` — za Caddy to będzie adres proxy~~ — **obalone 2026-07-29** (patrz sekcja kroku 36 wyżej): `FORWARDED_ALLOW_IPS` wskazujące konkretny adres Caddy'ego sprawia, że uvicorn podstawia realne IP klienta. Zostaje do zrobienia dokumentacja w docstringu `core/rate_limit.py` i test jednostkowy przypinający to zachowanie do wersji uvicorna.
 - Pełna weryfikacja e-maila przy rejestracji hasłem (`email_verified_at`) nie jest zrobiona — wymaga wyboru dostawcy e-mail (nowa zależność zewnętrzna, decyzja użytkownika). Dzisiejsza łatka (czyszczenie `password_hash` + unieważnienie tokenów przy pierwszym logowaniu Google na ten sam e-mail) usuwa najostrzejsze ryzyko (trwały hijack), ale nie jest pełnym rozwiązaniem.
 - Rozważyć indeks funkcyjny `lower(email)` w Postgresie (dziś normalizacja tylko w kodzie aplikacji, `ix_users_email` jest zwykłym btree case-sensitive).
 

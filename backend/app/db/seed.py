@@ -19,12 +19,21 @@ mieszanka `ON CONFLICT` (tam gdzie klucz unikalny istnieje: `markets.code`,
 wierszy i nie nadpisuje istniejących danych — w tym nie generuje nowego
 hasła demo użytkownika, jeśli już istnieje (patrz `SeedResult.demo_password`).
 
+Dwa warianty seedu, świadomie rozdzielone (plan krok 36):
+- `seed_reference` — **produkcja** (`make prod-seed`): rynki, indeksy
+  referencyjne i ich mapowania na dostawców. Bez tego worker EOD wstaje z
+  zerem jobów (`worker/scheduler.py` czyta `markets` raz przy starcie).
+- `seed_all` — **dev** (`make seed`): to samo plus demo aktywa, demo
+  użytkownik z hasłem wypisywanym na konsolę i demo portfel z pozycjami.
+  Na produkcji byłoby to konto do przejęcia i cudze dane w bazie.
+
 Cykl FK `markets ⇄ assets` (skill `alembic-migracja`, sekcja „Kolejność
-tworzenia tabel") wymusza kolejność w `seed_all`:
+tworzenia tabel") wymusza kolejność, wspólną część robi `_seed_reference`:
 1. `markets` (bez `index_asset_id` — kolumna jest `NULL`-na do kroku 3)
-2. `assets` — najpierw indeksy referencyjne, potem demo aktywa tradowalne
+2. `assets` — indeksy referencyjne
 3. `UPDATE markets SET index_asset_id = ...` (teraz `assets` już istnieją)
-4. demo `User` → `Portfolio` → `Holding`
+i dopiero potem `seed_all` dokłada demo aktywa, `User` → `Portfolio` →
+`Holding` oraz mapowania dostawców dla wszystkich aktywów.
 """
 
 from __future__ import annotations
@@ -369,33 +378,81 @@ async def _get_or_create_source_map(
     )
 
 
-async def seed_all(session: AsyncSession) -> SeedResult:
-    """Zasiej rynki, indeksy referencyjne, demo aktywa i demo użytkownika z
-    portfelem. Commituje na końcu (jedna transakcja, wszystko albo nic).
+async def _seed_reference(session: AsyncSession) -> dict[str, Asset]:
+    """Rynki, indeksy referencyjne i dowiązanie `markets.index_asset_id`.
+
+    NIE commituje — robi to wołający (`seed_all` albo `seed_reference`), żeby
+    cały seed pozostał jedną transakcją „wszystko albo nic".
     """
     # 1. markets (bez index_asset_id)
     for market_seed in MARKETS:
         await _get_or_create_market(session, market_seed)
     await session.flush()  # markets.code musi być widoczne przed insertem assets (FK)
 
-    # 2. assets — najpierw indeksy referencyjne, potem demo aktywa tradowalne
+    # 2. indeksy referencyjne
     index_assets_by_market: dict[str, Asset] = {}
     for asset_seed in INDEX_ASSETS:
         index_assets_by_market[asset_seed.market_code] = await _get_or_create_asset(
             session, asset_seed
         )
 
+    # 3. UPDATE markets SET index_asset_id = ... (assets już istnieją)
+    for market_code, asset in index_assets_by_market.items():
+        await _link_market_index(session, market_code=market_code, index_asset_id=asset.id)
+
+    return index_assets_by_market
+
+
+async def seed_reference(session: AsyncSession) -> int:
+    """Zasiej WYŁĄCZNIE dane słownikowe: rynki, ich indeksy referencyjne i
+    mapowania tych indeksów na symbole dostawców. Zwraca liczbę rynków.
+
+    To jest seed PRODUKCYJNY (`make prod-seed`, `docs/wdrozenie.md`).
+    `seed_all` niżej dokłada demo użytkownika z hasłem wypisywanym na
+    konsolę, demo portfel i demo pozycje — w bazie produkcyjnej byłoby to
+    konto do przejęcia i cudze pozycje w danych użytkownika, nie „przykład".
+
+    Bez tego seeda produkcja nie działa, tylko wygląda, jakby działała:
+    `worker/scheduler.py::_load_markets` czyta tabelę `markets` RAZ przy
+    starcie i rejestruje po jednym jobie EOD na rynek (ADR-102, CLAUDE.md
+    #3.6). Na pustej tabeli worker wstaje z zerem jobów (loguje
+    `scheduler.no_markets_found`), nigdy nie pobiera ceny — i nic się nie
+    psuje głośno. Stąd kolejność w runbooku: `prod-migrate` → `prod-seed` →
+    **restart workera**.
+    """
+    index_assets_by_market = await _seed_reference(session)
+
+    index_symbols = {asset.symbol for asset in index_assets_by_market.values()}
+    assets_by_symbol = {asset.symbol: asset for asset in index_assets_by_market.values()}
+    for source_map_seed in SOURCE_MAPS:
+        if source_map_seed.asset_symbol not in index_symbols:
+            continue  # mapowanie demo aktywa — nie na produkcję
+        await _get_or_create_source_map(
+            session,
+            asset_id=assets_by_symbol[source_map_seed.asset_symbol].id,
+            seed=source_map_seed,
+        )
+
+    await session.commit()
+    return len(MARKETS)
+
+
+async def seed_all(session: AsyncSession) -> SeedResult:
+    """Zasiej rynki, indeksy referencyjne, demo aktywa i demo użytkownika z
+    portfelem. Commituje na końcu (jedna transakcja, wszystko albo nic).
+
+    Seed DEWELOPERSKI. Na produkcję patrz `seed_reference` wyżej.
+    """
+    index_assets_by_market = await _seed_reference(session)
+
+    # 2. demo aktywa tradowalne
     demo_assets_by_symbol: dict[str, Asset] = {}
     for asset_seed in DEMO_ASSETS:
         demo_assets_by_symbol[asset_seed.symbol] = await _get_or_create_asset(session, asset_seed)
     # patrz komentarz przy `DEMO_HOLDINGS` — reużycie rekordu indeksu CRYPTO
     demo_assets_by_symbol["bitcoin"] = index_assets_by_market["CRYPTO"]
 
-    # 3. UPDATE markets SET index_asset_id = ... (assets już istnieją)
-    for market_code, asset in index_assets_by_market.items():
-        await _link_market_index(session, market_code=market_code, index_asset_id=asset.id)
-
-    # 4. demo User → Portfolio → Holding
+    # 3. demo User → Portfolio → Holding
     user, raw_password = await _get_or_create_demo_user(session)
     portfolio = await _get_or_create_demo_portfolio(session, user_id=user.id)
     for holding_seed in DEMO_HOLDINGS:
@@ -404,7 +461,7 @@ async def seed_all(session: AsyncSession) -> SeedResult:
             session, portfolio_id=portfolio.id, asset_id=asset.id, seed=holding_seed
         )
 
-    # 5. asset_source_map (plan krok 23) — bez tego `worker/jobs/
+    # 4. asset_source_map (plan krok 23) — bez tego `worker/jobs/
     # ingest_market.py` nie ma dla żadnego z aktywów wyżej co przetłumaczyć
     # na symbol dostawcy; wszystkie `assets` istnieją już w tym momencie
     # (kroki 2/4 wyżej), stąd na końcu.

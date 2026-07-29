@@ -1,6 +1,10 @@
 .env
 .env.*
+# Wzorce konfiguracji (bez wartości) mają być w repo — same `.env`/`.env.prod`
+# nigdy (CLAUDE.md §3.9). Każdy nowy `.env.<środowisko>.example` wymaga tu
+# własnego wyjątku, inaczej `.env.*` wyżej połknie go po cichu.
 !.env.example
+!.env.prod.example
 __pycache__/
 *.pyc
 .venv/
