@@ -1,0 +1,29 @@
+# Nocny backup produkcyjnej bazy (plan krok 38).
+#
+# Instalacja na VPS-ie:
+#   sudo cp infra/backup/alphasense-backup.cron /etc/cron.d/alphasense-backup
+#   sudo chmod 644 /etc/cron.d/alphasense-backup
+#   sudo systemctl restart cron        # (na Debianie/Ubuntu; RHEL: crond)
+#
+# Format `/etc/cron.d` ma POLE UŻYTKOWNIKA (szóste) — to nie jest crontab -e.
+# Ścieżka do repo jest zaszyta; jeśli klonowałeś gdzie indziej niż
+# `/opt/alphasense`, popraw obie linie.
+#
+# Dlaczego 05:30 czasu HOSTA (na VPS-ie zwykle UTC): ostatnia ingestia EOD to
+# rynek US o 23:15 czasu Nowego Jorku, czyli ok. 04:15 UTC zimą i 03:15 UTC
+# latem, a zaraz po niej lecą snapshoty portfeli. Backup o 05:30 łapie
+# kompletną dobę danych i nie konkuruje o łącze z pobieraniem notowań.
+#
+# Wyjście skryptu (log + ewentualny błąd) idzie pocztą do roota — to celowa
+# druga ścieżka powiadomienia obok Sentry, na wypadek gdyby padło samo Sentry
+# albo `SENTRY_DSN` był pusty. Jeśli VPS nie ma MTA, przekieruj do pliku:
+#   >> /var/log/alphasense-backup.log 2>&1
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+30 5 * * *   root  cd /opt/alphasense && ./infra/backup/backup.sh
+
+# Test odtworzenia raz w tygodniu (poniedziałek 06:30), na kopii ściągniętej
+# z bucketu. Nie częściej: odtworzenie zajmuje tyle miejsca, ile waży baza.
+30 6 * * 1   root  cd /opt/alphasense && ./infra/backup/restore-test.sh

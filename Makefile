@@ -1,5 +1,6 @@
 .PHONY: up down logs migrate revision seed test check fmt shell psql \
-        prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql
+        prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql \
+        backup backup-check backup-restore-test
 
 up:        ## dev: postgres, redis, api, frontend, worker
 	docker compose up -d --build
@@ -73,3 +74,19 @@ prod-ps:
 
 prod-psql:
 	$(PROD) exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+# --- backup (krok 38) -------------------------------------------------------
+#
+# Bez `$(PROD)`: skrypty same składają wywołanie compose'a z `--env-file
+# .env.prod` (`infra/backup/common.sh`), bo muszą działać także spod crona,
+# gdzie `make` nie uczestniczy. Te cele są wygodą przy ręcznym przebiegu —
+# harmonogram jedzie z `infra/backup/alphasense-backup.cron`.
+
+backup-check:         ## prod: sprawdź bucket i klucz przed pierwszym backupem
+	./infra/backup/check-bucket.sh
+
+backup:               ## prod: jednorazowy dump + wysyłka do bucketu (to samo, co cron)
+	./infra/backup/backup.sh
+
+backup-restore-test:  ## prod: odtwórz ostatnią kopię do jednorazowej bazy i sprawdź ją
+	./infra/backup/restore-test.sh

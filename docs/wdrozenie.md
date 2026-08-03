@@ -20,7 +20,7 @@ z `Makefile`, nigdy gołym `docker compose -f docker-compose.prod.yml`. Cele maj
 | `GOOGLE_CLIENT_ID` / `SECRET` + dopisany redirect URI | Google Cloud Console | krok 2 |
 | Klucze `FINNHUB` / `ALPHAVANTAGE` | panele dostawców | krok 2 |
 | DSN-y Sentry | Sentry | dopiero krok 37 |
-| Bucket S3-compatible | Backblaze B2 / Wasabi | dopiero krok 38 |
+| Bucket S3-compatible + klucz aplikacyjny do niego | Backblaze B2 / Wasabi | krok 38 (sekcja 9) |
 
 **Rekord A musi propagować się PRZED startem Caddy.** Caddy próbuje wystawić certyfikat
 natychmiast po starcie, a produkcyjne Let's Encrypt ma ostry limit **błędów** — źle
@@ -189,11 +189,129 @@ make prod-ps
 Jeżeli zmienił się słownik rynków (`app/db/seed.py`), powtórz `make prod-seed` — seed jest
 idempotentny, a restart workera jest konieczny, żeby zobaczył nowe rynki.
 
-## 9. Odtwarzanie z backupu
+## 9. Kopia zapasowa i odtwarzanie
 
-Skrypt backupu i procedura odtworzenia to **krok 38** — ta sekcja zostanie uzupełniona
-razem z `infra/backup/backup.sh`. Do tego czasu produkcja **nie ma kopii zapasowej**; nie
-wprowadzaj do niej danych, na których Ci zależy.
+Nocny `pg_dump` z VPS-a do bucketu S3-compatible (krok 38). Skrypty:
+`infra/backup/backup.sh` (kopia) i `infra/backup/restore-test.sh` (odtworzenie próbne).
+
+### 9.1. Konfiguracja
+
+Załóż bucket u dostawcy S3-compatible (Backblaze B2 lub Wasabi) i **klucz aplikacyjny
+ograniczony do tego jednego bucketu**, z prawem zapisu i kasowania. Klucz leży na VPS-ie —
+czyli dokładnie na maszynie, przed której utratą się zabezpieczasz — więc nie może być
+kluczem do całego konta.
+
+Ustawienia bucketu, obowiązkowe oba:
+
+- **prywatny** (B2: *Files in Bucket are: Private*) — sprawdzalne żądaniem bez
+  uwierzytelnienia, ma wrócić `401`, nie `200`;
+- **reguła cyklu życia „zachowaj tylko ostatnią wersję"** (B2: *Lifecycle Settings → Keep
+  only the last version of the file*). Bez niej `s3 rm` z retencji jedynie **ukrywa** plik,
+  a stare dumpy leżą dalej i naliczają się do rachunku — retencja 7/4 jest wtedy pozorna.
+  B2 domyślnie trzyma wszystkie wersje, więc to trzeba włączyć ręcznie.
+
+Klucz aplikacyjny: dostęp do **tego jednego bucketu**, `Read and Write`, bez „Allow List All
+Bucket Names" (skrypty nigdy nie listują kont, a wyłączone listowanie ogranicza szkody po
+wycieku klucza). `keyID` → `BACKUP_S3_ACCESS_KEY`, `applicationKey` → `BACKUP_S3_SECRET_KEY`;
+ten drugi B2 pokazuje **jeden jedyny raz**.
+
+Uzupełnij w `.env.prod` sekcję „backup" (`BACKUP_S3_BUCKET`, `_ENDPOINT`, `_REGION`,
+`_ACCESS_KEY`, `_SECRET_KEY`; przykładowe endpointy obu dostawców są w komentarzu
+`.env.prod.example`) i nadaj plikowi `chmod 600`. Endpoint i region muszą pasować do
+regionu bucketu — przy niezgodności B2 odpowiada `NoSuchBucket`, tak samo jak przy literówce
+w nazwie. Przy pustych wartościach skrypt **nadal robi dump**, ale zostawia go na VPS-ie
+i raportuje to jako ostrzeżenie do Sentry.
+
+Zanim uruchomisz `make backup`, sprawdź sam klucz — skrypt potrzebuje zapisu, listowania,
+kopii serwerowej (dzienna→tygodniowa), odczytu i kasowania, a `s3 ls` weryfikuje tylko jedno
+z tych pięciu:
+
+```bash
+./infra/backup/check-bucket.sh
+```
+
+Skrypt zapisuje obiekt próbny, listuje, kopiuje, ściąga i porównuje treść, kasuje po sobie
+(razem ze starymi wersjami) i ostrzega, jeśli bucket jest publiczny albo nie ma reguły
+cyklu życia. Bazy ani dumpów nie dotyka.
+
+```bash
+make backup            # pierwszy przebieg — ręcznie, żeby zobaczyć log
+```
+
+W logu szukasz `Dump gotowy i czytelny`, `Wysyłka do s3://…` i `Gotowe.`.
+
+### 9.2. Harmonogram
+
+```bash
+sudo cp infra/backup/alphasense-backup.cron /etc/cron.d/alphasense-backup
+sudo chmod 644 /etc/cron.d/alphasense-backup
+sudo systemctl restart cron
+```
+
+Backup o **05:30 czasu hosta** (po ostatniej ingestii EOD — rynek US o 23:15 czasu Nowego
+Jorku, czyli ok. 04:15 UTC — i po snapshotach portfeli) oraz test odtworzenia w
+poniedziałki o 06:30. Harmonogram jest w cronie **hosta**, nie w APSchedulerze workera:
+worker to kontener tego samego stacku, więc awaria, po której backup jest najbardziej
+potrzebny, zabrałaby ze sobą także backup.
+
+Retencja: **7 kopii dziennych** (`daily/`) i **4 tygodniowe** (`weekly/`, awansowana kopia
+niedzielna). Liczona w sztukach, nie w dniach — przy zatrzymanym cronie reguła wiekowa
+skasowałaby po tygodniu również ostatnią zdrową kopię.
+
+Awaria backupu idzie do Sentry (`python -m app.cli alert`, tag `component=infra`,
+fingerprint `backup-failed`, czyli jeden problem z licznikiem zamiast nowej sprawy co noc)
+**oraz** pocztą crona do roota. Dwie drogi celowo: przy pustym `SENTRY_DSN` zostaje poczta,
+a przy padniętym MTA zostaje Sentry.
+
+### 9.3. Test odtworzenia — obowiązkowy
+
+```bash
+make backup-restore-test
+```
+
+Ściąga **najnowszą kopię z bucketu** (nie lokalną — testujemy tę, która przeżyje utratę
+VPS-a), odtwarza ją do jednorazowej bazy `restore_test_<znacznik>` obok produkcyjnej,
+porównuje `alembic_version` z bazą produkcyjną, sprawdza, że słownik rynków nie jest pusty,
+i **zawsze** kasuje bazę testową. Bazy produkcyjnej nie dotyka.
+
+Uruchom go po pierwszym backupie i po każdej większej zmianie schematu. Backup, którego
+nikt nie odtworzył, nie jest backupem.
+
+### 9.4. Odtworzenie produkcji z kopii
+
+Sytuacja: VPS stracony albo baza uszkodzona. Na czystej maszynie wykonaj kroki 1–4 tego
+runbooka (kod, `.env.prod`, obrazy, start stacku) — z **tym samym `SECRET_KEY`**, inaczej
+wszystkie sesje i tokeny odświeżające użytkowników przestaną działać.
+
+```bash
+# 1. Stack stoi, migracje przeszły — zatrzymaj to, co pisze do bazy.
+make prod-down
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d postgres
+
+# 2. Pobierz kopię (najnowszy klucz z `daily/` lub wybrany z `weekly/`).
+aws s3 ls s3://<bucket>/alphasense/daily/ --endpoint-url <endpoint>
+aws s3 cp s3://<bucket>/alphasense/daily/<plik>.dump . --endpoint-url <endpoint>
+
+# 3. Odtwórz do PUSTEJ bazy. `--clean --if-exists` kasuje istniejące obiekty —
+#    uruchamiaj to wyłącznie świadomie, na bazie, którą chcesz nadpisać.
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec -T postgres \
+  pg_restore -U portfel -d portfel --clean --if-exists --no-owner --no-privileges --exit-on-error \
+  < <plik>.dump
+
+# 4. Podnieś resztę i sprawdź.
+make prod-up
+curl -s https://<domena>/api/health
+```
+
+Jeżeli nie masz na hoście `aws`, użyj tego samego obrazu, co skrypty:
+`docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION -v "$PWD:/backup" amazon/aws-cli:2.36.14 --endpoint-url <endpoint> s3 cp <źródło> /backup/`.
+Tag musi być pełny (`2.36.14`) — `amazon/aws-cli:2` nie istnieje w rejestrze.
+
+**Czego dump NIE zawiera:** `.env.prod` (sekrety — trzymaj jego kopię w menedżerze haseł),
+certyfikatów Caddy'ego (wystawią się same) i danych Redisa (cache, odtwarza się sam).
+Notowania i kursy walut worker dociągnie przy najbliższych jobach EOD, ale **historia
+snapshotów portfeli jest nieodtwarzalna z zewnątrz** (ADR-101: append-only, bez
+przeliczania wstecz) — to ona jest realnym powodem, dla którego ten backup istnieje.
 
 ---
 
