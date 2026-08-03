@@ -32,10 +32,22 @@
 # Na VPS-ie nieszkodliwe (dev tam nie stoi), lokalnie to gotowy wypadek.
 name: alphasense-prod
 
+# Rotacja logów (krok 37). Domyślny sterownik `json-file` Dockera NIE ma limitu
+# rozmiaru — logi dostępowe Caddy'ego rosną, aż zapełnią dysk VPS-a, a wtedy
+# pierwszy pada Postgres (brak miejsca na WAL), czyli awaria całej aplikacji z
+# powodu jej własnych logów. Kotwica YAML zamiast wpisu w `/etc/docker/daemon.json`,
+# żeby limit jechał z repo i obowiązywał także po odtworzeniu VPS-a od zera.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     # Jawne trzy zmienne zamiast `env_file: .env.prod` — Caddy jest JEDYNYM
     # kontenerem z publicznym portem i nie ma powodu nosić w środowisku
     # `SECRET_KEY`, hasła bazy, `GOOGLE_CLIENT_SECRET` ani kluczy do bucketu.
@@ -55,10 +67,17 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
+      # `service_started`, nie `service_healthy` (zmiana z kroku 37): od kiedy
+      # healthcheck `api` naprawdę odpytuje bazę, „API niezdrowe" znaczy
+      # „Postgres jeszcze nie wstał". Przy `service_healthy` Caddy czekałby
+      # wtedy w nieskończoność — a to on wystawia TLS i frontend, więc awaria
+      # albo powolne odtwarzanie bazy po reboocie VPS-a kładłoby CAŁĄ stronę
+      # i blokowało odnowienie certyfikatu. Startujemy proxy od razu: użytkownik
+      # dostaje 502 na `/api/*` zamiast błędu TLS na wszystkim.
       api:
-        condition: service_healthy
+        condition: service_started
       frontend:
-        condition: service_healthy
+        condition: service_started
     networks:
       alphasense:
         # Statyczny adres, żeby `FORWARDED_ALLOW_IPS` w `api` wskazywał
@@ -73,6 +92,7 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    logging: *default-logging
     # `env_file`, nie `environment: ${...}` — `POSTGRES_*` mają przyjść z
     # `.env.prod` do WNĘTRZA kontenera, niezależnie od tego, co compose zna po
     # stronie hosta. Wcześniejsza wersja podstawiała je na hoście i na czystym
@@ -94,6 +114,7 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    logging: *default-logging
     # Cache można wyczyścić w każdej chwili (CLAUDE.md §3.7), więc dane
     # Redisa świadomie nie mają wolumenu — po restarcie startuje pusty.
     # Wyjątek do zapamiętania: liczniki rate limitu też tu żyją, więc
@@ -117,6 +138,7 @@ services:
     # Jednorazowa: ma się wykonać i zakończyć. `unless-stopped` zapętliłoby
     # migracje w kółko.
     restart: "no"
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +154,7 @@ services:
     # Bez tego API było JEDYNĄ usługą bez polityki restartu — po reboocie
     # VPS-a wstawał cały stack poza nim, a Caddy oddawał 502 na `/api/*`.
     restart: unless-stopped
+    logging: *default-logging
     environment:
       # Adres Caddy'ego — jedyne proxy, któremu uvicorn ma wierzyć przy
       # odczycie `X-Forwarded-For`. Przy KONKRETNYM adresie uvicorn idzie po
@@ -151,14 +174,13 @@ services:
     networks:
       - alphasense
     healthcheck:
-      # TYMCZASOWO sprawdzenie na poziomie gniazda: czy uvicorn nasłuchuje.
+      # Readiness z kroku 37: `GET /api/health` (`SELECT 1` + Redis `PING`).
       #
-      # Docelowo ma tu być `GET /api/health` (readiness: `SELECT 1` + Redis
-      # `PING`) — to jednak KROK 37, endpoint jeszcze nie istnieje. Pierwsza
-      # wersja tego pliku już go odpytywała i kładła cały stack: 404 →
-      # `urlopen` rzuca → `api` nigdy `healthy` → `caddy` (`depends_on:
-      # service_healthy`) nigdy nie startuje → brak TLS i frontendu, przy
-      # zdrowym API. Przy kroku 37 zamień test na odpytanie `/api/health`.
+      # Trasa zawsze oddaje `200` — o zdrowiu decyduje CIAŁO, i to celowo:
+      # padnięty Redis daje `status: degraded`, ale aplikacja działa dalej
+      # (CLAUDE.md #3.7), więc kontener zostaje ZDROWY. Niezdrowy jest
+      # dopiero przy `db: down` — wtedy każde żądanie użytkownika i tak
+      # padnie. Stąd sprawdzamy pole `db`, a nie kod HTTP i nie `status`.
       #
       # Obraz produkcyjny nie ma `curl` ani `wget` (python:3.12-slim), stąd
       # sprawdzenie przez interpreter, który i tak jest w obrazie.
@@ -167,7 +189,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=5).close()",
+          "import json,urllib.request; raise SystemExit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5))['db'] == 'up' else 1)",
         ]
       interval: 15s
       timeout: 10s
@@ -182,6 +204,7 @@ services:
     command: ["python", "-m", "worker.scheduler"]
     env_file: .env.prod
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -203,7 +226,17 @@ services:
         # przeglądarka trafia pod `https://<domena>/api/...`, ten sam origin
         # co frontend, więc CORS w ogóle nie wchodzi w grę.
         NEXT_PUBLIC_API_URL: /api
+        # Sentry frontendu (krok 37) — osobny projekt/DSN niż backend, patrz
+        # `.env.prod.example`. Też wypiekane w buildzie: zmiana DSN wymaga
+        # `make prod-build`, nie samego restartu.
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        # Opcjonalne: bez tokenu source mapy nie są wysyłane, a build i tak
+        # przechodzi (`next.config.ts`).
+        SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+        SENTRY_ORG: ${SENTRY_ORG:-}
+        SENTRY_PROJECT: ${SENTRY_PROJECT:-}
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - alphasense
     healthcheck:

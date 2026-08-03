@@ -60,6 +60,14 @@ Uzupełnij wszystkie puste wartości. Trzy pułapki:
   menedżerze haseł — po utracie VPS-a odtworzenie backupu bez `SECRET_KEY` unieważni
   wszystkie sesje użytkowników.
 
+Obserwowalność (krok 37) jest opcjonalna — z pustymi DSN-ami wszystko działa, tylko bez
+alertów. Jeśli ją włączasz, załóż w Sentry **dwa projekty**: backendowy (`python-fastapi`,
+DSN → `SENTRY_DSN`, czytany przez `api` i `worker` w runtime) i frontendowy (`nextjs`,
+DSN → `NEXT_PUBLIC_SENTRY_DSN`, **wypiekany w bundle**, więc jego zmiana wymaga
+`make prod-build`, nie restartu). `APP_VERSION` ustaw na skrót commita
+(`git rev-parse --short HEAD`) — bez tego każdy błąd w Sentry wygląda tak samo niezależnie
+od wdrożenia i nie widać, czy poprawka pomogła.
+
 ## 3. Budowa obrazów
 
 ```bash
@@ -125,8 +133,20 @@ dane w bazie użytkownika. Deweloperski `make seed` (pełny) zostaje bez zmian.
 ```bash
 make prod-ps          # wszystkie usługi Up/healthy, `migrate` w stanie Exited (0)
 curl -I https://<domena>/
+curl -s https://<domena>/api/health        # {"status":"ok","db":"up","redis":"up","version":"..."}
 curl -s https://<domena>/api/meta/freshness | head
 ```
+
+`GET /api/health` zawsze zwraca `200` — stan czytasz z ciała. `status: "degraded"` z
+`redis: "down"` znaczy „działa, wolniej" (cache można wyczyścić w każdej chwili,
+CLAUDE.md §3.7) i kontener celowo **zostaje zdrowy**; `db: "down"` to realna awaria i
+healthcheck Dockera oznacza wtedy `api` jako `unhealthy`. `version` to `APP_VERSION` — szybki
+sposób sprawdzenia, czy wdrożenie faktycznie podmieniło kod.
+
+Jeśli włączyłeś Sentry: sprawdź, czy w logach `api` i `worker` jest `sentry.enabled`
+(`make prod-logs s=api`). `sentry.disabled` znaczy pusty `SENTRY_DSN`. Alerty z jobów EOD
+przychodzą jako `Ingestia rynku <KOD> zakończona statusem failed|partial` — `failed` to
+brak jakichkolwiek świeżych danych rynku, `partial` to część aktywów.
 
 Ręcznie w przeglądarce, na telefonie i na desktopie: rejestracja → utworzenie portfela →
 dodanie pozycji → wartość w PLN, struktura procentowa, ranking rynków. Formalny smoke test

@@ -229,6 +229,13 @@ DEMO_HOLDINGS: tuple[HoldingSeed, ...] = (
 SOURCE_MAPS: tuple[SourceMapSeed, ...] = (
     # GPW
     SourceMapSeed("WIG20", "GPW", "stooq", "wig20", 1),
+    # Fallback dopisany przy kroku 37: WIG20 był JEDYNYM aktywem GPW bez
+    # drugiego dostawcy, więc każda odmowa Stooqa (404/anty-bot, obserwowane
+    # środowiskowo) kończyła przebieg rynku statusem `partial` — a od tego
+    # kroku `partial` to alert w Sentry, więc powtarzalny brak fallbacku
+    # nauczyłby ignorować alerty. Symbol zweryfikowany na żywo przez
+    # yfinance (`WIG20.WA` zwraca notowania; `^WIG20`/`WIG20` nie istnieją).
+    SourceMapSeed("WIG20", "GPW", "yfinance", "WIG20.WA", 2),
     SourceMapSeed("CDR", "GPW", "stooq", "cdr", 1),
     SourceMapSeed("CDR", "GPW", "yfinance", "CDR.WA", 2),
     SourceMapSeed("PKN", "GPW", "stooq", "pkn", 1),

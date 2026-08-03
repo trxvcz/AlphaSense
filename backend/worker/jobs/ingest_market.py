@@ -32,8 +32,10 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
+import sentry_sdk
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -195,8 +197,7 @@ async def _run_ingestion(db: AsyncSession, *, market_code: str, run_date: date) 
         # `last_run_at` zamiast świeżego `status=failed`, czyli dokładnie
         # ten przypadek, przed którym ostrzega SKILL („bez tego nie
         # wiadomo, czy dane są świeże"). Zapisujemy skromny wiersz i
-        # re-raise'ujemy — scheduler/wołający nadal ma wyjątek do
-        # zaalarmowania (Sentry w etapie 7).
+        # re-raise'ujemy — scheduler/wołający nadal ma wyjątek do obsłużenia.
         run = IngestionRun(
             market_code=market_code,
             started_at=started_at,
@@ -215,6 +216,12 @@ async def _run_ingestion(db: AsyncSession, *, market_code: str, run_date: date) 
             run_date=run_date.isoformat(),
             error=f"{type(exc).__name__}: {exc}",
         )
+        # Krok 37: raportujemy TUTAJ, a nie licząc na wołającego, bo wołający
+        # bywa dwojaki — APScheduler (jego `logging.exception` trafiłby do
+        # Sentry sam) i `python -m app.cli ingest`, który wyjątek łapie i
+        # wypisuje na konsolę. Podwójne zgłoszenie z drogi schedulera odsiewa
+        # domyślna `DedupeIntegration` (ten sam obiekt wyjątku).
+        sentry_sdk.capture_exception(exc)
         raise
 
     assets_ok = sum(provider_counts.values())
@@ -264,11 +271,45 @@ async def _run_ingestion(db: AsyncSession, *, market_code: str, run_date: date) 
     else:
         # Porażka całości (status=failed) albo częściowa (status=partial)
         # to sygnał operacyjny — SKILL `job-eod` reguła 6: „niepowodzenie
-        # całości = alert" (Sentry podłączony dopiero w etapie 7; do tego
-        # czasu `structlog.error`/`warning` jest jedynym kanałem).
+        # całości = alert".
         logger.error("ingest_market.finished_with_errors", **log_fields)
+        _alert_ingestion_problem(status, log_fields, error_field)
 
     return status
+
+
+def _alert_ingestion_problem(
+    status: str, fields: dict[str, object], error_field: str | None
+) -> None:
+    """Sygnał operacyjny do Sentry po nieudanym przebiegu (krok 37).
+
+    `failed` → poziom `error`: rynek nie ma dziś ŻADNYCH świeżych danych,
+    więc wycena portfeli policzy się na wczorajszych cenach i ani UI, ani
+    użytkownik się o tym nie dowiedzą. `partial` → `warning`: część aktywów
+    ma dane, część nie (dziś np. WIG20 bez fallbacku yfinance) — realne, ale
+    nie kładzie widoku.
+
+    Wysyłamy jawnie, bo `structlog` w tym repo pisze poza `logging`, więc
+    `logger.error` wyżej nie stworzyłby zdarzenia (patrz
+    `core/observability.py`). Bez `SENTRY_DSN` to no-op.
+
+    `fingerprint` po rynku i statusie: powtarzalna awaria jednego rynku ma
+    być JEDNYM problemem z licznikiem, a nie nową sprawą każdej doby —
+    inaczej pierwszy tydzień z odmawiającym Stooqiem zasypałby skrzynkę i
+    nauczył ignorować alerty.
+    """
+    level: Literal["error", "warning"] = "error" if status == _STATUS_FAILED else "warning"
+    market_code = str(fields.get("market_code", "?"))
+
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("market_code", market_code)
+        scope.set_tag("ingestion_status", status)
+        scope.set_context("ingestion_run", {**fields, "error": error_field})
+        scope.fingerprint = ["ingest_market", market_code, status]
+        sentry_sdk.capture_message(
+            f"Ingestia rynku {market_code} zakończona statusem {status}",
+            level=level,
+        )
 
 
 async def _ingest_asset_ohlcv(

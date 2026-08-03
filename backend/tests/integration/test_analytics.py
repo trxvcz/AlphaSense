@@ -568,12 +568,24 @@ async def test_market_ranking_of_other_user_is_404(client: AsyncClient) -> None:
 class _BrokenRedis:
     """Podwójny Redisa, który udaje niedostępne połączenie na każdą
     operację — symuluje awarię sieci/serwera Redis (nie błąd programisty),
-    dokładnie to, co `core/cache.py` musi łapać i degradować do no-op."""
+    dokładnie to, co `core/cache.py` musi łapać i degradować do no-op.
+
+    `incr`/`expire` są tu, bo żądanie HTTP przechodzi najpierw przez
+    `DefaultRateLimitMiddleware` (krok 37), który liczy limit domyślny tym
+    samym klientem Redisa. Bez nich testy padały na `AttributeError` —
+    a przy okazji te dwie metody dokładają realną asercję: przy padniętym
+    Redisie limit domyślny też musi przepuścić żądanie, nie zwrócić `500`."""
 
     async def get(self, key: str) -> str | None:
         raise RedisConnectionError("connection refused (test)")
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        raise RedisConnectionError("connection refused (test)")
+
+    async def incr(self, key: str) -> int:
+        raise RedisConnectionError("connection refused (test)")
+
+    async def expire(self, key: str, seconds: int) -> bool:
         raise RedisConnectionError("connection refused (test)")
 
 

@@ -36,6 +36,21 @@ FROM deps AS build
 # musi wrócić do absolutnej.
 ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+# Sentry (krok 37). Pusty domyślnie — bez DSN SDK startuje wyłączone, więc
+# build bez tego argumentu jest w pełni poprawny (tak leci `make check` i CI).
+# Ten sam DSN obsługuje przeglądarkę i proces Node serwujący SSR
+# (`sentry.server.config.ts`), dlatego kontener frontendu nie potrzebuje
+# `.env.prod` w środowisku.
+ARG NEXT_PUBLIC_SENTRY_DSN=
+ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
+
+# Wysyłka source map do Sentry — tylko gdy token jest podany (patrz
+# `next.config.ts`). `ARG`, nie `ENV`: token nie ma zostać w warstwach obrazu.
+ARG SENTRY_AUTH_TOKEN=
+ARG SENTRY_ORG=
+ARG SENTRY_PROJECT=
+
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY . .

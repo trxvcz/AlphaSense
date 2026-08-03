@@ -15,7 +15,11 @@ import argparse
 import asyncio
 import sys
 from datetime import date, datetime
+from typing import Literal, cast
 
+import sentry_sdk
+
+from app.core.observability import init_sentry
 from app.db.seed import seed_all, seed_reference
 from app.db.session import AsyncSessionLocal
 from worker.jobs.ingest_market import ingest_market
@@ -45,6 +49,49 @@ async def _run_seed(*, reference_only: bool) -> None:
         )
     else:
         print("Demo użytkownik już istniał — hasło pozostaje niezmienione.")
+
+
+_ALERT_LEVELS = ("error", "warning", "info")
+
+
+def _run_alert(*, message: str, level: str, fingerprint: str) -> int:
+    """Wysyła pojedyncze zdarzenie do Sentry (plan krok 38).
+
+    Istnieje dla skryptów infrastrukturalnych z HOSTA — `infra/backup/backup.sh`
+    i `restore-test.sh` — które muszą zaalarmować, a nie mają jak: DSN, `release`
+    i `environment` są konfiguracją aplikacji (`core/observability.py`), a
+    składanie koperty Sentry `curl`-em w bashu oznaczałoby drugie, rozjeżdżające
+    się miejsce z tą wiedzą.
+
+    `fingerprint` jest obowiązkowy i pochodzi od wołającego: powtarzalna awaria
+    backupu ma być JEDNYM problemem z licznikiem, a nie nową sprawą każdej nocy
+    (ta sama zasada, co przy alertach ingestii — `worker/jobs/ingest_market.py`).
+    """
+    if not init_sentry("infra"):
+        print(
+            "Sentry wyłączone (pusty SENTRY_DSN) — alert nie został wysłany.",
+            file=sys.stderr,
+        )
+        # Zero, nie błąd: pusty DSN to poprawna konfiguracja (dev, wdrożenie bez
+        # Sentry). Kod wyjścia tej komendy mówi „czy udało się zaalarmować",
+        # a wołający i tak kończy się własnym niezerowym kodem.
+        return 0
+
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("source", "infra-script")
+        scope.fingerprint = [fingerprint]
+        # `cast`, bo argparse pilnuje `choices=_ALERT_LEVELS`, ale typ z
+        # `Namespace` to zwykły `str`.
+        sentry_sdk.capture_message(message, level=cast(Literal["error", "warning", "info"], level))
+
+    # Proces kończy się natychmiast po tej linii — bez jawnego `flush` zdarzenie
+    # zostałoby w kolejce transportu i alert nigdy by nie doleciał.
+    sentry_sdk.flush(timeout=5.0)
+    # Symetrycznie do gałęzi wyżej: kod wyjścia jest w obu przypadkach zerowy,
+    # więc wołający skrypt (`infra/backup/*.sh`) rozróżnia „wysłane" od
+    # „Sentry wyłączone" wyłącznie po tej linii w logu.
+    print(f"Alert wysłany do Sentry (poziom {level}, fingerprint {fingerprint}).", file=sys.stderr)
+    return 0
 
 
 def _parse_date(value: str) -> date:
@@ -106,11 +153,44 @@ def main(argv: list[str] | None = None) -> int:
         help="Dzień snapshotu (YYYY-MM-DD); domyślnie dziś (`portfolio_service.today()`)",
     )
 
+    alert_parser = subparsers.add_parser(
+        "alert",
+        help=(
+            "Wyślij zdarzenie do Sentry — dla skryptów z hosta, które nie mają "
+            "dostępu do konfiguracji aplikacji (infra/backup/*.sh, plan krok 38)"
+        ),
+    )
+    alert_parser.add_argument("--message", required=True, help="Treść zdarzenia")
+    alert_parser.add_argument(
+        "--level",
+        default="error",
+        choices=_ALERT_LEVELS,
+        help="Poziom zdarzenia w Sentry (domyślnie error)",
+    )
+    alert_parser.add_argument(
+        "--fingerprint",
+        required=True,
+        help=(
+            "Klucz grupowania w Sentry, np. `backup-failed`. Powtarzalna awaria "
+            "ma być jednym problemem z licznikiem, nie nową sprawą co dobę"
+        ),
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "alert":
+        return _run_alert(message=args.message, level=args.level, fingerprint=args.fingerprint)
 
     if args.command == "seed":
         asyncio.run(_run_seed(reference_only=args.reference_only))
         return 0
+
+    # Krok 37: ręczne uruchomienie joba raportuje do Sentry tak samo jak
+    # automatyczne — inaczej `python -m app.cli ingest` na produkcji byłby
+    # ślepą plamą. `seed` pomijamy świadomie: to komenda administracyjna
+    # uruchamiana pod okiem człowieka, jej błąd i tak ląduje na konsoli.
+    if args.command in {"ingest", "snapshot"}:
+        init_sentry("cli")
 
     if args.command == "ingest":
         try:

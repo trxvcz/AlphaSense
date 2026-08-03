@@ -129,6 +129,24 @@ async def _cleanup_ingestion_runs(db_session: AsyncSession) -> AsyncGenerator[No
     await db_session.commit()
 
 
+@pytest.fixture
+def sentry_messages(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Przechwytuje alerty `sentry_sdk.capture_message` z joba (krok 37).
+
+    Podmiana na module `sentry_sdk`, bo `ingest_market.py` importuje cały
+    moduł, nie samą funkcję. Bez `SENTRY_DSN` prawdziwe `capture_message`
+    jest no-opem, więc test bez tego podwójnego nie odróżniłby „alert
+    wysłany" od „alertu nie ma wcale".
+    """
+    captured: list[tuple[str, str]] = []
+
+    def _spy(message: str, level: str = "info", **_kwargs: Any) -> None:
+        captured.append((message, level))
+
+    monkeypatch.setattr(ingest_market_module.sentry_sdk, "capture_message", _spy)
+    return captured
+
+
 async def test_ingest_market_ohlcv_success_writes_prices_and_ingestion_run(
     db_session: AsyncSession, temp_asset: Asset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,7 +251,10 @@ async def test_ingest_market_second_run_same_day_overwrites_not_duplicates(
 
 
 async def test_ingest_market_continues_after_one_asset_fails(
-    db_session: AsyncSession, temp_asset: Asset, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession,
+    temp_asset: Asset,
+    monkeypatch: pytest.MonkeyPatch,
+    sentry_messages: list[tuple[str, str]],
 ) -> None:
     other_asset = Asset(
         symbol=f"TEST-{uuid.uuid4().hex[:8]}",
@@ -302,6 +323,11 @@ async def test_ingest_market_continues_after_one_asset_fails(
         assert run.assets_ok == 1
         assert run.error is not None
         assert temp_asset.symbol in run.error
+
+        # Krok 37: przebieg częściowy to `warning`, nie `error` — część
+        # aktywów ma świeże dane, więc widok użytkownika nadal się liczy.
+        assert [level for _, level in sentry_messages] == ["warning"]
+        assert "GPW" in sentry_messages[0][0]
     finally:
         await db_session.execute(delete(Price).where(Price.asset_id == other_asset.id))
         await db_session.execute(
@@ -309,6 +335,44 @@ async def test_ingest_market_continues_after_one_asset_fails(
         )
         await db_session.execute(delete(Asset).where(Asset.id == other_asset.id))
         await db_session.commit()
+
+
+async def test_ingest_market_total_failure_alerts_sentry_with_error_level(
+    db_session: AsyncSession,
+    temp_asset: Asset,
+    monkeypatch: pytest.MonkeyPatch,
+    sentry_messages: list[tuple[str, str]],
+) -> None:
+    """Przebieg bez ani jednego zaciągniętego aktywa (`status=failed`) wysyła
+    alert o poziomie `error` (krok 37, SKILL `job-eod` reguła 6).
+
+    Sam `structlog.error` nie wystarcza: `structlog` w tym repo pisze poza
+    `logging`, więc bez jawnego `capture_message` cicha awaria rynku nie
+    zostawiłaby żadnego śladu poza logiem kontenera — a wycena portfeli
+    policzyłaby się na wczorajszych cenach, nie sygnalizując tego w UI.
+    """
+    fake = _FakeProvider(
+        "fake",
+        {Capability.OHLCV},
+        ohlcv_by_symbol={"FAILS": RuntimeError("dostawca padł dla tego symbolu")},
+    )
+    monkeypatch.setattr(ingest_market_module, "build_fallback_chain", lambda market_code: [fake])
+    monkeypatch.setattr(ingest_market_module, "list_active_assets", _returning([temp_asset]))
+
+    db_session.add(
+        AssetSourceMap(asset_id=temp_asset.id, provider="fake", provider_symbol="FAILS", priority=1)
+    )
+    await db_session.commit()
+
+    before = datetime.now(UTC)
+    status = await ingest_market("GPW", run_date=_RUN_DATE)
+
+    assert status == "failed"
+    run = await _latest_ingestion_run(db_session, "GPW", after=before)
+    assert run.status == "failed"
+
+    assert [level for _, level in sentry_messages] == ["error"]
+    assert "GPW" in sentry_messages[0][0]
 
 
 async def test_ingest_market_fx_writes_fx_rates(

@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_redis
 from app.core.rate_limit import limiter
 from app.db.session import AsyncSessionLocal, engine, get_db
 from app.main import app
@@ -42,9 +42,9 @@ async def _clean_auth_tables() -> AsyncGenerator[None, None]:
     yield
 
 
-@pytest.fixture(autouse=True)
-def _reset_rate_limiter() -> None:
-    """Czyści liczniki `slowapi` w Redisie przed każdym testem.
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_rate_limiter() -> None:
+    """Czyści liczniki OBU limiterów w Redisie przed każdym testem.
 
     Bez tego limity (np. `AUTH_RATE_LIMIT` na `/auth/register`/`/auth/login`)
     liczyłyby się kumulatywnie po całej sesji pytest — wszystkie żądania
@@ -54,8 +54,18 @@ def _reset_rate_limiter() -> None:
     dany test przypadkiem nie łapie 429. Ta sama zasada izolacji co
     `_clean_auth_tables` powyżej, tylko dla magazynu Redis limitera
     zamiast tabel Postgresa.
+
+    Dwa mechanizmy = dwa magazyny do wyczyszczenia (patrz `core/rate_limit.py`):
+    `limiter.reset()` zdejmuje liczniki slowapi (dekoratory `/auth/*`), a
+    `DELETE ratelimit:default:*` — liczniki limitu domyślnego. Po dodaniu
+    tego drugiego limitu bez czyszczenia suita zaczęłaby się sypać dopiero
+    przy ~100 żądaniach w minucie, czyli losowo i zależnie od kolejności.
     """
     limiter.reset()
+    redis = get_redis()
+    keys = [key async for key in redis.scan_iter(match="ratelimit:default:*")]
+    if keys:
+        await redis.delete(*keys)
 
 
 @pytest_asyncio.fixture

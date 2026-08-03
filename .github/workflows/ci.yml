@@ -51,3 +51,20 @@ jobs:
       - name: Testy jednostkowe (Vitest)
         run: cd frontend && npm run test
       - run: cd frontend && npm run build
+
+  # Obrazy produkcyjne (krok 36) budują się INACZEJ niż deweloperskie i mają
+  # własne pułapki, których żadna analiza statyczna nie widzi — stopień `prod`
+  # frontendu wywalał się kiedyś na `useradd --uid 1000` (konto `node` w obrazie
+  # bazowym już zajmuje ten UID) i wyszło to dopiero przy realnym `docker build`.
+  # Ten job jest po to, żeby taki błąd nie wjechał na `main` niezauważony.
+  obrazy-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `frontend/public/` jest w repo puste, a git nie śledzi pustych katalogów
+      # — świeży `checkout` to dokładnie ten stan, w którym Dockerfile musi
+      # sobie poradzić (`RUN mkdir -p public` w stopniu `build`).
+      - name: Backend (target prod)
+        run: docker build --target prod -t alphasense-api:ci backend
+      - name: Frontend (target prod)
+        run: docker build --target prod -t alphasense-frontend:ci frontend

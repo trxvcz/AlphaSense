@@ -32,6 +32,11 @@ class Settings(BaseSettings):
 
     # --- aplikacja ---
     env: str = "dev"
+    # Wersja wdrożonego kodu — zwracana przez `GET /api/health` i wysyłana do
+    # Sentry jako `release`, żeby dało się powiedzieć „ten błąd przyszedł z
+    # wdrożenia X". Na produkcji ustawiana ze zmiennej środowiskowej (np. na
+    # skrót commita), patrz `docs/wdrozenie.md`.
+    app_version: str = "0.1.0"
     secret_key: str = "zmien-mnie"
     access_token_minutes: int = 15
     refresh_token_days: int = 30

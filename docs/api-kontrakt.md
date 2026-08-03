@@ -216,6 +216,15 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
     { "code": "CRYPTO", "name": "Rynek krypto (24/7)", "last_run_at": null, "status": null, "stale": true }
   ]
 }
+
+// GET /health  (publiczne, bez `Authorization`; poza limitem domyślnym — patrz „Rate limiting")
+// ZAWSZE 200, także gdy zależność leży: stan czyta się z ciała, nie z kodu HTTP.
+// `status: "ok"` tylko gdy oba komponenty odpowiadają; inaczej "degraded".
+// Padnięty Redis to nadal działająca aplikacja (CLAUDE.md #3.7) — healthcheck
+// kontenera patrzy na pole `db`, nie na `status` (docker-compose.prod.yml).
+// Odpowiedź nie niesie żadnych szczegółów awarii (host, użytkownik, wyjątek) —
+// trasa jest publiczna; szczegóły idą do logów i do Sentry.
+{ "status": "ok", "db": "up", "redis": "up", "version": "0.1.0" }
 ```
 
 ## Cache
@@ -234,7 +243,11 @@ Redis można wyczyścić w każdej chwili — awaria/brak Redisa nie zwraca bł�
 
 ## Rate limiting
 
-Limit domyślny (`RATE_LIMIT_DEFAULT_PER_MINUTE`, domyślnie 100/minutę) obowiązuje każdą trasę pod `/api`, liczony per adres IP + ścieżka. `POST /auth/register` i `POST /auth/login` mają ostrzejszy, dedykowany limit (`RATE_LIMIT_AUTH_PER_MINUTE`, domyślnie 5/minutę) — chroni przed zalewaniem rejestracjami i zgadywaniem hasła. `/auth/refresh`, `/auth/logout` i `/auth/google/*` zostają na limicie domyślnym (wymagają już poprawnego tokenu albo idą przez Google). Liczniki żyją w Redisie (nie w pamięci procesu API), więc przetrwają restart/wiele replik.
+Limit domyślny (`RATE_LIMIT_DEFAULT_PER_MINUTE`, domyślnie 100/minutę) obowiązuje każdą trasę pod `/api`, liczony per adres IP + ścieżka, w oknie stałym (pełna minuta zegarowa). `POST /auth/register` i `POST /auth/login` mają ostrzejszy, dedykowany limit (`RATE_LIMIT_AUTH_PER_MINUTE`, domyślnie 5/minutę) w oknie przesuwnym — chroni przed zalewaniem rejestracjami i zgadywaniem hasła. `/auth/refresh`, `/auth/logout` i `/auth/google/*` zostają na limicie domyślnym (wymagają już poprawnego tokenu albo idą przez Google). Liczniki żyją w Redisie (nie w pamięci procesu API), więc przetrwają restart/wiele replik.
+
+`GET /health` jest **wyłączone z limitu domyślnego** (`DEFAULT_LIMIT_EXEMPT_PATHS` w `core/rate_limit.py`): healthcheck kontenera odpytuje je co kilkanaście sekund z jednego adresu, więc pod wspólnym licznikiem `429` wyglądałoby dla Dockera jak awaria API i restartowałoby zdrowy kontener.
+
+Przy niedostępnym Redisie zachowanie obu warstw jest **różne i celowo asymetryczne**: limit domyślny przepuszcza ruch (awaria cache'a nie może kłaść całego API, CLAUDE.md #3.7), limit `/auth/register`/`/auth/login` zwraca błąd (przepuszczenie otwierałoby drogę do zgadywania haseł).
 
 Przekroczenie limitu → `429`:
 

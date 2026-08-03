@@ -15,3 +15,7 @@ slowapi==0.1.10
 httpx==0.28.1
 yfinance==1.5.2
 apscheduler==3.11.3
+# Obserwowalność (krok 37). Extra `[fastapi]` dociąga tylko warunek wersji
+# FastAPI/Starlette — integracje SDK włączają się same, gdy framework jest
+# zainstalowany. Bez `SENTRY_DSN` w środowisku pakiet nic nie robi (dev).
+sentry-sdk[fastapi]==2.66.1

@@ -3,9 +3,9 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 7 — Wdrożenie produkcyjne (**krok 36 zrobiony**, niezacommitowany; następny krok 37).
+**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36, 37 i 38 zrobione**; następny krok 39 — smoke test, KONIEC FAZY 1).
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
-**Ostatnia aktualizacja:** 2026-07-29
+**Ostatnia aktualizacja:** 2026-08-03
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -19,7 +19,7 @@ Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
-| 7 | Wdrożenie produkcyjne | 🟡 w toku (krok 36) |
+| 7 | Wdrożenie produkcyjne | 🟡 w toku (kroki 36-38 zrobione) |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
@@ -64,8 +64,8 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 34 Panel „Twoje rynki"
 [x] 35 Formularz mobile, stany puste, dark mode
 [x] 36 Caddy + compose produkcyjny (wdrożenie na VPS: po Twojej stronie)
-[ ] 37 Sentry + /health + alerty
-[ ] 38 Backup pg_dump
+[x] 37 Sentry + /health + alerty
+[x] 38 Backup pg_dump (skrypty + cron + test odtworzenia; bucket do założenia po Twojej stronie)
 [ ] 39 Smoke test 375px + desktop  ← KONIEC FAZY 1
 [ ] 40 Zwroty dzienne (bez dni composition_change)
 [ ] 41 Ryzyko: zmienność, Sharpe, drawdown, beta
@@ -85,8 +85,25 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 - [x] ~~Push commitów etapu 4 na `origin/main`~~ — **nieaktualne**: po `git fetch` (2026-07-28) `origin/main == main == 0b43c54`, zero commitów różnicy. Cały etap 4 **i** etap 6 (kroki 29-32) są już na GitHubie. Ten wpis żył w STATUS.md od 2026-07-24 i wprowadzał w błąd.
 - [x] GOOGLE_CLIENT_ID/SECRET uzupełnione przez użytkownika. `/api/auth/google/start` zweryfikowany z prawdziwymi danymi (poprawny redirect do accounts.google.com, PKCE S256, state) — pozostaje do Twojej weryfikacji: pełny klik-przez-flow w przeglądarce (Google Cloud Console → Authorized redirect URIs musi mieć `http://localhost:8000/api/auth/google/callback`).
 - [ ] **Domena produkcyjna** — potrzebna przed krokiem 36 (Caddyfile, `CORS_ORIGINS`, `GOOGLE_REDIRECT_URI`). Krok 4 planu jest odhaczony, ale nazwa domeny nie jest nigdzie w repo zapisana.
-- [ ] **Bucket S3-compatible + klucz aplikacyjny** (Backblaze B2 lub Wasabi) — potrzebne przed krokiem 38. Trafiają do `.env` na VPS, nigdy do repo.
-- [ ] **Dwa DSN-y Sentry** (projekt backendowy + frontendowy) — potrzebne przed krokiem 37.
+- [x] **Bucket S3-compatible + klucz aplikacyjny** — zrobione 2026-08-03: Backblaze B2, bucket
+  `alphasense-backup-pl` w regionie `eu-central-003` (UE — dane osobowe użytkowników nie wychodzą poza
+  Europę), klucz aplikacyjny ograniczony do tego jednego bucketu, `Read and Write`, bez „Allow List All
+  Bucket Names" (`ListBuckets` odbijane jako „not entitled" — potwierdzone). Wszystkie pięć operacji,
+  których używają skrypty, sprawdzone na żywym buckecie przez nowe `make backup-check`: zapis, listowanie,
+  kopia serwerowa dzienna→tygodniowa, odczyt z porównaniem treści, kasowanie. Bucket prywatny (żądanie bez
+  klucza → HTTP 401). Wartości siedzą w `.env.prod`, nie w repo.
+  Reguła cyklu życia ustawiona i sprawdzona: `NoncurrentVersionExpiration: 1 dzień`, **bez** `Expiration`
+  na wersjach bieżących — kasowane są tylko wersje zostające po `s3 rm`, a żywe dumpy nie mają terminu
+  ważności. Gdyby ktoś kiedyś zamienił ją na regułę „usuń pliki starsze niż N dni", kopie znikałyby
+  niezależnie od retencji 7/4 (liczonej w sztukach właśnie po to, by zepsuty cron nie skasował ostatniej
+  zdrowej kopii). `make backup-check` weryfikuje obecność reguły, ale nie jej treść — przy zmianie
+  ustawień bucketu sprawdź `s3api get-bucket-lifecycle-configuration` ręcznie.
+  - [ ] **`chmod 600 .env.prod` na VPS-ie** i uzupełnienie go o resztę konfiguracji produkcyjnej
+    (`POSTGRES_USER`, `POSTGRES_DB` i dalej) — bez nich `make backup` przerwie się przed dotknięciem bucketu.
+- [ ] **Dwa DSN-y Sentry** (projekt backendowy + frontendowy) — ~~potrzebne przed krokiem 37~~: krok 37
+  jest zrobiony i działa bez nich (pusty DSN = Sentry wyłączone, aplikacja bez zmian). DSN-y są
+  potrzebne dopiero przy **wdrożeniu produkcyjnym** — do `.env.prod`, patrz `docs/wdrozenie.md`.
+  Konsekwencja czekania: pierwsze wdrożenie poleci bez raportowania błędów.
 
 ## Krok 33 — widoki struktury (zrobiony 2026-07-28)
 
@@ -215,15 +232,16 @@ oddaje `/login` z kodem 200. `make check` zielony, `make seed` i `seed --referen
 
 ### Nieblokujące, świadomie zostawione
 
-- `caddy` czeka na `api: service_healthy` — awaria backendu kładzie też stronę i odnowienie certyfikatu.
-  `service_started` byłoby odporniejsze, ale przy dzisiejszym płytkim healthchecku różnica jest mała;
-  do rozważenia przy kroku 37, razem z prawdziwym `/api/health`.
-- Brak `logging: max-size` — logi JSON Caddy'ego mogą w końcu zapełnić dysk i położyć Postgresa.
-  Naturalne miejsce: krok 37 (obserwowalność) albo `/etc/docker/daemon.json` w runbooku.
-- **CI nie robi `docker build --target prod`** — znalezisko 7 przeszłoby do `main` niezauważone.
-  Najmocniejszy kandydat na dopisanie przy kroku 37.
-- `NEXT_PUBLIC_SENTRY_DSN` w `.env.prod.example` nie dotrze dziś do frontendu (musi być `args:`, bo jest
-  wypiekane w buildzie) — do domknięcia w kroku 37 razem z resztą Sentry.
+- ~~`caddy` czeka na `api: service_healthy`~~ — **domknięte w kroku 37**: `service_started` dla `api`
+  i `frontend`. Od kiedy healthcheck realnie odpytuje bazę, „API niezdrowe" znaczy „Postgres jeszcze
+  nie wstał", a Caddy czekałby wtedy w nieskończoność — kładąc TLS i frontend przez awarię backendu.
+- ~~Brak `logging: max-size`~~ — **domknięte w kroku 37**: kotwica YAML `x-logging` (10 MB × 5) na
+  wszystkich pięciu usługach. W repo, nie w `/etc/docker/daemon.json` — limit ma przetrwać odtworzenie
+  VPS-a od zera.
+- ~~**CI nie robi `docker build --target prod`**~~ — **domknięte w kroku 37**: job `obrazy-prod`
+  w `.github/workflows/ci.yml` buduje oba obrazy w stopniu `prod`.
+- ~~`NEXT_PUBLIC_SENTRY_DSN` nie dotrze do frontendu~~ — **domknięte w kroku 37**: przeszedł do `args:`
+  w `docker-compose.prod.yml` i `ARG`/`ENV` w `frontend/Dockerfile`.
 - `172.28.0.10` leży w dynamicznej puli IPAM (przydałby się `ip_range`); `backend/.dockerignore` nie
   wyklucza `tests/`, `.claude/`, `.tokensave/`; brak CSP w Caddyfile; Redis bez `--save ""`; brak
   `cap_drop`/`no-new-privileges`; uvicorn bez `--workers` (na jednym VPS-ie prawdopodobnie słusznie);
@@ -232,7 +250,197 @@ oddaje `/login` z kodem 200. `make check` zielony, `make seed` i `seed --referen
   Runbook nie każe nigdzie uruchamiać produkcyjnego stacku pod `localhost`, więc zostaje jak jest —
   ale gdybyś chciał spróbować lokalnie, użyj domeny typu `alphasense.test`, nie `localhost`.
 
-**Zostaje w etapie 7:** kroki 37 (Sentry + `/api/health` + alert workera), 38 (backup) i 39 (smoke test).
+**Zostaje w etapie 7:** krok 39 (smoke test).
+
+## Krok 37 — Sentry + `/api/health` + alerty (ZROBIONY 2026-08-03)
+
+**Co powstało:** `app/core/observability.py` (`init_sentry(component)`, jedna inicjalizacja dla API,
+workera i CLI) · `app/core/health.py` (`GET /api/health`) · Sentry we froncie
+(`instrumentation-client.ts`, `instrumentation.ts`, `sentry.server.config.ts`, `withSentryConfig`
+w `next.config.ts`) · alerty ingestii w `worker/jobs/ingest_market.py` · rotacja logów i healthcheck
+readiness w `docker-compose.prod.yml` · job `obrazy-prod` w CI · `APP_VERSION` w obu `.env*.example`.
+
+**Sentry jest wyłączone, dopóki `SENTRY_DSN` jest pusty** — dev, `make check` i Playwright nie robią
+ani jednego żądania sieciowego do Sentry. Dwa projekty (backend + frontend), bo DSN frontendowy jedzie
+do przeglądarki każdego użytkownika i nie jest sekretem, a backendowy jest. API i worker dzielą jeden
+DSN, rozróżniane tagiem `component` (`api`/`worker`/`cli`) — inaczej nie dałoby się odfiltrować awarii
+jobów EOD od błędów żądań HTTP. `send_default_pii=False` plus `max_request_body_size="never"`: ciało
+`POST /auth/login` niesie hasło jawnie, a scrubber działa na polach o znanych nazwach, nie na surowym
+bajcie ciała. Tracing (`traces_sample_rate=0`) świadomie wyłączony — ten krok to alerty o awariach,
+nie profilowanie, a każda transakcja zjada limit darmowego planu.
+
+**Job EOD raportuje jawnym `capture_message`, nie przez logi.** `structlog` w tym repo pisze **poza**
+`logging`, więc `LoggingIntegration` nie widzi naszych `logger.error(...)` — gdyby nie jawne wywołanie,
+alerty operacyjne byłyby cichą fikcją. `status=failed` → poziom `error` (rynek nie ma dziś ŻADNYCH
+świeżych danych, wycena policzy się na wczorajszych cenach i nikt się nie dowie), `partial` → `warning`.
+`fingerprint` po rynku i statusie: powtarzalna awaria jednego rynku to JEDEN problem z licznikiem,
+nie nowa sprawa każdej doby.
+
+**`GET /api/health` zawsze oddaje `200`** — o zdrowiu decyduje ciało (`{status, db, redis, version}`).
+Padnięty Redis daje `degraded`, ale kontener zostaje ZDROWY, bo aplikacja bez cache'a działa dalej
+(CLAUDE.md #3.7); healthcheck w compose czyta pole `db`, nie kod HTTP i nie `status`. Trasa jest
+publiczna, więc niesie wyłącznie `up`/`down` — komunikat wyjątku (host bazy, wersja Postgresa) idzie
+do logów i Sentry, nie do odpowiedzi. Wyłączona z limitu domyślnego przez
+`DEFAULT_LIMIT_EXEMPT_PATHS`, a nie `@limiter.exempt` — ten dekorator byłby tu adnotacją, która wygląda
+na zabezpieczenie i nim nie jest (limit domyślny nakłada middleware, nie slowapi).
+
+### Znalezione przy okazji — dwa defekty spoza zakresu kroku
+
+1. **Limit domyślny nie działał ani na jednej trasie od czasu FastAPI 0.139** (regresja kroku 16,
+   wykryta przy pisaniu zwolnienia dla `/api/health`). `SlowAPIMiddleware` szuka handlera przez
+   `_find_route_handler(app.routes, scope)`, a FastAPI 0.139 nie spłaszcza już `include_router` do
+   `APIRoute` — wstawia `_IncludedRouter` bez atrybutu `endpoint`. Handler nigdy się nie znajdował,
+   a `_should_exempt` traktuje `handler is None` jako „zwolnione z limitu": middleware przepuszczało
+   **wszystko**, cicho i wyglądając na działające (130 żądań w 0,3 s bez jednego `429` i bez śladu
+   w Redisie). Ta sama zmiana routingu, która w etapie 5 cicho zepsuła harness `test_isolation.py`.
+   Naprawione własnym `DefaultRateLimitMiddleware` (`INCR`/`EXPIRE`, okno stałe) zamiast kolejnej
+   zależności od wewnętrznych mechanizmów cudzej biblioteki. Limity `/auth/*` (dekorator) działały
+   i działają — to one chronią hasła, limit domyślny to grubszy bezpiecznik przeciwzalewowy.
+   **Awaria Redisa obsługiwana różnie w każdej warstwie, świadomie**: `/auth/*` zwraca błąd (inaczej
+   otwarta droga do brute-force), limit domyślny przepuszcza ruch z logiem `warning` (inaczej awaria
+   cache'a staje się awarią całego API).
+2. **Testy przechodziły przez podwójnego Redisa, który nie miał `incr`/`expire`.** `_BrokenRedis`
+   w `tests/integration/test_rate_limit.py` mockował tylko `get`/`set`, więc nowy middleware wywalał
+   się na nim `AttributeError` zamiast degradować. Doszedł test „limit domyślny przepuszcza ruch przy
+   padniętym Redisie" — najważniejsza gwarancja tej warstwy, więc pokryta wprost.
+
+**Fallback WIG20** (`yfinance`, `WIG20.WA`) dopisany do `SOURCE_MAPS`: WIG20 był JEDYNYM aktywem GPW
+bez drugiego dostawcy, więc każda odmowa Stooqa kończyła rynek statusem `partial` — a od tego kroku
+`partial` to alert, więc powtarzalny brak fallbacku nauczyłby ignorować alerty. Symbol zweryfikowany
+na żywo (`^WIG20`/`WIG20` u yfinance nie istnieją, `WIG20.WA` zwraca notowania).
+
+**Żywa weryfikacja** (dev stack, 2026-08-03): `make check` zielone (**247 passed**, ruff, mypy strict
+55 plików, Vitest 29, `next build`), Playwright **5/5**. `GET /api/health` → `{"status":"ok","db":"up",
+"redis":"up","version":"0.1.0"}`. **120 żądań na `/api/health` → 120× `200`** (zwolnienie działa),
+**120 na `/api/meta/freshness` → 100× `200` + 20× `429`** (limit domyślny egzekwowany dokładnie na
+setce — dowód, że naprawa z punktu 1 wyżej realnie działa, nie tylko w teście). `ingest --market GPW`
+→ `status=ok`, 3/3 aktywa, w tym WIG20 przez fallback yfinance przy otwartym obwodzie Stooqa.
+
+### Backlog kroku 37 (nieblokujące)
+
+- **Dwa DSN-y Sentry wciąż nieustawione** (patrz „Decyzje oczekujące") — cały tor jest zweryfikowany
+  wyłącznie w trybie wyłączonym. Realne dostarczenie zdarzenia do projektu Sentry pozostaje
+  niezweryfikowane; naturalny moment na sprawdzenie to pierwsze wdrożenie (krok 39).
+- **`APP_VERSION` domyślnie `0.1.0` i nikt go na produkcji nie ustawi automatycznie** — runbook każe
+  wpisać `$(git rev-parse --short HEAD)` ręcznie. Do rozważenia przy kroku 39: wyliczać w `make prod-build`.
+- **Source mapy frontendu nie lecą do Sentry bez `SENTRY_AUTH_TOKEN`** — ślady stosu z przeglądarki
+  będą zminifikowane. Włącza się samo po uzupełnieniu trzech zmiennych, bez zmiany w kodzie.
+- **`/api/health` nie sprawdza workera.** Padnięty scheduler nie zmienia odpowiedzi — widać go dopiero
+  przez `/meta/freshness` (`stale=True`). Świadomie: healthcheck kontenera `api` nie ma powodu padać
+  z powodu innego kontenera. Osobny healthcheck workera to kandydat na krok 38/39.
+- **Okno stałe zamiast przesuwnego w limicie domyślnym** — dopuszcza krótki skok na styku dwóch okien
+  (do 2× limitu przez chwilę). Dla bezpiecznika przeciwzalewowego bez znaczenia; `/auth/*` zostaje na
+  przesuwnym oknie slowapi, bo tam precyzja realnie chroni hasła.
+- **Baza dev miała 22 osierocone aktywa testowe** (`HOLP*`/`HOLU*`/`TEST-*`) z przerwanych przebiegów
+  sprzed napisania teardownów — przez nie GPW kończył `partial` mimo zdrowych danych, czyli stały
+  fałszywy alert. Usunięte ręcznie 2026-08-03. Sprawdzone, że wyciek **nie jest aktywny**: `pytest
+  tests/integration/test_holdings.py` przed i po daje ten sam licznik (22 → 22). Zmiana w kodzie
+  niepotrzebna, ale warto o tym pamiętać, gdy `/meta/freshness` znów pokaże dziwny rynek.
+
+## Krok 38 — nocny `pg_dump` poza VPS (ZROBIONY 2026-08-03)
+
+**Co powstało:** `infra/backup/backup.sh` (dump → weryfikacja → wysyłka do bucketu → retencja) ·
+`infra/backup/restore-test.sh` (odtworzenie ostatniej kopii do jednorazowej bazy) ·
+`infra/backup/common.sh` (wspólne ładowanie `.env.prod`, `aws` z obrazu, alert) ·
+`infra/backup/alphasense-backup.cron` · `make backup` i `make backup-restore-test` ·
+`python -m app.cli alert` + `tests/unit/test_cli_alert.py` · sekcja backupu w `.env.prod.example` ·
+`docs/wdrozenie.md` §9 (konfiguracja, harmonogram, test odtworzenia, pełne odtworzenie produkcji).
+
+**Dopisane 2026-08-03 przy podłączaniu prawdziwego bucketu:** `infra/backup/check-bucket.sh`
+(`make backup-check`) — pełny obieg na obiekcie próbnym: zapis, listowanie, kopia serwerowa, odczyt
+**z porównaniem treści**, kasowanie, plus ostrzeżenia o publicznym buckecie i braku reguły cyklu życia.
+Powód: `aws s3 ls` sprawdza jedną operację z pięciu. Klucz bez prawa kasowania przechodzi `s3 ls`
+i wywala się dopiero na retencji — czyli ósmej nocy, w logu crona, którego nikt nie czyta.
+
+Przy tej okazji wyszedł **błąd, którego weryfikacja kroku 38 nie mogła złapać**: domyślny obraz
+`amazon/aws-cli:2` nie istnieje w rejestrze (są tylko `latest`, `amd64`, `arm64` i pełne `2.x.y`), więc
+**każda** wysyłka do bucketu padłaby na `docker: not found`. Nie wyszło wcześniej, bo przy pustych
+`BACKUP_S3_*` skrypt w ogóle nie dotyka `aws` — cała ścieżka S3 była nieprzetestowana aż do dziś.
+Naprawione przypięciem `amazon/aws-cli:2.36.14` (`common.sh`, `docs/wdrozenie.md`, ten plik). Przypięta
+wersja, nie `latest`: w ścieżce backupu nowe wydanie obrazu mogłoby zepsuć odtwarzanie dokładnie w dniu,
+w którym jest potrzebne.
+
+**Cała ścieżka S3 przeszła test end-to-end na żywym B2 (2026-08-03)** — przez stack DEV
+(`BACKUP_COMPOSE_FILE=docker-compose.yml ENV_FILE=.env`) i na osobnym prefiksie `_e2e`, żeby dump z deva
+nie mógł nigdy trafić pod `alphasense/daily/` i zostać wzięty za produkcyjną kopię. Sprawdzone:
+dump → `pg_restore --list` → wysyłka pod `daily/` → retencja; następnie awans niedzielny (`date -u +%u`
+podstawiony na 7) → kopia serwerowa do `weekly/` → retencja dzienna obniżona do 1 skasowała **starszą**
+z dwóch kopii; na koniec `restore-test.sh` ściągnął najnowszą kopię Z BUCKETU, odtworzył ją do
+jednorazowej bazy (`alembic=a2f2b11877d4`, 12 rynków) i po sobie posprzątał. Prefiks `_e2e` skasowany
+razem z wersjami — bucket jest pusty.
+
+**Skrypty jadą z HOSTA, nie z workera.** Backup w APSchedulerze byłby kontenerem tego samego stacku —
+awaria, po której backup jest najbardziej potrzebny (padnięta aplikacja, pełny dysk, pętla restartów),
+zabrałaby ze sobą także backup. Cron hosta przeżywa padnięty stack.
+
+**Jedyną zależnością na VPS-ie jest Docker.** `pg_dump`, `pg_restore` i `aws` biorą się z obrazów
+(`postgres:16` — dokładnie ten sam, na którym stoi baza, oraz `amazon/aws-cli:2.36.14`), więc nie ma czego
+instalować ani pilnować: `pg_dump` starszy od serwera odmawia pracy, a to jest ten rodzaj awarii, który
+wychodzi dopiero w dniu odtwarzania. Klucze do bucketu jadą do kontenera przez `-e NAZWA` (wartość z
+otoczenia, nie z argumentów) — nie widać ich w `ps aux` ani w `docker inspect`.
+
+**Dump jest weryfikowany od razu po powstaniu** (`pg_restore --list` na świeżym pliku). Rozmiar > 0 nie
+znaczy „czytelny": przerwany `pg_dump` zostawia plik, który wygląda normalnie do dnia, w którym trzeba
+z niego odtworzyć bazę. Niedokończony dump jest kasowany przez trap — zostawiony, byłby przy odtwarzaniu
+wybrany jako „najnowszy".
+
+**Retencja liczona w SZTUKACH kopii (7 dziennych, 4 tygodniowe), nie w dniach.** Reguła wiekowa
+(„kasuj starsze niż 7 dni") przy zatrzymanym cronie skasowałaby po tygodniu również ostatnią zdrową
+kopię — czyli awaria harmonogramu zamieniałaby się w utratę backupu. Przy liczeniu sztuk zepsuty cron
+co najwyżej zostawia stare dumpy. Kopia tygodniowa powstaje w niedzielę **kopiowaniem serwerowym**
+w obrębie bucketu, bez drugiej wysyłki przez łącze VPS-a.
+
+**`make backup-restore-test` ściąga kopię Z BUCKETU, nie bierze lokalnej** — testujemy tę, która
+przeżyje utratę VPS-a. Odtwarza do bazy `restore_test_<znacznik>` obok produkcyjnej, porównuje
+`alembic_version` z bazą żywą (dump sprzed migracji, która już poszła na produkcję, postawi bazę,
+na której API nie wstanie), sprawdza, że słownik rynków nie jest pusty, i **zawsze** kasuje bazę
+testową (trap + wzorzec nazwy sprawdzany przed `dropdb`). `pg_restore` dostaje `--exit-on-error`:
+domyślnie wypisuje błędy poszczególnych poleceń i **kończy się kodem 0**, więc bez tej flagi test
+przechodziłby na dumpie, z którego odtworzyła się połowa tabel.
+
+**Alerty przez `python -m app.cli alert`, nie `curl`-em na API Sentry.** DSN, `release` i `environment`
+są konfiguracją aplikacji (`core/observability.py`); składanie koperty w bashu byłoby drugim,
+rozjeżdżającym się miejscem z tą wiedzą. Nowy tag `component=infra` odróżnia awarię nocnego backupu od
+wyjątku w żądaniu użytkownika. Fingerprinty (`backup-failed`, `backup-restore-failed`,
+`backup-s3-not-configured`) — powtarzalna awaria to jeden problem z licznikiem, nie nowa sprawa co noc
+(ta sama zasada, co przy alertach ingestii z kroku 37). Druga, niezależna droga powiadomienia to poczta
+crona do roota: przy pustym `SENTRY_DSN` zostaje poczta, przy padniętym MTA zostaje Sentry.
+
+**Puste `BACKUP_S3_*` nie wyłączają backupu po cichu** — dump powstaje lokalnie, a skrypt wysyła
+ostrzeżenie „kopia leży tylko na VPS-ie". Cicha wersja tego stanu to dokładnie ten backup, którego nie
+ma w dniu awarii.
+
+**Żywa weryfikacja (2026-08-03, przeciw stackowi dev)** — skrypty mają `BACKUP_COMPOSE_FILE` właśnie po
+to, żeby dało się je przepuścić przez dev, a nie sprawdzać po raz pierwszy na produkcji:
+`backup.sh` → dump 27 KiB, `pg_restore --list` przechodzi, plik dostaje `600`; `restore-test.sh` →
+`alembic=a2f2b11877d4`, `markets=12`, `prices=73`, baza testowa utworzona i usunięta (`pg_database`
+po przebiegu bez śladu); retencja lokalna przy trzech dumpach i limicie 2 kasuje najstarszy;
+**ścieżka awarii** (podstawiona nieistniejąca baza) kasuje niedokończony plik, woła alert i kończy się
+kodem 1; obcięty dump (4 kB) jest przez `pg_restore --list` odrzucany, czyli strażnik z punktu wyżej
+realnie działa. `shellcheck` (obraz `koalaman/shellcheck:stable`) czysty na wszystkich trzech skryptach.
+`make check` zielony: **251 testów** backendu, ruff, mypy strict 55 plików, Vitest 29, `next build`.
+
+### Backlog kroku 38 (nieblokujące)
+
+- **Nikt nie zauważy, że cron w ogóle nie wystartował.** Alert leci przy awarii przebiegu, ale usunięty
+  wpis w `/etc/cron.d`, wyłączony demon crona albo padnięty VPS nie generują żadnego zdarzenia —
+  cisza wygląda identycznie jak sukces. Właściwe narzędzie to Sentry Crons (check-in „miałem się odezwać
+  do 06:00"), do rozważenia razem z DSN-ami przy pierwszym wdrożeniu. Namiastką jest plik
+  `$BACKUP_DIR/last-success` ze znacznikiem czasu ostatniego udanego przebiegu.
+- **`shellcheck` nie jest w `make check` ani w CI** — uruchamiany ręcznie przez obraz Dockera. Dopięcie
+  go do joba w CI to kilka linii, ale to zmiana pipeline'u poza zakresem tego kroku.
+- **Test odtworzenia dzieli instancję Postgresa z produkcją** — na jednym VPS-ie nie ma alternatywy,
+  ale zjada miejsce na dysku równe rozmiarowi bazy i konkuruje o CPU. Stąd raz w tygodniu i o 06:30,
+  nie po każdym backupie. Przy realnie dużej bazie przenieść na osobną maszynę.
+- **Retencja nie zna „miesięcznych"** — 7 dziennych i 4 tygodniowe dają zasięg ok. miesiąca. Cicha
+  korupcja danych sprzed dwóch miesięcy jest z tego nieodtwarzalna. Do rozważenia, gdy w bazie pojawi
+  się historia, na której realnie zależy.
+- **Skrypty zakładają `bash` i GNU `find`/`stat`** (`-printf`, `stat -c`) — działają na Debianie/Ubuntu,
+  poległyby na Alpine albo BSD. VPS z runbooka jest Debianowy, więc świadomie bez warstwy zgodności.
+- **Dump nie jest szyfrowany po stronie klienta.** Leci przez TLS i leży w prywatnym buckecie, ale
+  dostawca magazynu technicznie widzi zawartość — łącznie z hashami haseł i tokenami odświeżającymi.
+  Szyfrowanie GPG przed wysyłką to kilka linii, ale wprowadza klucz, którego utrata unieważnia wszystkie
+  kopie; decyzja użytkownika, nie domyślne zachowanie.
 
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
@@ -398,6 +606,8 @@ zrobione, zanim krok 32 ma sens.
 - **Demo login**: `demo@alphasense.example`, hasło wypisywane na konsoli tylko przy tworzeniu konta (`make seed`). Fixture `_clean_auth_tables` w `backend/tests/conftest.py` robi `TRUNCATE users CASCADE` przed każdym testem — `pytest`/`make check` usuwa demo użytkownika (kaskadowo portfel+holdings); `markets`/`assets` przetrwają. Po `make check` odpal `make seed` ponownie, jeśli potrzebujesz demo konta.
 - **Pułapka e-mail w seedach/testach**: `email-validator` (Pydantic `EmailStr`) odrzuca domeny `.local` i `.test` jako „special-use". Do danych demo/testowych używaj `.example` (RFC 2606, gwarantowana nierozwiązywalna) — nie `.local`/`.test`.
 - Po każdej zmianie `requirements.txt`/`requirements-dev.txt` w kontenerze `api` trzeba `docker compose up -d --build api` (nie samo `up -d`) — inaczej nowe zależności zainstalowane wcześniej „na żywo" w kontenerze (`pip install` przez `exec`) nie są zapisane w obrazie i znikają przy każdym recreate.
+- **Po zmianie `frontend/package.json` `--build` NIE wystarczy** (pułapka trafiona 2026-08-03 przy `@sentry/nextjs`): dev-owy `frontend` montuje `node_modules` jako **wolumen nazwany** `frontend_node_modules`, który przesłania katalog z obrazu i przeżywa każdy rebuild. Nowa zależność nigdy tam nie trafia, a kontener pada z `MODULE_NOT_FOUND` — wygląda jak błąd kodu, jest błędem środowiska. Naprawa: `docker compose run --rm --no-deps frontend npm ci`.
+- **`frontend/.next` jest dzielony między hostem a kontenerem** (bind-mount `./frontend:/app`), więc `next build` z `make check` na hoście i `next dev` w kontenerze piszą do tego samego katalogu. Objaw rozjazdu: `ChunkLoadError: Failed to load chunk ... Unexpected end of input` i `HTTP 500` na każdej trasie. Naprawa: `rm -rf frontend/.next` i restart kontenera.
 
 ## Dziennik sesji
 
@@ -424,3 +634,4 @@ zrobione, zanim krok 32 ma sens.
 | 2026-07-27 | **Frontend — fundament auth i krok 32 (dashboard portfela) zacommitowane osobno.** Dokończenie porządkowania historii tej sesji: cała frontendowa praca nad etapem 6, dotąd w jednej dużej, niezacommitowanej zmianie, podzielona na dwa commity. (1) Fundament auth (przygotowanie, nie ponumerowany krok planu): in-memory token store, `AuthProvider`/`useAuth`, `lib/api.ts` z silent-refresh, trasy `(auth)/login`/`register`, `app/portfolios` (lista + tworzenie), `AuthGuard`, `NEXT_PUBLIC_API_URL`. (2) Krok 32: `app/portfolios/[id]/page.tsx` wypełniony realnym dashboardem (`PortfolioDashboard`, `SummaryCard`, `TopMovers`, `ValueChart` na ECharts), nowa zależność `echarts@5.6.0`. Pełne uzasadnienia decyzji w sekcjach „Frontend — fundament auth" i „Frontend — dashboard portfela (krok 32)" wyżej. Przy okazji porządkowania **wykryta i wykluczona z commitu nieautoryzowana zależność** `headroom-ai` w `frontend/package.json` (nie z tego zadania, nieużywana w kodzie) — usunięta, `package-lock.json` przeregenerowany, zgodnie z CLAUDE.md §10 (nowa zależność zewnętrzna wymaga pytania użytkownika) zgłoszona do decyzji zamiast dodana po cichu. Zweryfikowane w obu commitach: `npm run lint`/`npx tsc --noEmit`/`npm run build` zielone. | **Kryterium ukończenia etapu 6 (kroki 29-32) spełnione i w pełni zacommitowane lokalnie** (6 commitów: `57af231`…`38cdb0c`, żaden jeszcze niepushowany na `origin/main` — decyzja użytkownika). `headroom-ai` do decyzji: dodać świadomie w osobnym zadaniu, jeśli faktycznie potrzebna, czy porzucić. Poza zakresem tej sesji, wciąż nieuporządkowane: zmiany w `.claude/agents/` (nowe `analityka.md`/`qa-testy.md`, zmodyfikowany `frontend-next.md` — side-quest sub-agentów), root `.gitignore` (`.tokensave/`/`graphify-out/`/`/.idea/`), `backend/.claude/`/`backend/skills-lock.json` (narzędziowe artefakty, prawdopodobnie do `.gitignore`), `postman/` (kolekcja pod etapy 0-5, nieaktualna). Następny krok: krok 33 (widoki struktury — donut, treemap, sektor, geo). |
 | 2026-07-28 | **Code-review etapu 6 + naprawa dwóch blokujących.** Recenzja zakresu `b973c9a..HEAD` (7 commitów, kroki 29-32, 59 plików) wykazała, że **`make check` jest CZERWONE** — 5 failed, 228 passed, mimo że dziennik przy każdym kroku deklarował zielone. (1) **Test zależny od stanu środowiska, nie od kodu**: fixture'y `analytics_assets`/`temp_assets` tworzyły własny kurs `USD = 4` **warunkowo** (`if await db_session.get(FxRate, ("USD", d)) is None`), a asercje twardo oczekiwały kwot policzonych tym kursem (`100 × 4 = 400`). Gdy worker EOD zaciągnął realny kurs NBP (potwierdzone w bazie: `USD 2026-07-28 = 3.80230000`), fixture przestawał nadpisywać, wycena wychodziła `380.23` i pięć testów padało. Testy były więc zielone tylko dopóki worker nie pobrał kursu — zależność od pory dnia i historii kontenera. Naprawione przez zmianę waluty testowej na **`XTS`** (ISO 4217 rezerwuje ten kod wyłącznie na testy — ta sama zasada co domena `.example` z RFC 2606 dla e-maili, patrz „Notatki operacyjne"): `XTS` jest wyłączną własnością testów, więc kurs ustawiany jest bezwarunkowo, a teardown nie musi go warunkowo omijać. Odrzucona alternatywa: nadpisywanie realnego wiersza `USD` z przywracaniem w teardownie — przy twardym przerwaniu testu zostawiałaby w bazie dev fałszywy kurs `4` i psuła wycenę demo portfela. Zmienione: `tests/integration/test_holdings.py` (`usd_asset` → `fx_asset`, `cost_currency` w dwóch testach), `tests/integration/test_analytics.py` (`etf_us` teraz `US`/`XTS`). (2) **Wyciek izolacji danych po stronie klienta**: `lib/queryKeys.ts` nie ma segmentu użytkownika w kluczach, `staleTime` to 60 s, a `AuthProvider.logout()` kasował wyłącznie token — więc sekwencja „A się wyloguje → B zaloguje w tej samej karcie" pokazywała B listę portfeli A prosto z cache TanStack Query, **bez odpytania backendu** (backend poprawny, `get_owned_portfolio` zwraca 404 na cudzy zasób). Złamanie CLAUDE.md #3.2/#3.10. Naprawione przez `queryClient.clear()` w `login()` (przed `setAccessToken`, żeby nie skasować w locie zapytań nowego użytkownika) i w `logout()` (w `finally`, żeby dane znikły także gdy `POST /auth/logout` padnie). Test regresyjny dopisany do `e2e/auth.spec.ts` — i **zweryfikowany, że realnie łapie bug**: pierwsza wersja przechodziła mimo wyłączonej poprawki, bo miała `page.goto("/portfolios")` między wylogowaniem a logowaniem B, a pełne przeładowanie i tak niszczy `QueryClient`; po przestawieniu kolejności (logowanie/wylogowanie idą przez `router.push`, czyli nawigację miękką) test pada z `Expected: 0, Received: 1` przy zakomentowanym `clear()` i przechodzi z nim. Scenariusz doklejony do istniejącego testu logowania, nie osobny — osobny wymagałby dwóch dodatkowych logowań, a suita zużywa już 5 z 5 slotów limitu `POST /auth/login` (patrz backlog). Zweryfikowane po naprawach: `make check` **zielone, exit 0** — ruff „All checks passed", mypy strict „no issues found in 53 source files", **233 passed, 3 deselected**, `next build` OK; `npx playwright test` — **5/5 zielone**. Przy okazji skorygowany nieaktualny od 2026-07-24 wpis „Decyzje oczekujące" o niewypchniętym etapie 4 (`origin/main == main == 0b43c54`, zero różnicy). | **Kryterium ukończenia etapu 6 wciąż NIESPEŁNIONE** — zostały kroki 33 (widoki struktury), 34 (panel „Twoje rynki"), 35 (formularz pozycji, stany puste, dark mode). Krok 35 blokuje realne używanie dashboardu: przycisk „Dodaj pierwszą pozycję" jest twardo `disabled`, więc pustego portfela nie da się wypełnić przez UI, a `portfolio_valuations` jest puste dla każdego portfela w dev. Rekomendowana kolejność: 35 → 33 → 34 (odwrotnie niż plan, bo 33/34 bez pozycji nie mają czego rysować) — do decyzji użytkownika. Pozostałe 7 znalezisk z recenzji (nieblokujące) w nowej sekcji „Backlog po code-review etapu 6". Nic z tego zadania nie jest zacommitowane. |
 | 2026-07-28 | **Krok 35 (etap 6): formularz pozycji, stany puste, tryb ciemny/jasny.** Wykonany przed krokami 33-34 (odwrotnie niż plan) — bez możliwości dodania pozycji przez UI widoki struktury nie mają czego rysować, a `portfolio_valuations` było puste dla każdego portfela w dev. **Formularz**: `components/forms/HoldingForm.tsx` + `lib/assets.ts` (`GET /assets/search`, publiczne) + `createHolding` w `lib/dashboard.ts` + `lib/useDebounced.ts` (300 ms). Kolejność pól = kolejność decyzji: CO (autouzupełnianie tickera, `role="combobox"`/`listbox`), ILE (`inputMode="decimal"` — klawiatura numeryczna bez strzałek i bez lokalnego parsowania liczby przez przeglądarkę, chcemy string 1:1 dla backendu), na końcu opcjonalna cena nabycia w `fieldset` z jawną etykietą „opcjonalna" (CLAUDE.md #1: serce produktu to struktura, nie księgowość — wymaganie ceny odstraszałoby od pierwszej pozycji). Kwoty i ilości jadą jako **stringi dokładnie tak, jak wpisane**, żadnego `parseFloat` po drodze (CLAUDE.md #3.1); przecinek normalizowany do kropki (polska klawiatura). Walidacja na froncie tylko kształtu zapisu, sędzią ostatecznym jest backend (422). Po dodaniu unieważniane są `qk.holdings`/`qk.summary`/`qk.portfolio` (bump `holdings_version`) oraz cała rodzina `["valuations", portfolioId]` bez `range` — jednym wywołaniem dla wszystkich zakresów wykresu. **Stany puste**: CTA „Dodaj pierwszą pozycję" w `PortfolioDashboard` przestało być `disabled` (placeholder z kroku 32) i rozwija formularz w miejscu — w portfelu pustym formularz JEST najważniejszą treścią ekranu; w portfelu z pozycjami jest zwijany za przyciskiem „Dodaj pozycję", żeby nie spychać wartości i wykresu poniżej zgięcia na 375 px. Przy okazji naprawiony brak gałęzi `isLoading` dla `holdings` (znalezisko code-review z tego samego dnia — mignięcie pełnego widoku u nowego użytkownika) i dodana brakująca gałąź błędu (łańcuch trójargumentowy nie miał `else`). **Tryb ciemny/jasny**: `lib/theme.ts` (moduł z pub/sub, ten sam wzorzec co `tokenStore` — motyw musi być czytelny spoza drzewa React), `components/ui/ThemeToggle.tsx` w `SideNav` i `BottomNav`. **Trzy stany, nie dwa** (`system → jasny → ciemny`): przy dwóch użytkownik nie miałby jak wrócić do „idź za systemem", a `prefers-color-scheme` przestałoby cokolwiek robić. `app/globals.css` przełączony z domyślnej strategii medialnej Tailwind v4 na klasę (`@custom-variant dark (&:where(.dark, .dark *))`) — inaczej ręczny wybór nie mógłby wygrać z ustawieniem systemu. Konsekwencja: inline `<script>` w `<head>` (`app/layout.tsx`, nie `useEffect`) ustawiający klasę przed pierwszym malowaniem — **zweryfikowane pomiarem na wyjściu serwera**: skrypt jest na pozycji 2281, `<body>` na 2635, czyli biegnie przed renderem treści; bez tego użytkownik z motywem ciemnym dostawałby błysk białego tła. Klucz `alphasense-theme` jest świadomie zduplikowany między skryptem a `THEME_STORAGE_KEY` (skrypt musi być samodzielnym stringiem, biegnie przed jakimkolwiek bundlem). `ValueChart.usePrefersDark` → `useIsDarkTheme` czytające rozwiązany motyw z `lib/theme.ts`, nie samo `matchMedia` — inaczej ręczny wybór przestawiałby całe UI poza wykresem (ECharts jako jedyny w repo wymaga literalnych kolorów, nie da się go ostylować klasami Tailwind). **Testy**: rozszerzony `e2e/dashboard.spec.ts` (dodanie pozycji przez formularz → portfel przestaje być pusty bez F5; przełączanie motywu przez pełny cykl + przetrwanie `reload`) — dopisane do istniejącego testu, nie osobne, bo suita zużywa wszystkie 5 slotów limitu `POST /auth/login`. Pierwsza wersja asercji motywu zakładała zmianę po JEDNYM kliknięciu i padła: Playwright startuje w schemacie jasnym, więc `system → jasny` nie zmienia wyglądu; przepisane na deterministyczne dojście do konkretnego stanu po `aria-label`. Dodana asercja na nieprzycięte etykiety dolnej nawigacji (`scrollWidth > clientWidth`) — brak poziomego scrolla strony tego nie wykrywa. Zweryfikowane: `make check` **zielone, exit 0** (233 passed, ruff/mypy strict/`next build`), `npx playwright test` **5/5 zielone**. | **Kryterium ukończenia etapu 6 nadal niespełnione** — zostały kroki 33 (widoki struktury: donut, treemap, sektor, geo) i 34 (panel „Twoje rynki"). Teraz mają na czym stanąć: pozycje da się dodać przez UI. Otwarte pytania z „Backlog modułu analytics" do rozstrzygnięcia przy kroku 33: czy `by=geo` (country → fallback region) to sensowna hierarchia dla UI i czy `?by=` ma dostać wartość domyślną po stronie backendu, czy ustawiać ją na froncie. Pomyłka warta zapamiętania: na zrzucie z testu odczytałem „Das…d" w dolnej nawigacji jako przycięcie etykiety i „naprawiłem" nieistniejący błąd — pomiar (`scrollWidth == clientWidth == 66` dla każdego linku) pokazał, że to nakładka dev-toolsów Next.js narysowana na pasku, ten sam rodzaj artefaktu co znane zniekształcenie `fullPage` + `position: fixed` z kroku 32. Zmiana została (wąski slot na ikonę daje linkom 66 zamiast 62 px), ale jako zapas, nie naprawa. |
+| 2026-08-03 | **Krok 37 (etap 7): Sentry + `GET /api/health` + alerty jobów EOD.** Pełny opis w sekcji „Krok 37" wyżej. Nowe: `app/core/observability.py`, `app/core/health.py`, `tests/unit/test_observability.py`, `tests/integration/test_health.py`, `frontend/{instrumentation-client,instrumentation,sentry.server.config}.ts`. Zmienione: `main.py` (init Sentry przed budową `FastAPI` — integracja Starlette opakowuje aplikację w momencie tworzenia, odwrotna kolejność zostawiłaby wyjątki żądań poza raportowaniem), `worker/scheduler.py`, `app/cli.py` (ręczne `ingest`/`snapshot` raportują tak samo jak automatyczne; `seed` świadomie nie — administracyjna, pod okiem człowieka), `worker/jobs/ingest_market.py` (`_alert_ingestion_problem`: `failed`→`error`, `partial`→`warning`, `fingerprint` po rynku+statusie), `next.config.ts` (`withSentryConfig`, source mapy tylko przy `SENTRY_AUTH_TOKEN`), `docker-compose.prod.yml` (readiness healthcheck po polu `db`, rotacja logów `x-logging`, `caddy` na `service_started`), `ci.yml` (job `obrazy-prod`), oba `.env*.example` (`APP_VERSION`, `SENTRY_*`), `docs/{api-kontrakt,wdrozenie}.md`. **Dwa defekty spoza zakresu, znalezione przy okazji i naprawione**: (1) limit domyślny rate limitu nie działał na ŻADNEJ trasie od czasu FastAPI 0.139 (`SlowAPIMiddleware` nie znajduje handlera przez `_IncludedRouter`, a `handler is None` traktuje jak zwolnienie z limitu — ta sama zmiana routingu, która w etapie 5 cicho zepsuła harness izolacji) → własny `DefaultRateLimitMiddleware`; (2) `_BrokenRedis` w testach mockował tylko `get`/`set`, więc nowy middleware wywalał się na nim `AttributeError` zamiast degradować → doszedł test „limit domyślny przepuszcza ruch przy padniętym Redisie". Fallback yfinance dla WIG20 (`WIG20.WA`) dopisany do `SOURCE_MAPS` — bez niego każda odmowa Stooqa dawałaby `partial`, czyli powtarzalny alert, który nauczyłby ignorować alerty. Zweryfikowane: `make check` zielone (**247 passed**, ruff, mypy strict 55 plików, Vitest 29/29, `next build`), Playwright **5/5**, `GET /api/health` → `status: ok`, **120× `/api/health` → 120× 200** vs **120× `/api/meta/freshness` → 100× 200 + 20× 429** (zwolnienie i limit domyślny udowodnione na żywo), `ingest --market GPW` → `status=ok` 3/3 z WIG20 przez fallback. Domknięte przy okazji cztery nieblokujące wpisy z kroku 36 (`caddy` na `service_started`, rotacja logów, CI `--target prod`, `NEXT_PUBLIC_SENTRY_DSN` w `args:`). | **Krok 37 zamknięty.** Cały tor Sentry zweryfikowany wyłącznie w trybie WYŁĄCZONYM — dwa DSN-y wciąż po stronie użytkownika (patrz „Decyzje oczekujące"), więc realne dostarczenie zdarzenia do projektu Sentry pozostaje niezweryfikowane; naturalny moment to pierwsze wdrożenie. Dwie pułapki środowiskowe trafione i dopisane do „Notatek operacyjnych": wolumen nazwany `frontend_node_modules` przesłania nowe zależności npm mimo `--build`, a `frontend/.next` dzielony z hostowym `next build` potrafi dać `ChunkLoadError`/500 (oba objawiały się jako 5 czerwonych testów Playwright, które okazały się fałszywym alarmem — padnięty kontener, nie kod). Baza dev wyczyszczona z 22 osieroconych aktywów testowych; wyciek zweryfikowany jako NIEaktywny. Następny krok: 38 (nocny `pg_dump` poza VPS) — wymaga bucketu S3 i klucza od użytkownika. |

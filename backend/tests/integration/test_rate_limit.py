@@ -19,11 +19,19 @@ więc `get_remote_address` zwraca ten sam adres dla każdego żądania testowego
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 
+from app.core import cache as cache_module
 from app.core.config import get_settings
 
 _AUTH_LIMIT = get_settings().rate_limit_auth_per_minute
+_DEFAULT_LIMIT = get_settings().rate_limit_default_per_minute
+# Ile żądań PONAD limit wysyłamy, żeby zobaczyć 429 — kilka, nie jedno, bo
+# okno stałe (`DefaultRateLimitMiddleware`) mogłoby się przewinąć dokładnie
+# na styku i pojedyncze nadmiarowe żądanie trafiłoby już w nowe okno.
+_OVER_LIMIT_MARGIN = 3
 _WRONG_LOGIN = {"email": "nikt-taki-nie-istnieje@example.com", "password": "whatever-12345"}
 
 
@@ -89,3 +97,94 @@ async def test_auth_limit_on_one_route_does_not_block_the_other(client: AsyncCli
 
     login_resp = await client.post("/api/auth/login", json=_WRONG_LOGIN)
     assert login_resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Limit domyślny (`DefaultRateLimitMiddleware`, naprawiony 2026-07-29)
+# ---------------------------------------------------------------------------
+
+
+async def test_default_limit_blocks_flood_on_ordinary_route(client: AsyncClient) -> None:
+    """Zwykła trasa pod `/api` przestaje odpowiadać `200` po przekroczeniu
+    `RATE_LIMIT_DEFAULT_PER_MINUTE`.
+
+    Regresja na defekt znaleziony 2026-07-29: limit domyślny był zarejestrowany
+    (`Limiter(default_limits=...)` + `SlowAPIMiddleware`) i **nie działał na
+    żadnej trasie**, bo FastAPI 0.139 nie wystawia już `APIRoute` w
+    `app.routes`, a slowapi traktuje nieznalezioną trasę jako zwolnioną z
+    limitu. Kontrakt API deklarował ochronę, której nie było, i żaden test
+    tego nie łapał — bo cała suita sprawdzała wyłącznie limity `/auth/*`,
+    nakładane innym mechanizmem (dekoratorem).
+
+    Trasa testowa to publiczne `GET /meta/freshness` — bez logowania, więc
+    test nie zużywa slotów ostrzejszego limitu `/auth/*`.
+    """
+    responses = [
+        await client.get("/api/meta/freshness") for _ in range(_DEFAULT_LIMIT + _OVER_LIMIT_MARGIN)
+    ]
+    codes = [r.status_code for r in responses]
+
+    assert codes[:_DEFAULT_LIMIT] == [200] * _DEFAULT_LIMIT
+    assert set(codes[_DEFAULT_LIMIT:]) == {429}
+
+    body = responses[-1].json()
+    assert body["error"]["code"] == "rate_limited"
+    assert body["error"]["details"]["limit"] == f"{_DEFAULT_LIMIT} per 1 minute"
+
+
+class _BrokenRedis:
+    """Redis odmawiający połączenia na operacjach limitu domyślnego."""
+
+    async def incr(self, key: str) -> int:
+        raise RedisConnectionError("connection refused (test)")
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        raise RedisConnectionError("connection refused (test)")
+
+
+async def test_default_limit_lets_traffic_through_when_redis_is_down(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Padnięty Redis nie może zamienić limitu domyślnego w awarię API.
+
+    Świadoma asymetria wobec limitu `/auth/*`, który przy padniętym Redisie
+    zwraca błąd (przepuszczenie otwierałoby drogę do zgadywania haseł).
+    Tutaj odwrotnie: zablokowanie wszystkiego zamieniłoby awarię CACHE'a w
+    awarię CAŁEJ aplikacji, wbrew CLAUDE.md #3.7. Zapisane też w
+    `docs/api-kontrakt.md`, sekcja „Rate limiting".
+    """
+    monkeypatch.setattr(cache_module, "get_redis", lambda: _BrokenRedis())
+
+    resp = await client.get("/api/meta/freshness")
+
+    assert resp.status_code == 200
+
+
+async def test_health_is_exempt_from_default_limit(client: AsyncClient) -> None:
+    """`GET /api/health` (krok 37) nie łapie `429` nawet daleko ponad limitem.
+
+    Healthcheck kontenera odpytuje tę trasę co kilkanaście sekund z jednego
+    adresu IP. Gdyby dzieliła licznik z monitoringiem zewnętrznym, Docker
+    dostałby `429`, uznał zdrowy kontener API za padnięty i zrestartował go —
+    czyli mechanizm chroniący przed zalewaniem API sam wywołałby awarię.
+
+    Zwolnienie realizuje `DEFAULT_LIMIT_EXEMPT_PATHS`, nie `@limiter.exempt`:
+    limit domyślny nakłada `DefaultRateLimitMiddleware`, którego dekorator
+    slowapi w ogóle nie dotyczy.
+    """
+    codes = {
+        (await client.get("/api/health")).status_code
+        for _ in range(_DEFAULT_LIMIT + _OVER_LIMIT_MARGIN)
+    }
+
+    assert codes == {200}
+
+
+async def test_default_limit_is_per_path(client: AsyncClient) -> None:
+    """Wyczerpanie limitu na jednej trasie nie blokuje innej — licznik jest
+    per (adres, ścieżka), tak jak deklaruje `docs/api-kontrakt.md`."""
+    for _ in range(_DEFAULT_LIMIT + 1):
+        await client.get("/api/meta/freshness")
+
+    assert (await client.get("/api/meta/freshness")).status_code == 429
+    assert (await client.get("/api/assets/search", params={"q": "nic"})).status_code == 200

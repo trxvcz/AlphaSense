@@ -26,6 +26,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
+from app.core.observability import init_sentry
 from app.db.session import AsyncSessionLocal
 from app.modules.marketdata.models import Market
 from worker.jobs.ingest_market import ingest_market
@@ -77,6 +78,11 @@ def _register_jobs(scheduler: AsyncIOScheduler, markets: list[Market]) -> None:
 
 
 async def main() -> None:
+    # Krok 37: bez DSN to no-op (dev). Padnięty job trafia do Sentry przez
+    # `logging.exception` APSchedulera (`LoggingIntegration`), a `status`
+    # `failed`/`partial` — jawnym `capture_message` w `ingest_market`.
+    init_sentry("worker")
+
     markets = await _load_markets()
     if not markets:
         logger.warning("scheduler.no_markets_found")
