@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed test check fmt shell psql \
+.PHONY: up down logs migrate revision seed test check smoke fmt shell psql \
         prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql \
         backup backup-check backup-restore-test
 
@@ -29,6 +29,18 @@ check:     ## bramka jakości — musi być zielona przed „gotowe"
 	docker compose exec api mypy app
 	docker compose exec api pytest -q -m "not network"
 	cd frontend && npm run lint && npx tsc --noEmit && npm run test && npm run build
+
+# Świadomie POZA `make check` (krok 39): wymaga żywego stacku, a `check` musi
+# dać się uruchomić także tam, gdzie stoi sam kod (CI, świeży klon). Domyślnie
+# celuje w dev (`http://localhost:3000`); po wdrożeniu przepuszczasz ten sam
+# plik przez produkcję:
+#
+#   E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke
+#
+# UWAGA: przebieg zakłada w bazie KONTO (`smoke-…@alphasense.example`) wraz
+# z portfelem i pozycją. Na produkcji posprzątaj po sobie — `docs/wdrozenie.md` §10.
+smoke:     ## smoke test Fazy 1 na ŻYWYM stacku: 375 px + desktop
+	cd frontend && npx playwright test e2e/smoke.spec.ts
 
 fmt:
 	docker compose exec api ruff format .

@@ -79,6 +79,19 @@ services:
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
+      # `.next` NIE może być współdzielone z hostem. `make check` uruchamia
+      # `next build` na hoście, a tutaj biegnie `next dev` — obie strony
+      # pisały do tego samego katalogu przez bind-mount wyżej i nadpisywały
+      # sobie artefakty. Objawy za każdym razem wyglądają jak błąd kodu, a
+      # nie środowiska: `ChunkLoadError: Unexpected end of input` z HTTP 500
+      # na każdej trasie (2026-08-03) albo — trafione przy pisaniu smoke
+      # testu (krok 39) — HTTP 404 na `/portfolios/{id}/struktura`
+      # i `/portfolios/{id}/rynki`, przy w pełni działających
+      # `/portfolios/{id}` i `/struktura`.
+      # Wolumen anonimowy przesłania ten jeden podkatalog: kontener ma własne
+      # `.next`, host własne, żadne z nich nie widzi drugiego. Ten sam wzorzec,
+      # co `frontend_node_modules` wyżej.
+      - /app/.next
 
 volumes:
   postgres_data:
