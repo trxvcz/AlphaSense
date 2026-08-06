@@ -28,6 +28,17 @@ jobs:
       - name: Migracje
         run: cd backend && alembic upgrade head
         env: { DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test' }
+      # `markets` to słownik referencyjny (ADR-102), nie dane testowe: `assets`
+      # ma FK na `market_code`, więc bez tego kroku KAŻDY test tworzący aktywo
+      # kończy się `ForeignKeyViolation` — łącznie z całą bramką izolacji.
+      # Dev dostaje słownik przez `make seed`, produkcja przez `make prod-seed`;
+      # CI nie miał go wcale i dlatego `make check` świecił zielono lokalnie
+      # (pytest w kontenerze `api` uderza w zasianą bazę dev), a CI czerwono.
+      - name: Seed słownika rynków
+        run: cd backend && python -m app.cli seed --reference-only
+        env:
+          DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
+          REDIS_URL: 'redis://localhost:6379/0'
       - name: Testy
         run: cd backend && pytest -q -m "not network"
         env:
