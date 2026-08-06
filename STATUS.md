@@ -591,6 +591,38 @@ i `docker inspect` były atrapami) oraz to, czy `command=` w `authorized_keys` j
 procedura sprawdzenia jest w `docs/wdrozenie.md` §11.1 i jest to **pierwsza rzecz do zrobienia**
 przed podłączeniem klucza do GitHuba.
 
+### CI był czerwony od 2026-07-29 — naprawione 2026-08-06
+
+Kroki 36, 37 i 39 zostały wypchnięte na czerwony pipeline i nikt tego nie zauważył. **Przyczyna:**
+job `backend` robił `alembic upgrade head`, ale nigdy nie siał słownika rynków, a `assets.market_code`
+ma FK na `markets` — każdy test tworzący aktywo kończył się `ForeignKeyViolation`. Ostatni przebieg
+przed naprawą: **6 failed, 170 passed, 94 errors**, w tym **cała bramka izolacji dwóch użytkowników**
+(94 błędy to wyłącznie `test_isolation.py`).
+
+**Dlaczego nikt nie zauważył:** `make check` woła `docker compose exec api pytest`, czyli uderza
+w bazę dev zasianą przez `make seed`. Lokalnie zielono, w CI czerwono — i to CI miało rację.
+To ta sama klasa pułapki co „test przechodzi, ale niczego nie sprawdza": bramka izolacji, która
+w CI wysypuje się na `ERROR` w fixture, nie sprawdza izolacji, a wygląda jak zwykły czerwony build.
+
+**Skutek uboczny był poważniejszy niż sam kolor:** job `deploy` ma `needs: [backend, frontend,
+obrazy-prod]`, więc CD nigdy by nie wystartowało — nawet po wgraniu wszystkich sekretów.
+
+Naprawa: krok `Seed słownika rynków` (`python -m app.cli seed --reference-only`) między `Migracje`
+a `Testy`. Odtworzone lokalnie na świeżej bazie (migracje bez seeda): 4 failed + 16 errors na samych
+`test_meta_freshness` i `test_isolation`; po seedzie na tej samej bazie **251 passed, 3 deselected**.
+Przebieg 31115157646 zielony w całości.
+
+**Wdrożenie pomijane, dopóki brakuje sekretu.** Job `deploy` odpalał się przy każdym pushu na `main`
+i padał na `ssh`. Teraz `DEPLOY_CONFIGURED` (`jobs.<id>.env`, bo kontekst `secrets` nie jest dostępny
+w `jobs.<id>.if`) pilnuje `SSH_PRIVATE_KEY_ALPHASENSE` **i** `SSH_KNOWN_HOSTS`; przy braku któregoś
+job kończy się zielony, wypisując `::notice::` i nie dotykając produkcji.
+- [ ] **`SSH_KNOWN_HOSTS` to jedyny brakujący sekret wdrożeniowy** — `SSH_PRIVATE_KEY_ALPHASENSE`,
+  `SSH_HOST`, `SSH_PORT` i `SSH_USER` są w repo od 2026-08-04. Bez `known_hosts` `ssh` z
+  `StrictHostKeyChecking=yes` kończy się `Host key verification failed` (kod 255, przebieg
+  31114724201). Generowanie: `ssh-keyscan -p <port> <host>`. **Zanim go wgrasz**, przejdź procedurę
+  `docs/wdrozenie.md` §11.1 (sprawdzenie `command=` w `authorized_keys`) — po wgraniu sekretu każdy
+  push na `main` realnie wdraża.
+
 ## Plan etapu 8 — metryki i ryzyko (uzgodniony 2026-08-06, przed rozpoczęciem)
 
 Etap zaplanowany na sesji 2026-08-06 (`/etap 8`). **Nie zaczęty i zablokowany świadomie:**
