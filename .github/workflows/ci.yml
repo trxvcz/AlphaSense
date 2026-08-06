@@ -107,19 +107,25 @@ jobs:
     # grupę `production-deploy` przez domyślne 6 godzin, blokując wszystkie
     # kolejne wdrożenia.
     timeout-minutes: 30
-    # Dopóki VPS nie jest skonfigurowany, sekret jest pusty i `ssh` bez klucza
-    # świeciłby na czerwono przy każdym pushu na `main` — czerwony pipeline,
-    # który nie znaczy „coś jest zepsute", uczy ignorowania czerwonego
-    # pipeline'u. Warunek siedzi na KROKACH, nie na jobie, bo kontekst
-    # `secrets` nie jest dostępny w `jobs.<id>.if` (jest w `jobs.<id>.env`).
-    # Po wgraniu sekretu ten warunek przestaje cokolwiek zmieniać.
+    # Dopóki wdrożenie nie jest skonfigurowane do końca, `ssh` świeci na
+    # czerwono przy każdym pushu na `main` — a czerwony pipeline, który nie
+    # znaczy „coś jest zepsute", uczy ignorowania czerwonego pipeline'u.
+    # Warunek siedzi na KROKACH, nie na jobie, bo kontekst `secrets` nie jest
+    # dostępny w `jobs.<id>.if` (jest w `jobs.<id>.env`).
+    #
+    # Sprawdzane są OBA sekrety pisane przez krok „Konfiguracja SSH": sam klucz
+    # nie wystarczy, bo `StrictHostKeyChecking=yes` bez `known_hosts` kończy się
+    # `Host key verification failed` (kod 255) — dokładnie to zdarzyło się
+    # w przebiegu 31114724201, gdy warunek pilnował tylko klucza.
+    # `SSH_HOST`/`SSH_PORT`/`SSH_USER` nie są tu sprawdzane osobno: ustawia się
+    # je razem z kluczem i bez nich `ssh` i tak nie ma dokąd pójść.
     env:
-      DEPLOY_CONFIGURED: ${{ secrets.SSH_PRIVATE_KEY_ALPHASENSE != '' }}
+      DEPLOY_CONFIGURED: ${{ secrets.SSH_PRIVATE_KEY_ALPHASENSE != '' && secrets.SSH_KNOWN_HOSTS != '' }}
     steps:
       - name: Wdrożenie nieskonfigurowane — pomijam
         if: env.DEPLOY_CONFIGURED != 'true'
         run: |
-          echo "::notice::Sekret SSH_PRIVATE_KEY_ALPHASENSE jest pusty — wdrożenie pominięte, produkcja bez zmian. Procedura konfiguracji: docs/wdrozenie.md §11."
+          echo "::notice::Brakuje sekretu SSH_PRIVATE_KEY_ALPHASENSE lub SSH_KNOWN_HOSTS — wdrożenie pominięte, produkcja bez zmian. known_hosts generuje się przez 'ssh-keyscan -p <port> <host>'. Procedura: docs/wdrozenie.md §11."
 
       - name: Konfiguracja SSH
         if: env.DEPLOY_CONFIGURED == 'true'
