@@ -96,8 +96,22 @@ jobs:
     # grupę `production-deploy` przez domyślne 6 godzin, blokując wszystkie
     # kolejne wdrożenia.
     timeout-minutes: 30
+    # Dopóki VPS nie jest skonfigurowany, sekret jest pusty i `ssh` bez klucza
+    # świeciłby na czerwono przy każdym pushu na `main` — czerwony pipeline,
+    # który nie znaczy „coś jest zepsute", uczy ignorowania czerwonego
+    # pipeline'u. Warunek siedzi na KROKACH, nie na jobie, bo kontekst
+    # `secrets` nie jest dostępny w `jobs.<id>.if` (jest w `jobs.<id>.env`).
+    # Po wgraniu sekretu ten warunek przestaje cokolwiek zmieniać.
+    env:
+      DEPLOY_CONFIGURED: ${{ secrets.SSH_PRIVATE_KEY_ALPHASENSE != '' }}
     steps:
+      - name: Wdrożenie nieskonfigurowane — pomijam
+        if: env.DEPLOY_CONFIGURED != 'true'
+        run: |
+          echo "::notice::Sekret SSH_PRIVATE_KEY_ALPHASENSE jest pusty — wdrożenie pominięte, produkcja bez zmian. Procedura konfiguracji: docs/wdrozenie.md §11."
+
       - name: Konfiguracja SSH
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ALPHASENSE }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
@@ -109,6 +123,7 @@ jobs:
           (umask 077; printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts)
 
       - name: Wdrożenie zatwierdzonego commita
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
@@ -129,6 +144,7 @@ jobs:
       # kod HTTP przeszedłby także przy `db: down` i zielony job znaczyłby
       # dokładnie tyle, co „serwer odpowiada".
       - name: Sprawdzenie z zewnątrz
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           BASE_URL: https://alphasense.cedron.net.pl
         run: |
