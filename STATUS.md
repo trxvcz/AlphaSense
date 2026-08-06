@@ -7,7 +7,9 @@
 Zostało samo **wdrożenie na VPS** — rekord A, `.env.prod`, DSN-y Sentry, Google Console — i przepuszczenie
 przez produkcję `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`. Dopiero to zamyka Fazę 1.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
-**Ostatnia aktualizacja:** 2026-08-05
+Praca nad CD zacommitowana 2026-08-06 (`d203c14`). **Etap 8 zaplanowany 2026-08-06** (`/etap 8`,
+sekcja „Plan etapu 8" niżej) — start dopiero po domknięciu etapu 7, taka była decyzja.
+**Ostatnia aktualizacja:** 2026-08-06
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -22,7 +24,7 @@ Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟡 kroki 36-39 zrobione, czeka na wdrożenie na VPS |
-| 8 | Metryki i ryzyko (Faza 2) | ⚪ |
+| 8 | Metryki i ryzyko (Faza 2) | ⚪ zaplanowany 2026-08-06, start po etapie 7 |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
@@ -588,6 +590,105 @@ z ustawionym `APP_VERSION`, nieudany `prod-up` wycofuje na poprzedni commit i al
 i `docker inspect` były atrapami) oraz to, czy `command=` w `authorized_keys` jest wpisane poprawnie —
 procedura sprawdzenia jest w `docs/wdrozenie.md` §11.1 i jest to **pierwsza rzecz do zrobienia**
 przed podłączeniem klucza do GitHuba.
+
+## Plan etapu 8 — metryki i ryzyko (uzgodniony 2026-08-06, przed rozpoczęciem)
+
+Etap zaplanowany na sesji 2026-08-06 (`/etap 8`). **Nie zaczęty i zablokowany świadomie:**
+decyzja 1 poniżej mówi, że najpierw domykamy etap 7 (wdrożenie na VPS + `make smoke` przez
+produkcję). Praca CD została zacommitowana (`d203c14`) jako pierwszy element domykania.
+
+**Decyzje użytkownika podjęte przy planowaniu:**
+
+1. **Najpierw etap 7, potem etap 8.** Kroki 36-39 są zrobione w repo, ale Faza 1 nie została
+   potwierdzona na produkcji ani razu. Zaczynanie etapu 8 wcześniej zwiększa dystans między tym,
+   co przetestowane, a tym, co wdrożone (CLAUDE.md §5 „nie przeskakuj").
+2. **Historia do metryk: backfill dev-only + fixture'y.** `make seed-history` odtworzy
+   `portfolio_valuations` z historycznych cen **wyłącznie w devie/testach**, z jawnym blokiem na
+   produkcji; testy jednostkowe na syntetycznych seriach o znanych liczbach. ADR-101 zostaje
+   nienaruszone — produkcja nadal nie przelicza historii.
+3. **Zakres pierwszej partii: kroki 40-42**, potem code-review i przegląd, dopiero wtedy decyzja
+   o 43 (tagi/watchlisty), 44 (RLS) i 45 (świece).
+4. **Benchmark przeliczany na PLN** kursem NBP, tak samo jak wycena portfela. Kurs walutowy jest
+   częścią realnego wyniku inwestora; porównanie portfela w PLN z indeksem w USD mieszałoby dwie
+   różne miary. Spójne z zasadą #5 (kursy wyłącznie z NBP).
+
+**Stan wyjściowy (zweryfikowany na żywej bazie dev 2026-08-06):**
+
+```
+portfolio_valuations:  0 wierszy (żaden portfel, żadna data)
+^GSPC (S&P 500):       0 notowań
+WIG20:                 2 notowania (2026-07-30 … 08-03)
+^GDAXI/^FCHI/^FTSE/^SSMI: po 8 notowań (2026-07-22 … 08-03)
+^HSI/^NDX/^N225:       0 notowań
+```
+
+Kroki 40-42 są w całości funkcjami szeregu czasowego, którego dziś **nie ma**. Stąd decyzja 2
+i „krok zerowy" (dane) przed krokiem 40.
+
+**Krok zerowy — dane** (`data-provider`)
+Fallback yfinance dla `WIG20` w `asset_source_map` (wpis z backlogu etapu 4 przestaje być
+nieblokujący) · mapowanie dostawcy dla `^GSPC` · jednorazowe `python -m app.cli backfill-prices
+--symbol … --from …` (Stooq/yfinance oddają lata historii) · `make seed-history` z decyzji 2.
+**To dodatek ponad plan** — bez niego kroki 42 i 41 (beta) nie mają czego liczyć.
+
+**Krok 40 — zwroty dzienne ze snapshotów** (`analityka` + `qa-testy`)
+`backend/app/modules/analytics/returns.py` (czyste funkcje na `Decimal`: `daily_returns`,
+`chain_link`, `period_return`) · `GET /portfolios/{id}/performance?range=1M|3M|1Y|YTD|max` ·
+cache Redis kluczem wersjonowanym jak w kroku 31 · aktualizacja `docs/api-kontrakt.md` ·
+testy jednostkowe na znanych liczbach, bez mocków bazy.
+**Sedno:** dzień z `composition_change=true` **zrywa ogniwo** łańcucha (zwrot z t-1 na t wypada),
+a nie kasuje obu dni — inaczej dokupienie udawałoby zysk (ADR-101). Zwrot okresowy = iloczyn
+zachowanych ogniw. **Do rozstrzygnięcia w kodzie:** dziura w serii (weekend, brak snapshotu) —
+propozycja: łączy przez przerwę, z liczbą pominiętych ogniw w odpowiedzi.
+
+**Krok 42 — benchmark** (`data-provider` → `analityka` → `frontend-next`)
+**Przesunięty przed krok 41**, bo beta potrzebuje serii benchmarku. Rozszerzenie
+`/performance?benchmark=WIG20|^GSPC` o drugą serię znormalizowaną do 100 (obie przeliczone na PLN,
+decyzja 4) · wykres na widoku wyników.
+
+**Krok 41 — ryzyko** (`analityka` + `frontend-next`)
+`analytics/risk.py` (zmienność = odch. std × √252, Sharpe, max drawdown, seria underwater, beta,
+zwroty miesięczne) · `GET /portfolios/{id}/risk?range=&benchmark=` · widok ryzyka: karty metryk
+z interpretacją słowną, wykres underwater, heatmapa miesięczna.
+**Sedno:** drawdown liczony na **indeksie łańcuchowym**, nie na `value_pln` — inaczej wpłata
+wygląda jak wyjście z obsunięcia. **Reguła minimalnej próby:** poniżej 30 obserwacji metryka
+zwraca `null` + powód („21 z 30 wymaganych dni"), a UI pokazuje to zamiast liczby — ta sama
+zasada co „nie licz jako zero, wyklucz z mianownika" z kroku 34.
+**Stopa wolna od ryzyka:** parametr `RISK_FREE_RATE_ANNUAL` w `pydantic-settings` z domyślną
+wartością stopy referencyjnej NBP i datą w komentarzu. Pobieranie jej z API NBP to nowy dostawca
+(CLAUDE.md §10) — nieproporcjonalne do jednej liczby zmienianej kilka razy w roku.
+
+**Kroki 43-45 — poza pierwszą partią** (decyzja 3), rozpoznane przy planowaniu:
+- **43 (tagi/watchlisty):** tabele `watchlists`/`watchlist_items`/`tags`/`asset_tags` nie mają
+  w `docs/model-danych.md` zdefiniowanych kolumn („Faza 2") — schemat do zaprojektowania. Tagi
+  **per użytkownik** (`tags.user_id`, `UNIQUE(user_id, lower(name))`), nie globalne. Do
+  sprawdzenia, czy parametryzowany harness izolacji łapie parametry `tag_id`/`watchlist_id`.
+  Pilnowanie zakresu: watchlista = lista aktywów z notatką, nie „portfel papierowy" (§1).
+- **44 (RLS):** najbardziej ryzykowny krok etapu. `SET LOCAL app.user_id` działa tylko wewnątrz
+  transakcji, a pula połączeń async SQLAlchemy może przenieść ustawienie między żądaniami.
+  Do rozstrzygnięcia, czy `users`/`refresh_tokens` w ogóle dostają polityki — rejestracja
+  i logowanie dzieją się, zanim istnieje `user_id`. Kolejność: **po** 43 (nowe tabele od razu
+  z politykami) i po zweryfikowanym backupie.
+- **45 (świece):** napięcie z zasadą #4 — w `prices` mamy surowe OHLC i skorygowany wyłącznie
+  `close`. Propozycja: skalować OHLC współczynnikiem `close_adj/close` i udokumentować.
+  Pierwszy realny konsument `GET /markets/{code}/index` (dziś bez konsumenta, backlog kroku 34).
+
+**Zależności:** `dane → 40 → 42 → 41`; `43 → 44`; `45` dzieli z 42 wymóg historii notowań.
+43 jest niezależne od 40-42.
+
+**Ryzyka do pilnowania przy realizacji:**
+- Zero snapshotów i puste serie indeksów — adresowane decyzją 2 i krokiem zerowym.
+- Pełzanie zakresu ku transakcjom/XIRR/przepływom (§1) — wszystko liczone z serii cen,
+  `/kontrola-zakresu` po kroku 41.
+- Sharpe/zmienność na krótkiej próbie to szum — próg 30 obserwacji, `null` z powodem.
+- RLS (krok 44) może zablokować aplikację na produkcji — gotowa migracja wstecz, test „sesja bez
+  `app.user_id` widzi 0 wierszy", wdrożenie po zweryfikowanym backupie.
+
+**Kryterium ukończenia pierwszej partii (40-42):** na portfelu z historią co najmniej trzech
+miesięcy widzisz zwrot za okres liczony z pominięciem dni zmiany składu, zmienność, Sharpe'a,
+max drawdown i betę (albo jawny komunikat o zbyt krótkiej próbie), wykres underwater, heatmapę
+miesięczną oraz przebieg portfela na tle WIG20 lub S&P 500 znormalizowany do 100 (obie serie
+w PLN). `make check` zielony, `docker compose up` wstaje.
 
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
