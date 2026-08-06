@@ -13,7 +13,7 @@
 # ten rodzaj awarii, który wychodzi dopiero przy odtwarzaniu.
 
 # Korzeń repo liczony od położenia TEGO pliku, nie od `pwd` — cron uruchamia
-# skrypt z katalogu domowego użytkownika, nie z `/opt/alphasense`.
+# skrypt z katalogu domowego użytkownika, nie z `/opt/alphasense/Alphasense`.
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env.prod}"
 

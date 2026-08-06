@@ -68,3 +68,78 @@ jobs:
         run: docker build --target prod -t alphasense-api:ci backend
       - name: Frontend (target prod)
         run: docker build --target prod -t alphasense-frontend:ci frontend
+
+  # CD uruchamia się wyłącznie po zielonym pushu do `main` (ADR-103). Sekrety
+  # i `.env.prod` pozostają na VPS-ie; GitHub Actions dostaje wyłącznie klucz
+  # do konta wdrożeniowego. Wdrażamy SHA zdarzenia, a nie „to, co akurat jest
+  # na `main`" — ma pójść dokładnie ten commit, który sprawdziły trzy joby CI.
+  #
+  # Ten job NIE zawiera procedury wdrożenia i nie może jej zawierać: klucz na
+  # VPS-ie jest wpisany z `command="…/infra/deploy.sh"`, więc cokolwiek by tu
+  # nie napisać, serwer uruchomi swój skrypt i potraktuje treść polecenia jako
+  # jeden argument. Co się dzieje na produkcji, decyduje `infra/deploy.sh`
+  # z zacommitowanego repo, nie ten plik. Konfiguracja klucza:
+  # `docs/wdrozenie.md` §11.
+  deploy:
+    name: Wdrożenie na produkcję
+    needs: [backend, frontend, obrazy-prod]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Job nie robi `checkout` i nie woła API GitHuba — nie ma powodu, żeby
+    # `GITHUB_TOKEN` w tym środowisku cokolwiek mógł.
+    permissions: {}
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment: production
+    # Zawieszony `ssh` (padnięta sieć VPS-a w trakcie `prod-build`) trzymałby
+    # grupę `production-deploy` przez domyślne 6 godzin, blokując wszystkie
+    # kolejne wdrożenia.
+    timeout-minutes: 30
+    steps:
+      - name: Konfiguracja SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ALPHASENSE }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          # `umask 077` przed zapisem, nie `chmod` po: klucz nie ma istnieć
+          # nawet przez chwilę z prawami do odczytu dla innych.
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519)
+          (umask 077; printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts)
+
+      - name: Wdrożenie zatwierdzonego commita
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_LOGIN: ${{ secrets.SSH_USER }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          ssh -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/id_ed25519 \
+            "$SSH_LOGIN@$SSH_HOST" "$DEPLOY_SHA"
+
+      # Osobny krok, bo sprawdza co INNEGO niż healthcheck w `deploy.sh`: tam
+      # kontener `api` widzi bazę, tutaj cała droga z internetu — DNS, TLS,
+      # Caddy, proxy na `/api/*`. Świadomie NIE `curl --fail`: `/api/health`
+      # z założenia zawsze oddaje `200`, a o stanie mówi ciało (krok 37), więc
+      # kod HTTP przeszedłby także przy `db: down` i zielony job znaczyłby
+      # dokładnie tyle, co „serwer odpowiada".
+      - name: Sprawdzenie z zewnątrz
+        env:
+          BASE_URL: https://alphasense.cedron.net.pl
+        run: |
+          for attempt in $(seq 1 10); do
+            body=$(curl --silent --show-error --max-time 10 "$BASE_URL/api/health" || true)
+            if printf '%s' "$body" | jq -e '.status == "ok" and .db == "up"' >/dev/null 2>&1; then
+              echo "Produkcja odpowiada: $body"
+              exit 0
+            fi
+            echo "Próba $attempt/10 — odpowiedź: ${body:-brak}"
+            sleep 10
+          done
+          echo "::error::/api/health nie potwierdził stanu ok/db=up po 10 próbach"
+          exit 1

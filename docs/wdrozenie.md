@@ -36,8 +36,8 @@ choćby o ukośnik.
 ## 1. Kod na VPS-ie
 
 ```bash
-git clone <repo> /opt/alphasense
-cd /opt/alphasense
+git clone <repo> /opt/alphasense/Alphasense
+cd /opt/alphasense/Alphasense
 ```
 
 Katalog roboczy dla wszystkich dalszych poleceń to korzeń repo (tam, gdzie `Makefile`).
@@ -148,9 +148,8 @@ Jeśli włączyłeś Sentry: sprawdź, czy w logach `api` i `worker` jest `sentr
 przychodzą jako `Ingestia rynku <KOD> zakończona statusem failed|partial` — `failed` to
 brak jakichkolwiek świeżych danych rynku, `partial` to część aktywów.
 
-Ręcznie w przeglądarce, na telefonie i na desktopie: rejestracja → utworzenie portfela →
-dodanie pozycji → wartość w PLN, struktura procentowa, ranking rynków. Formalny smoke test
-(Playwright, 375 px + desktop) to krok 39.
+Pełna ścieżka użytkownika (rejestracja → portfel → pozycja → wartość, struktura, rynki) —
+patrz §10 niżej: najpierw automat, potem lista kontrolna na prawdziwym telefonie.
 
 Po pierwszym przebiegu jobów EOD (godziny w `docs/slownik-rynkow.md`) sprawdź, czy w bazie
 pojawiły się ceny:
@@ -178,7 +177,7 @@ After=docker.service network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/alphasense
+WorkingDirectory=/opt/alphasense/Alphasense
 ExecStart=/usr/bin/docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ExecStop=/usr/bin/docker compose --env-file .env.prod -f docker-compose.prod.yml down
 TimeoutStartSec=0
@@ -199,7 +198,7 @@ między restartami hosta. Systemd odpowiada za start całości w poprawnej kolej
 ## 8. Aktualizacja wdrożenia
 
 ```bash
-cd /opt/alphasense
+cd /opt/alphasense/Alphasense
 git pull
 make prod-build
 make prod-up          # `migrate` wykona nowe migracje przed startem API
@@ -208,6 +207,11 @@ make prod-ps
 
 Jeżeli zmienił się słownik rynków (`app/db/seed.py`), powtórz `make prod-seed` — seed jest
 idempotentny, a restart workera jest konieczny, żeby zobaczył nowe rynki.
+
+To jest procedura **awaryjna i ręczna**. Normalnie wdraża CD po pushu na `main` (§11):
+`infra/deploy.sh` robi to samo, ale dodatkowo pilnuje, że commit jest z `origin/main`
+i nowszy niż wdrożony, ustawia `APP_VERSION`, wywołuje seed tylko przy realnej zmianie
+słownika, czeka na zdrowe API i wycofuje się przy niepowodzeniu.
 
 ## 9. Kopia zapasowa i odtwarzanie
 
@@ -332,6 +336,185 @@ certyfikatów Caddy'ego (wystawią się same) i danych Redisa (cache, odtwarza s
 Notowania i kursy walut worker dociągnie przy najbliższych jobach EOD, ale **historia
 snapshotów portfeli jest nieodtwarzalna z zewnątrz** (ADR-101: append-only, bez
 przeliczania wstecz) — to ona jest realnym powodem, dla którego ten backup istnieje.
+
+---
+
+## 10. Smoke test — koniec Fazy 1
+
+Wdrożenie jest zakończone dopiero wtedy, gdy **nowy użytkownik** przechodzi całą ścieżkę
+produktu: rejestracja → portfel → pozycja → **wartość w PLN**, **skład procentowy**,
+**ranking rynków**. `make prod-ps` i `GET /api/health` mówią tylko, że kontenery żyją.
+
+### 10.1. Automat (Playwright, 375 px + desktop)
+
+```bash
+# na maszynie z kodem, nie na VPS-ie — testuje przez sieć, jak zwykły użytkownik
+cd frontend && npx playwright install chromium   # raz
+E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke
+```
+
+`make smoke` uruchamia `frontend/e2e/smoke.spec.ts` w dwóch projektach — `mobile-375`
+i `desktop`. Test idzie **wyłącznie przez interfejs** (żadnego żądania do API składanego
+z boku), więc nie potrzebuje tokenu ani dostępu do bazy i nadaje się na produkcję.
+Bez `E2E_BASE_URL` celuje w stack deweloperski (`http://localhost:3000`).
+
+Aktywo, które test dodaje do portfela, to domyślnie `bitcoin` — jedyne obecne w obu
+środowiskach, bo produkcja dostaje sam `seed_reference` (bez demo CDR/PKN/AAPL).
+Zmiana: `E2E_SMOKE_ASSET=WIG20 E2E_SMOKE_QUANTITY=1 make smoke`.
+
+**Test zostawia w bazie konto** `smoke-<znacznik>@alphasense.example` z portfelem
+i pozycją. Po przebiegu na produkcji posprzątaj — kasowanie użytkownika kaskaduje na
+portfel i pozycje:
+
+```bash
+make prod-psql
+DELETE FROM users WHERE email LIKE 'smoke-%@alphasense.example';
+```
+
+Najczęstsza czerwona asercja tuż po wdrożeniu to **wartość portfela `0,00 zł`** i to
+zwykle nie jest błąd kodu: worker rejestruje joby EOD przy starcie i czeka na swoją
+godzinę (ADR-102), więc w bazie nie ma jeszcze ani jednej ceny. Wymuszenie:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec worker \
+  python -m app.cli ingest --market CRYPTO
+```
+
+### 10.2. Lista kontrolna na prawdziwym telefonie
+
+Playwright emuluje rozmiar okna, nie telefon: nie sprawdzi klawiatury systemowej,
+gestów, paska adresu chowającego się przy scrollu ani rzeczywistej czcionki. To robisz
+raz, ręcznie, na swoim urządzeniu — najlepiej w sieci komórkowej, nie po Wi-Fi.
+
+- [ ] `https://alphasense.cedron.net.pl` otwiera się bez ostrzeżenia o certyfikacie;
+      kłódka pokazuje certyfikat Let's Encrypt, nie ten wewnętrzny z §4.
+- [ ] Rejestracja z klawiatury telefonu: pole e-mail podnosi klawiaturę z `@`, pole hasła
+      nie podpowiada e-maila.
+- [ ] Formularz pozycji: pole **Ilość** daje klawiaturę numeryczną (`inputMode="decimal"`),
+      a **przecinek** z polskiej klawiatury jest przyjmowany tak samo jak kropka.
+- [ ] Autouzupełnianie tickera reaguje po ~300 ms i da się wybrać kciukiem — lista nie
+      chowa się pod klawiaturą.
+- [ ] Wartość portfela, skład procentowy i ranking rynków są czytelne **bez poziomego
+      przewijania** i bez zoomowania.
+- [ ] Wykresy (donut, treemapa, sparkline) mają widoczne etykiety wartości i tabelę pod
+      spodem — na małym ekranie to ona jest realnym nośnikiem liczb.
+- [ ] Przełącznik motywu: ciemny zostaje ciemny po zamknięciu i ponownym otwarciu karty,
+      bez błysku białego tła przy starcie.
+- [ ] Logowanie Google (jeśli skonfigurowane) wraca na `https://alphasense.cedron.net.pl`,
+      a nie na `localhost` — to najczęstszy objaw nieuzupełnionego `GOOGLE_REDIRECT_URI`
+      w Google Cloud Console.
+- [ ] Po wylogowaniu i zalogowaniu innym kontem **nie widać portfeli poprzednika**
+      (regresja izolacji cache po stronie klienta — patrz `e2e/auth.spec.ts`).
+
+---
+
+## 11. Wdrożenie ciągłe (CD)
+
+Po zielonym pushu na `main` job `deploy` w `.github/workflows/ci.yml` łączy się z VPS-em
+i wdraża dokładnie ten commit, który sprawdziły trzy joby CI. Uzasadnienie i koszty:
+**ADR-103** — ta sekcja to sama konfiguracja.
+
+**GitHub nie dostaje powłoki na serwerze.** Klucz wdrożeniowy jest wpisany z `command=`,
+więc treść polecenia przysłana przez klienta nie jest wykonywana: ląduje w
+`SSH_ORIGINAL_COMMAND` jako string, a co z nim zrobić, decyduje `infra/deploy.sh`
+z repozytorium na serwerze. Bez tego klucz w sekretach GitHuba byłby zdalnym wykonaniem
+dowolnego kodu jako root — konto zdolne wołać `docker compose` należy do grupy `docker`,
+a na tej maszynie leży `.env.prod` i cała baza użytkowników.
+
+### 11.1. Konto i klucz na VPS-ie
+
+```bash
+# 1. Konto wdrożeniowe z dostępem do Dockera i do katalogu repo.
+sudo adduser --disabled-password --gecos "" deploy
+sudo usermod -aG docker deploy
+sudo chown -R deploy:deploy /opt/alphasense/Alphasense
+
+# 2. Klucz — generujesz go na SWOJEJ maszynie, nie na serwerze.
+ssh-keygen -t ed25519 -f ~/.ssh/alphasense-deploy -C "deploy@github" -N ""
+
+# 3. Część publiczna do `authorized_keys`, z ograniczeniem.
+sudo -u deploy mkdir -p /home/deploy/.ssh
+sudo -u deploy tee /home/deploy/.ssh/authorized_keys >/dev/null <<'EOF'
+restrict,command="/opt/alphasense/Alphasense/infra/deploy.sh" ssh-ed25519 AAAA...tu-treść-alphasense-deploy.pub deploy@github
+EOF
+sudo -u deploy chmod 700 /home/deploy/.ssh
+sudo -u deploy chmod 600 /home/deploy/.ssh/authorized_keys
+```
+
+`restrict` wyłącza forwardowanie portów, agenta, X11 i przydział terminala — zostaje samo
+uruchomienie skryptu. **Sprawdź, że działa:**
+
+```bash
+ssh -i ~/.ssh/alphasense-deploy deploy@<host> "echo cokolwiek"
+# → BŁĄD: argument nie jest pełnym SHA commita: cokolwiek     ← tak ma być
+ssh -i ~/.ssh/alphasense-deploy deploy@<host> "$(git rev-parse origin/main)"
+# → wdrożenie
+```
+
+Jeśli pierwsze polecenie coś wypisze zamiast błędu, `command=` nie zadziałało — nie
+podłączaj klucza do GitHuba, dopóki tego nie naprawisz.
+
+### 11.2. Sekrety w GitHubie
+
+*Settings → Environments → `production`* (środowisko, nie zwykłe sekrety repozytorium —
+dzięki temu można dołożyć wymóg ręcznego zatwierdzenia wdrożenia):
+
+| Sekret | Wartość |
+|---|---|
+| `SSH_PRIVATE_KEY_ALPHASENSE` | zawartość `~/.ssh/alphasense-deploy` (część **prywatna**) |
+| `SSH_KNOWN_HOSTS` | wynik `ssh-keyscan -p <port> <host>` |
+| `SSH_HOST` | adres VPS-a |
+| `SSH_PORT` | port SSH |
+| `SSH_USER` | `deploy` |
+
+`SSH_KNOWN_HOSTS` nie jest formalnością: bez niego jedyną alternatywą jest
+`StrictHostKeyChecking=no`, czyli zgoda na wdrożenie na dowolny serwer, który akurat
+odpowie pod tym adresem.
+
+### 11.3. Co robi `infra/deploy.sh`
+
+1. Sprawdza, że argument to **pełny 40-znakowy SHA** — to jedyna wartość z zewnątrz.
+2. `git fetch` i dwa warunki: commit musi być **przodkiem `origin/main`** (nie da się wdrożyć
+   niczego spoza głównej linii) i **nowszy niż wdrożony** (ponowne uruchomienie starego
+   przebiegu nie cofnie produkcji po cichu na kod starszy niż wykonane migracje).
+3. `git checkout main` + `reset --hard` — repo zostaje **na gałęzi**, więc ręczne `git pull`
+   z §8 nadal działa.
+4. Ustawia `APP_VERSION` w `.env.prod` na skrót SHA, żeby `release` w Sentry i pole `version`
+   w `/api/health` mówiły prawdę o tym, co stoi na produkcji.
+5. `make prod-build` + `make prod-up`. `make prod-seed` **tylko wtedy**, gdy między
+   wdrożeniami zmienił się `backend/app/db/seed.py` — bezwarunkowy restart workera przy
+   każdym pushu potrafiłby trafić w okno ingestii EOD i sam wygenerować alert `failed`.
+6. Czeka, aż kontener `api` zgłosi się jako `healthy` (healthcheck parsuje pole `db`
+   z `/api/health` — patrz §6, dlaczego kod HTTP tu nie wystarcza).
+7. Przy każdym niepowodzeniu: **wycofanie na poprzedni commit** (pełna przebudowa i start)
+   plus alert do Sentry z `component=infra`, ten sam mechanizm co w skryptach backupu.
+   Gdy nie powiedzie się także wycofanie — alert `fatal` i produkcja czeka na człowieka.
+
+Blokada `flock` nie dopuszcza dwóch wdrożeń naraz; job w GitHubie ma dodatkowo
+`concurrency: production-deploy`.
+
+### 11.4. Czego CD NIE robi
+
+- **Nie uruchamia smoke testu.** Job kończy się sprawdzeniem `/api/health` z zewnątrz
+  (`status: ok`, `db: up`) — to dowód, że stack żyje i widzi bazę, a nie że produkt działa.
+  Po istotnej zmianie puść `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke` (§10).
+- **Nie pilnuje, kto wypycha na `main`.** Kto może wypchnąć, ten wdraża — ochroną jest
+  branch protection na `main`, nie ten skrypt.
+- **Nie dotyka `.env.prod` poza `APP_VERSION`.** Nowe zmienne środowiskowe (np. DSN Sentry)
+  dopisujesz na serwerze ręcznie, przed wdrożeniem, które ich potrzebuje.
+
+Świadome cofnięcie produkcji na starszy commit robisz ręcznie na VPS-ie — `deploy.sh`
+celowo tego zabrania:
+
+```bash
+cd /opt/alphasense/Alphasense
+git checkout main && git reset --hard <starszy-sha>
+make prod-build && make prod-up
+```
+
+Uwaga: cofnięcie **nie wycofuje migracji**. Jeśli nowy kod dołożył migrację, wracasz na
+schemat, którego stary kod może nie rozumieć — wtedy właściwą drogą jest poprawka do
+przodu, nie cofanie.
 
 ---
 

@@ -3,9 +3,11 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36, 37 i 38 zrobione**; następny krok 39 — smoke test, KONIEC FAZY 1).
+**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36–39 zrobione po stronie repo**).
+Zostało samo **wdrożenie na VPS** — rekord A, `.env.prod`, DSN-y Sentry, Google Console — i przepuszczenie
+przez produkcję `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`. Dopiero to zamyka Fazę 1.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
-**Ostatnia aktualizacja:** 2026-08-03
+**Ostatnia aktualizacja:** 2026-08-05
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -19,7 +21,7 @@ Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
-| 7 | Wdrożenie produkcyjne | 🟡 w toku (kroki 36-38 zrobione) |
+| 7 | Wdrożenie produkcyjne | 🟡 kroki 36-39 zrobione, czeka na wdrożenie na VPS |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
@@ -66,7 +68,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 36 Caddy + compose produkcyjny (wdrożenie na VPS: po Twojej stronie)
 [x] 37 Sentry + /health + alerty
 [x] 38 Backup pg_dump (skrypty + cron + test odtworzenia; bucket do założenia po Twojej stronie)
-[ ] 39 Smoke test 375px + desktop  ← KONIEC FAZY 1
+[x] 39 Smoke test 375px + desktop (`make smoke`; przebieg na produkcji po Twoim wdrożeniu)  ← KONIEC FAZY 1
 [ ] 40 Zwroty dzienne (bez dni composition_change)
 [ ] 41 Ryzyko: zmienność, Sharpe, drawdown, beta
 [ ] 42 Benchmark (WIG20, S&P 500)
@@ -84,7 +86,23 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
 - [x] ~~Push commitów etapu 4 na `origin/main`~~ — **nieaktualne**: po `git fetch` (2026-07-28) `origin/main == main == 0b43c54`, zero commitów różnicy. Cały etap 4 **i** etap 6 (kroki 29-32) są już na GitHubie. Ten wpis żył w STATUS.md od 2026-07-24 i wprowadzał w błąd.
 - [x] GOOGLE_CLIENT_ID/SECRET uzupełnione przez użytkownika. `/api/auth/google/start` zweryfikowany z prawdziwymi danymi (poprawny redirect do accounts.google.com, PKCE S256, state) — pozostaje do Twojej weryfikacji: pełny klik-przez-flow w przeglądarce (Google Cloud Console → Authorized redirect URIs musi mieć `http://localhost:8000/api/auth/google/callback`).
-- [ ] **Domena produkcyjna** — potrzebna przed krokiem 36 (Caddyfile, `CORS_ORIGINS`, `GOOGLE_REDIRECT_URI`). Krok 4 planu jest odhaczony, ale nazwa domeny nie jest nigdzie w repo zapisana.
+- [x] **Domena produkcyjna: `alphasense.cedron.net.pl`** (`cedron.net.pl` kupiona 2026-08-03 w cyberFolks;
+  strefa DNS na `dns1-3.tld.pl`, czyli edytowana w panelu cyberFolks). Aplikacja stoi na **subdomenie**,
+  nie na apeksie — potwierdzone przez użytkownika 2026-08-05. Wchodzi do `.env.prod` jako
+  `DOMAIN=alphasense.cedron.net.pl`, `CORS_ORIGINS=https://alphasense.cedron.net.pl` i
+  `GOOGLE_REDIRECT_URI=https://alphasense.cedron.net.pl/api/auth/google/callback`.
+  - [ ] **Rekord A `alphasense` do utworzenia** i wskazania na IP VPS-a (apeks `@` obsługuje parking
+    cyberFolks `91.198.146.229`, TTL 3600 — nie ruszamy go). Nowy rekord zakładaj od razu z TTL 300:
+    przy 3600 pomyłka w IP oznacza godzinę, w której walidacja HTTP-01 trafia w cudzy serwer i pali
+    limit BŁĘDÓW produkcyjnego Let's Encrypt.
+  - [ ] **Google Cloud Console** — do *Authorized redirect URIs* dopisać
+    `https://alphasense.cedron.net.pl/api/auth/google/callback` (dosłownie, bez ukośnika na końcu),
+    **nie usuwając** wpisu `http://localhost:8000/api/auth/google/callback` używanego w devie.
+    *Authorized JavaScript origins* zostaje puste — flow jest w całości serwerowy (Authlib).
+  - `www` nie dotyczy tej konfiguracji — `infra/caddy/Caddyfile` obsługuje dokładnie jeden host
+    (`{$DOMAIN}`), a nim jest subdomena `alphasense`.
+  - Rekordu **CAA nie dodawać**: brak = dowolne CA może wystawić, a źle wpisany zablokuje Let's Encrypt.
+    MX/TXT nie ma i nie są potrzebne, dopóki na domenie nie ma poczty.
 - [x] **Bucket S3-compatible + klucz aplikacyjny** — zrobione 2026-08-03: Backblaze B2, bucket
   `alphasense-backup-pl` w regionie `eu-central-003` (UE — dane osobowe użytkowników nie wychodzą poza
   Europę), klucz aplikacyjny ograniczony do tego jednego bucketu, `Read and Write`, bez „Allow List All
@@ -442,6 +460,135 @@ realnie działa. `shellcheck` (obraz `koalaman/shellcheck:stable`) czysty na wsz
   Szyfrowanie GPG przed wysyłką to kilka linii, ale wprowadza klucz, którego utrata unieważnia wszystkie
   kopie; decyzja użytkownika, nie domyślne zachowanie.
 
+## Krok 39 — smoke test 375 px + desktop (ZROBIONY 2026-08-05)
+
+**Co powstało:** `frontend/e2e/smoke.spec.ts` · projekt `desktop` (1280×900) w `playwright.config.ts`
+obok istniejącego `mobile-375` · `make smoke` · `docs/wdrozenie.md` §10 (automat + ręczna lista
+kontrolna na prawdziwym telefonie + sprzątanie konta smoke z bazy produkcyjnej) · wolumen anonimowy
+`/app/.next` w `docker-compose.yml` (patrz „Znalezione przy okazji" niżej).
+
+**Wszystko idzie przez UI — ani jednego żądania do API składanego z boku.** To jedyna różnica, która
+naprawdę się liczy wobec `dashboard.spec.ts` (ten przygotowuje portfel i pozycje przez `request`,
+bo pokrywa komponenty, nie ścieżkę). Dzięki temu ten sam plik da się puścić na produkcję —
+`E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke` — gdzie nie mamy ani tokenu, ani prawa
+dopisywania czegokolwiek do bazy z boku.
+
+**Test biegnie w DWÓCH projektach i sam nie ustawia rozmiaru okna** (bierze go z projektu), w
+odróżnieniu od `dashboard.spec.ts`, który przełącza viewport w trakcie. Konsekwencja: nawigacja jest
+klikana przez „ten link, który akurat widać" (`filter({ visible: true })`), więc na 375 px sprawdza
+`BottomNav`, a na desktopie `SideNav` — dwa różne komponenty, ta sama asercja. Desktop dostaje
+**wyłącznie** smoke (`testMatch`); puszczanie tam całej suity podwoiłoby czas i liczbę logowań, nic
+nowego nie sprawdzając.
+
+**Asercja na wartość portfela jest na NIEZEROWĄ kwotę**, nie na obecność napisu „zł". „0,00 zł" to
+dokładnie ten stan, w którym aplikacja wygląda na działającą, a produkt nie działa: pozycja siedzi
+w bazie, ale wycena nie ma z czego powstać (brak `prices`, brak kursu NBP, worker nigdy nie odpalił).
+Po świeżym wdrożeniu to najbardziej prawdopodobna czerwona asercja i **zwykle nie jest błędem kodu** —
+worker rejestruje joby EOD przy starcie i czeka na swoją godzinę (ADR-102). Wymuszenie ingestii jest
+w runbooku §10.1.
+
+**Aktywo jest parametrem (`E2E_SMOKE_ASSET`, domyślnie `bitcoin`)**, bo produkcja dostaje sam
+`seed_reference` — są w niej indeksy rynków, nie ma demo CDR/PKN/AAPL. `bitcoin` to jedyne aktywo
+obecne w OBU środowiskach (jest indeksem rynku CRYPTO i jednocześnie normalnym `Asset`).
+
+**Żywa weryfikacja (2026-08-05, stack dev):** `make smoke` → 2/2 zielone (mobile 375 px i desktop),
+pełna suita `npx playwright test` → **7/7** (5 dotychczasowych + 2 smoke, zero regresji).
+Zrzuty `frontend/test-results/smoke-{mobile-375,desktop}-{wartosc,struktura,rynki}.png` — na wariancie
+mobilnym realne **12 194,86 zł** za 0,05 BTC, wykres kołowy alokacji, tabela udziałów i lista rynków.
+
+### Znalezione przy okazji — rozjazd `.next` naprawiony u przyczyny
+
+Pierwszy przebieg smoke testu padł na **HTTP 404 na `/portfolios/{id}/struktura`** przy w pełni
+działających `/portfolios/{id}` i `/struktura`. Trasy istniały, były w manifeście buildu, a mimo to
+dev-serwer oddawał stronę „not found" — to trzecia twarz znanego problemu ze współdzielonym `.next`
+(poprzednie dwie: `ChunkLoadError` i HTTP 500 na każdej trasie, „Notatki operacyjne"). Przyczyna:
+`make check` uruchamia `next build` NA HOŚCIE, kontener biegnie `next dev`, a `./frontend:/app` daje
+obu stronom ten sam katalog.
+
+Naprawione **wolumenem anonimowym `/app/.next`** w `docker-compose.yml` — ten sam wzorzec, którym repo
+już odcina `node_modules`. Kontener ma własne `.next`, host własne, żadne nie widzi drugiego.
+Zweryfikowane sekwencją, która wcześniej niezawodnie psuła dev-serwer: `make check` (pełny hostowy
+`next build`) → natychmiast `npx playwright test` → 7/7 zielone.
+
+Odrzucona alternatywa: `distDir` przestawiane zmienną `NEXT_DIST_DIR` w `next.config.ts`. Działa, ale
+ciągnie ogon — ESLint zaczyna czytać wygenerowany kod (kilkadziesiąt błędów `no-require-imports`
+z cudzych bundli), a `next build` **sam dopisuje** nowy katalog do `include` w `tsconfig.json`.
+Naprawa jednego pliku kosztowałaby zmiany w czterech.
+
+### Backlog kroku 39 (nieblokujące)
+
+- **Domyślny `expect.timeout` podniesiony do 10 s** dla całej suity. Powód: jeden przebieg smoke padł
+  po recreate kontenera, gdy Turbopack kompilował trasę przy pierwszym wejściu. False negative
+  w smoke teście jest droższy niż kilka sekund czekania — to on decyduje, czy wdrożenie uznajemy za
+  udane. Gdyby okazało się, że maskuje realną powolność, właściwą naprawą jest osobny, dłuższy timeout
+  tylko dla `smoke.spec.ts`.
+- **Smoke na produkcji zostawia konto** `smoke-…@alphasense.example` z portfelem i pozycją. Sprzątanie
+  jest ręczne (`DELETE FROM users WHERE email LIKE 'smoke-%'`, runbook §10.1) — automat wymagałby
+  endpointu kasującego konto, którego nie ma i który jest poza zakresem Fazy 1.
+- **Playwright emuluje rozmiar okna, nie telefon.** Klawiatura systemowa, przecinek z polskiej
+  klawiatury w polu ilości, gesty i chowający się pasek adresu są w ręcznej liście kontrolnej §10.2,
+  bo automat ich nie dotyka.
+- **`make smoke` nie jest w CI** — wymaga żywego stacku, a CI ma sam kod. Naturalne miejsce to job CD
+  (jeśli zostaje) jako krok po `prod-up`, zamiast dzisiejszego `curl` na `/api/health`, który przy
+  zawsze-200 z założenia niczego nie dowodzi.
+- ~~**Testy e2e struktury dopisane do `dashboard.spec.ts`**~~ — powód (limit logowań) zniknął
+  2026-07-29, a rozdzielenie „naturalnie wypada przy kroku 39". **Świadomie NIE zrobione**:
+  `dashboard.spec.ts` przechodzi i pokrywa komponenty, a przepisywanie go byłoby refaktorem poza
+  zakresem kroku (CLAUDE.md §4.3). Smoke test i tak pokrywa tę ścieżkę niezależnie, w dwóch
+  rozmiarach okna.
+
+## Wdrożenie ciągłe (CD) — trzy blokujące z code-review naprawione 2026-08-05
+
+Job `deploy` w `ci.yml` pojawił się poza planem etapu 7 i code-review dał na nim trzy blokujące.
+Wszystkie zamknięte; decyzja zapisana jako **[ADR-103](docs/adr/ADR-103-wdrozenie-ciagle.md)**
+(zmienia decyzję 4 planu etapu 7 — „tylko pliki i runbook").
+
+**1. Klucz SSH nie jest już równoważny rootowi.** Powstał `infra/deploy.sh` — jedyne polecenie,
+które klucz z GitHuba może uruchomić (`restrict,command="…/infra/deploy.sh"` w `authorized_keys`).
+Treść polecenia przysłana przez klienta nie jest wykonywana: ląduje w `SSH_ORIGINAL_COMMAND` jako
+string i jest walidowana regexem `^[0-9a-f]{40}$`. Wcześniej `ssh user@host "<cokolwiek>"` dawało
+wykonanie dowolnego kodu jako root na maszynie z `.env.prod` (SECRET_KEY, hasło Postgresa,
+`GOOGLE_CLIENT_SECRET`, klucz do bucketu B2 **z prawem kasowania kopii**).
+
+**2. Sprawdzenie po wdrożeniu realnie coś sprawdza.** `curl --fail` na `/api/health` przechodziło
+także przy `db: down`, bo ta trasa z założenia zawsze oddaje `200` (krok 37). Teraz są dwa
+niezależne sprawdzenia: `deploy.sh` czeka, aż kontener `api` zgłosi się jako `healthy` (healthcheck
+compose'a parsuje pole `db` — reużyty werdykt, nie druga kopia tej logiki), a job w CI odpytuje
+`https://…/api/health` z zewnątrz i **parsuje ciało** przez `jq` (`status == "ok" and .db == "up"`),
+z dziesięcioma próbami co 10 s. Zewnętrzne sprawdzenie mierzy co innego niż wewnętrzne: DNS, TLS,
+Caddy i proxy na `/api/*`.
+
+**3. Decyzja zapisana.** ADR-103 wraz z kosztami: kto może wypchnąć na `main`, ten wdraża
+(ochroną jest branch protection, nie ten skrypt), a dopóki `make smoke` nie jest częścią tej
+ścieżki, jedynym dowodem poprawności jest „proces żyje i widzi bazę", nie „produkt działa".
+
+**Domknięte przy okazji, bo pisanie `deploy.sh` i tak wymagało rozstrzygnięcia tych miejsc:**
+ponowne uruchomienie starego przebiegu nie cofa produkcji (commit musi być przodkiem `origin/main`
+**i** nowszy niż wdrożony), repo zostaje na gałęzi `main` zamiast w detached HEAD (ręczne `git pull`
+z runbooka §8 nadal działa), `APP_VERSION` ustawia się sam na skrót SHA (bez tego `release`
+w Sentry zamarzłby na `0.1.0` — backlog kroku 37 klasyfikował to jako nieblokujące **przy
+wdrożeniach ręcznych**), `make prod-seed` tylko przy realnej zmianie `seed.py` (bezwarunkowy restart
+workera mógł trafić w okno ingestii EOD i sam wygenerować alert `failed`), `flock` przeciw dwóm
+wdrożeniom naraz, `timeout-minutes: 30`, `permissions: {}` i `BatchMode`/`IdentitiesOnly` w jobie.
+
+**Ścieżka repo na VPS-ie ujednolicona na `/opt/alphasense/Alphasense`** (potwierdzona przez
+użytkownika): `docs/wdrozenie.md` §1, jednostka systemd §7, §8 i **`infra/backup/alphasense-backup.cron`**
+wskazywały na `/opt/alphasense`, więc nocny backup i test odtworzenia nie znalazłyby swoich skryptów.
+
+**Weryfikacja (2026-08-05):** `shellcheck` czysty, `bash -n` OK, workflow parsuje się do poprawnego
+YAML-a. Logika sprawdzona w piaskownicy (klon repo + podstawione `make`/`docker` na `PATH`, żeby nie
+sprawdzać jej po raz pierwszy na produkcji): próba wstrzyknięcia `"cokolwiek; rm -rf /"` odbita przed
+dotknięciem czegokolwiek, skrócony SHA odbity, commit spoza `origin/main` odbity, commit starszy niż
+wdrożony odbity, ten sam commit → „nic do zrobienia", ścieżka szczęśliwa kończy się na gałęzi `main`
+z ustawionym `APP_VERSION`, nieudany `prod-up` wycofuje na poprzedni commit i alarmuje
+(`fingerprint=deploy-failed`), a nieudane wycofanie eskaluje do `fatal`. Kod wyjścia `1` w każdej
+ścieżce błędu — bez tego CI świeciłoby na zielono przy zepsutej produkcji.
+
+**Nie zweryfikowane i zweryfikowane być nie mogło:** przebieg na żywym VPS-ie (`make prod-build`
+i `docker inspect` były atrapami) oraz to, czy `command=` w `authorized_keys` jest wpisane poprawnie —
+procedura sprawdzenia jest w `docs/wdrozenie.md` §11.1 i jest to **pierwsza rzecz do zrobienia**
+przed podłączeniem klucza do GitHuba.
+
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
 Dwa **blokujące** znaleziska naprawione 2026-07-28 (patrz dziennik sesji). Pozostałe rozbrojone w sesji
@@ -607,7 +754,7 @@ zrobione, zanim krok 32 ma sens.
 - **Pułapka e-mail w seedach/testach**: `email-validator` (Pydantic `EmailStr`) odrzuca domeny `.local` i `.test` jako „special-use". Do danych demo/testowych używaj `.example` (RFC 2606, gwarantowana nierozwiązywalna) — nie `.local`/`.test`.
 - Po każdej zmianie `requirements.txt`/`requirements-dev.txt` w kontenerze `api` trzeba `docker compose up -d --build api` (nie samo `up -d`) — inaczej nowe zależności zainstalowane wcześniej „na żywo" w kontenerze (`pip install` przez `exec`) nie są zapisane w obrazie i znikają przy każdym recreate.
 - **Po zmianie `frontend/package.json` `--build` NIE wystarczy** (pułapka trafiona 2026-08-03 przy `@sentry/nextjs`): dev-owy `frontend` montuje `node_modules` jako **wolumen nazwany** `frontend_node_modules`, który przesłania katalog z obrazu i przeżywa każdy rebuild. Nowa zależność nigdy tam nie trafia, a kontener pada z `MODULE_NOT_FOUND` — wygląda jak błąd kodu, jest błędem środowiska. Naprawa: `docker compose run --rm --no-deps frontend npm ci`.
-- **`frontend/.next` jest dzielony między hostem a kontenerem** (bind-mount `./frontend:/app`), więc `next build` z `make check` na hoście i `next dev` w kontenerze piszą do tego samego katalogu. Objaw rozjazdu: `ChunkLoadError: Failed to load chunk ... Unexpected end of input` i `HTTP 500` na każdej trasie. Naprawa: `rm -rf frontend/.next` i restart kontenera.
+- ~~**`frontend/.next` jest dzielony między hostem a kontenerem**~~ — **naprawione 2026-08-05 (krok 39)**: `docker-compose.yml` montuje wolumen anonimowy na `/app/.next`, więc kontener i host mają osobne katalogi. Do tego dnia bind-mount `./frontend:/app` dawał obu stronom ten sam `.next` i `next build` z `make check` psuł dev-serwer na trzy różne sposoby: `ChunkLoadError: Failed to load chunk ... Unexpected end of input`, `HTTP 500` na każdej trasie i `HTTP 404` na zagnieżdżonych trasach dynamicznych (`/portfolios/{id}/struktura`) przy działających pozostałych. Za każdym razem wyglądało to na błąd kodu. Gdyby coś podobnego wróciło: `docker compose up -d --force-recreate frontend` (odtwarza pusty wolumen `.next`), a na hoście `rm -rf frontend/.next`.
 
 ## Dziennik sesji
 
@@ -635,3 +782,5 @@ zrobione, zanim krok 32 ma sens.
 | 2026-07-28 | **Code-review etapu 6 + naprawa dwóch blokujących.** Recenzja zakresu `b973c9a..HEAD` (7 commitów, kroki 29-32, 59 plików) wykazała, że **`make check` jest CZERWONE** — 5 failed, 228 passed, mimo że dziennik przy każdym kroku deklarował zielone. (1) **Test zależny od stanu środowiska, nie od kodu**: fixture'y `analytics_assets`/`temp_assets` tworzyły własny kurs `USD = 4` **warunkowo** (`if await db_session.get(FxRate, ("USD", d)) is None`), a asercje twardo oczekiwały kwot policzonych tym kursem (`100 × 4 = 400`). Gdy worker EOD zaciągnął realny kurs NBP (potwierdzone w bazie: `USD 2026-07-28 = 3.80230000`), fixture przestawał nadpisywać, wycena wychodziła `380.23` i pięć testów padało. Testy były więc zielone tylko dopóki worker nie pobrał kursu — zależność od pory dnia i historii kontenera. Naprawione przez zmianę waluty testowej na **`XTS`** (ISO 4217 rezerwuje ten kod wyłącznie na testy — ta sama zasada co domena `.example` z RFC 2606 dla e-maili, patrz „Notatki operacyjne"): `XTS` jest wyłączną własnością testów, więc kurs ustawiany jest bezwarunkowo, a teardown nie musi go warunkowo omijać. Odrzucona alternatywa: nadpisywanie realnego wiersza `USD` z przywracaniem w teardownie — przy twardym przerwaniu testu zostawiałaby w bazie dev fałszywy kurs `4` i psuła wycenę demo portfela. Zmienione: `tests/integration/test_holdings.py` (`usd_asset` → `fx_asset`, `cost_currency` w dwóch testach), `tests/integration/test_analytics.py` (`etf_us` teraz `US`/`XTS`). (2) **Wyciek izolacji danych po stronie klienta**: `lib/queryKeys.ts` nie ma segmentu użytkownika w kluczach, `staleTime` to 60 s, a `AuthProvider.logout()` kasował wyłącznie token — więc sekwencja „A się wyloguje → B zaloguje w tej samej karcie" pokazywała B listę portfeli A prosto z cache TanStack Query, **bez odpytania backendu** (backend poprawny, `get_owned_portfolio` zwraca 404 na cudzy zasób). Złamanie CLAUDE.md #3.2/#3.10. Naprawione przez `queryClient.clear()` w `login()` (przed `setAccessToken`, żeby nie skasować w locie zapytań nowego użytkownika) i w `logout()` (w `finally`, żeby dane znikły także gdy `POST /auth/logout` padnie). Test regresyjny dopisany do `e2e/auth.spec.ts` — i **zweryfikowany, że realnie łapie bug**: pierwsza wersja przechodziła mimo wyłączonej poprawki, bo miała `page.goto("/portfolios")` między wylogowaniem a logowaniem B, a pełne przeładowanie i tak niszczy `QueryClient`; po przestawieniu kolejności (logowanie/wylogowanie idą przez `router.push`, czyli nawigację miękką) test pada z `Expected: 0, Received: 1` przy zakomentowanym `clear()` i przechodzi z nim. Scenariusz doklejony do istniejącego testu logowania, nie osobny — osobny wymagałby dwóch dodatkowych logowań, a suita zużywa już 5 z 5 slotów limitu `POST /auth/login` (patrz backlog). Zweryfikowane po naprawach: `make check` **zielone, exit 0** — ruff „All checks passed", mypy strict „no issues found in 53 source files", **233 passed, 3 deselected**, `next build` OK; `npx playwright test` — **5/5 zielone**. Przy okazji skorygowany nieaktualny od 2026-07-24 wpis „Decyzje oczekujące" o niewypchniętym etapie 4 (`origin/main == main == 0b43c54`, zero różnicy). | **Kryterium ukończenia etapu 6 wciąż NIESPEŁNIONE** — zostały kroki 33 (widoki struktury), 34 (panel „Twoje rynki"), 35 (formularz pozycji, stany puste, dark mode). Krok 35 blokuje realne używanie dashboardu: przycisk „Dodaj pierwszą pozycję" jest twardo `disabled`, więc pustego portfela nie da się wypełnić przez UI, a `portfolio_valuations` jest puste dla każdego portfela w dev. Rekomendowana kolejność: 35 → 33 → 34 (odwrotnie niż plan, bo 33/34 bez pozycji nie mają czego rysować) — do decyzji użytkownika. Pozostałe 7 znalezisk z recenzji (nieblokujące) w nowej sekcji „Backlog po code-review etapu 6". Nic z tego zadania nie jest zacommitowane. |
 | 2026-07-28 | **Krok 35 (etap 6): formularz pozycji, stany puste, tryb ciemny/jasny.** Wykonany przed krokami 33-34 (odwrotnie niż plan) — bez możliwości dodania pozycji przez UI widoki struktury nie mają czego rysować, a `portfolio_valuations` było puste dla każdego portfela w dev. **Formularz**: `components/forms/HoldingForm.tsx` + `lib/assets.ts` (`GET /assets/search`, publiczne) + `createHolding` w `lib/dashboard.ts` + `lib/useDebounced.ts` (300 ms). Kolejność pól = kolejność decyzji: CO (autouzupełnianie tickera, `role="combobox"`/`listbox`), ILE (`inputMode="decimal"` — klawiatura numeryczna bez strzałek i bez lokalnego parsowania liczby przez przeglądarkę, chcemy string 1:1 dla backendu), na końcu opcjonalna cena nabycia w `fieldset` z jawną etykietą „opcjonalna" (CLAUDE.md #1: serce produktu to struktura, nie księgowość — wymaganie ceny odstraszałoby od pierwszej pozycji). Kwoty i ilości jadą jako **stringi dokładnie tak, jak wpisane**, żadnego `parseFloat` po drodze (CLAUDE.md #3.1); przecinek normalizowany do kropki (polska klawiatura). Walidacja na froncie tylko kształtu zapisu, sędzią ostatecznym jest backend (422). Po dodaniu unieważniane są `qk.holdings`/`qk.summary`/`qk.portfolio` (bump `holdings_version`) oraz cała rodzina `["valuations", portfolioId]` bez `range` — jednym wywołaniem dla wszystkich zakresów wykresu. **Stany puste**: CTA „Dodaj pierwszą pozycję" w `PortfolioDashboard` przestało być `disabled` (placeholder z kroku 32) i rozwija formularz w miejscu — w portfelu pustym formularz JEST najważniejszą treścią ekranu; w portfelu z pozycjami jest zwijany za przyciskiem „Dodaj pozycję", żeby nie spychać wartości i wykresu poniżej zgięcia na 375 px. Przy okazji naprawiony brak gałęzi `isLoading` dla `holdings` (znalezisko code-review z tego samego dnia — mignięcie pełnego widoku u nowego użytkownika) i dodana brakująca gałąź błędu (łańcuch trójargumentowy nie miał `else`). **Tryb ciemny/jasny**: `lib/theme.ts` (moduł z pub/sub, ten sam wzorzec co `tokenStore` — motyw musi być czytelny spoza drzewa React), `components/ui/ThemeToggle.tsx` w `SideNav` i `BottomNav`. **Trzy stany, nie dwa** (`system → jasny → ciemny`): przy dwóch użytkownik nie miałby jak wrócić do „idź za systemem", a `prefers-color-scheme` przestałoby cokolwiek robić. `app/globals.css` przełączony z domyślnej strategii medialnej Tailwind v4 na klasę (`@custom-variant dark (&:where(.dark, .dark *))`) — inaczej ręczny wybór nie mógłby wygrać z ustawieniem systemu. Konsekwencja: inline `<script>` w `<head>` (`app/layout.tsx`, nie `useEffect`) ustawiający klasę przed pierwszym malowaniem — **zweryfikowane pomiarem na wyjściu serwera**: skrypt jest na pozycji 2281, `<body>` na 2635, czyli biegnie przed renderem treści; bez tego użytkownik z motywem ciemnym dostawałby błysk białego tła. Klucz `alphasense-theme` jest świadomie zduplikowany między skryptem a `THEME_STORAGE_KEY` (skrypt musi być samodzielnym stringiem, biegnie przed jakimkolwiek bundlem). `ValueChart.usePrefersDark` → `useIsDarkTheme` czytające rozwiązany motyw z `lib/theme.ts`, nie samo `matchMedia` — inaczej ręczny wybór przestawiałby całe UI poza wykresem (ECharts jako jedyny w repo wymaga literalnych kolorów, nie da się go ostylować klasami Tailwind). **Testy**: rozszerzony `e2e/dashboard.spec.ts` (dodanie pozycji przez formularz → portfel przestaje być pusty bez F5; przełączanie motywu przez pełny cykl + przetrwanie `reload`) — dopisane do istniejącego testu, nie osobne, bo suita zużywa wszystkie 5 slotów limitu `POST /auth/login`. Pierwsza wersja asercji motywu zakładała zmianę po JEDNYM kliknięciu i padła: Playwright startuje w schemacie jasnym, więc `system → jasny` nie zmienia wyglądu; przepisane na deterministyczne dojście do konkretnego stanu po `aria-label`. Dodana asercja na nieprzycięte etykiety dolnej nawigacji (`scrollWidth > clientWidth`) — brak poziomego scrolla strony tego nie wykrywa. Zweryfikowane: `make check` **zielone, exit 0** (233 passed, ruff/mypy strict/`next build`), `npx playwright test` **5/5 zielone**. | **Kryterium ukończenia etapu 6 nadal niespełnione** — zostały kroki 33 (widoki struktury: donut, treemap, sektor, geo) i 34 (panel „Twoje rynki"). Teraz mają na czym stanąć: pozycje da się dodać przez UI. Otwarte pytania z „Backlog modułu analytics" do rozstrzygnięcia przy kroku 33: czy `by=geo` (country → fallback region) to sensowna hierarchia dla UI i czy `?by=` ma dostać wartość domyślną po stronie backendu, czy ustawiać ją na froncie. Pomyłka warta zapamiętania: na zrzucie z testu odczytałem „Das…d" w dolnej nawigacji jako przycięcie etykiety i „naprawiłem" nieistniejący błąd — pomiar (`scrollWidth == clientWidth == 66` dla każdego linku) pokazał, że to nakładka dev-toolsów Next.js narysowana na pasku, ten sam rodzaj artefaktu co znane zniekształcenie `fullPage` + `position: fixed` z kroku 32. Zmiana została (wąski slot na ikonę daje linkom 66 zamiast 62 px), ale jako zapas, nie naprawa. |
 | 2026-08-03 | **Krok 37 (etap 7): Sentry + `GET /api/health` + alerty jobów EOD.** Pełny opis w sekcji „Krok 37" wyżej. Nowe: `app/core/observability.py`, `app/core/health.py`, `tests/unit/test_observability.py`, `tests/integration/test_health.py`, `frontend/{instrumentation-client,instrumentation,sentry.server.config}.ts`. Zmienione: `main.py` (init Sentry przed budową `FastAPI` — integracja Starlette opakowuje aplikację w momencie tworzenia, odwrotna kolejność zostawiłaby wyjątki żądań poza raportowaniem), `worker/scheduler.py`, `app/cli.py` (ręczne `ingest`/`snapshot` raportują tak samo jak automatyczne; `seed` świadomie nie — administracyjna, pod okiem człowieka), `worker/jobs/ingest_market.py` (`_alert_ingestion_problem`: `failed`→`error`, `partial`→`warning`, `fingerprint` po rynku+statusie), `next.config.ts` (`withSentryConfig`, source mapy tylko przy `SENTRY_AUTH_TOKEN`), `docker-compose.prod.yml` (readiness healthcheck po polu `db`, rotacja logów `x-logging`, `caddy` na `service_started`), `ci.yml` (job `obrazy-prod`), oba `.env*.example` (`APP_VERSION`, `SENTRY_*`), `docs/{api-kontrakt,wdrozenie}.md`. **Dwa defekty spoza zakresu, znalezione przy okazji i naprawione**: (1) limit domyślny rate limitu nie działał na ŻADNEJ trasie od czasu FastAPI 0.139 (`SlowAPIMiddleware` nie znajduje handlera przez `_IncludedRouter`, a `handler is None` traktuje jak zwolnienie z limitu — ta sama zmiana routingu, która w etapie 5 cicho zepsuła harness izolacji) → własny `DefaultRateLimitMiddleware`; (2) `_BrokenRedis` w testach mockował tylko `get`/`set`, więc nowy middleware wywalał się na nim `AttributeError` zamiast degradować → doszedł test „limit domyślny przepuszcza ruch przy padniętym Redisie". Fallback yfinance dla WIG20 (`WIG20.WA`) dopisany do `SOURCE_MAPS` — bez niego każda odmowa Stooqa dawałaby `partial`, czyli powtarzalny alert, który nauczyłby ignorować alerty. Zweryfikowane: `make check` zielone (**247 passed**, ruff, mypy strict 55 plików, Vitest 29/29, `next build`), Playwright **5/5**, `GET /api/health` → `status: ok`, **120× `/api/health` → 120× 200** vs **120× `/api/meta/freshness` → 100× 200 + 20× 429** (zwolnienie i limit domyślny udowodnione na żywo), `ingest --market GPW` → `status=ok` 3/3 z WIG20 przez fallback. Domknięte przy okazji cztery nieblokujące wpisy z kroku 36 (`caddy` na `service_started`, rotacja logów, CI `--target prod`, `NEXT_PUBLIC_SENTRY_DSN` w `args:`). | **Krok 37 zamknięty.** Cały tor Sentry zweryfikowany wyłącznie w trybie WYŁĄCZONYM — dwa DSN-y wciąż po stronie użytkownika (patrz „Decyzje oczekujące"), więc realne dostarczenie zdarzenia do projektu Sentry pozostaje niezweryfikowane; naturalny moment to pierwsze wdrożenie. Dwie pułapki środowiskowe trafione i dopisane do „Notatek operacyjnych": wolumen nazwany `frontend_node_modules` przesłania nowe zależności npm mimo `--build`, a `frontend/.next` dzielony z hostowym `next build` potrafi dać `ChunkLoadError`/500 (oba objawiały się jako 5 czerwonych testów Playwright, które okazały się fałszywym alarmem — padnięty kontener, nie kod). Baza dev wyczyszczona z 22 osieroconych aktywów testowych; wyciek zweryfikowany jako NIEaktywny. Następny krok: 38 (nocny `pg_dump` poza VPS) — wymaga bucketu S3 i klucza od użytkownika. |
+| 2026-08-05 | **Krok 39 (etap 7): smoke test 375 px + desktop — koniec Fazy 1 po stronie repo.** Pełny opis w sekcji „Krok 39" wyżej. Nowe: `frontend/e2e/smoke.spec.ts` (cała ścieżka produktu wyłącznie przez UI: rejestracja → portfel → pozycja → wartość → struktura % → ranking rynków), projekt `desktop` w `playwright.config.ts`, `make smoke`, `docs/wdrozenie.md` §10 (automat + ręczna lista kontrolna na telefonie + sprzątanie konta smoke z produkcji). **Defekt środowiskowy znaleziony przez ten test i naprawiony u przyczyny**: dev-serwer oddawał `HTTP 404` na `/portfolios/{id}/struktura` i `/rynki` przy działających pozostałych trasach — trzecia twarz rozjazdu współdzielonego `.next` (hostowy `next build` z `make check` vs `next dev` w kontenerze); `docker-compose.yml` dostał wolumen anonimowy `/app/.next`, tak samo jak wcześniej `node_modules`. Odrzucono alternatywę z `NEXT_DIST_DIR`/`distDir` — działa, ale ESLint zaczyna czytać wygenerowany kod, a `next build` sam dopisuje katalog do `tsconfig.json`. Zweryfikowane: `make smoke` 2/2, pełna suita **7/7**, sekwencja `make check` → `playwright test` (ta, która wcześniej niezawodnie psuła dev-serwer) zielona, realna wartość `12 194,86 zł` na zrzucie mobilnym. Przy okazji: `expect.timeout` podniesiony do 10 s (smoke z założenia biegnie po zimnym stacku), a wpis o `.next` w „Notatkach operacyjnych" przepisany na naprawiony. | **Kryterium ukończenia etapu 7 NIE jest jeszcze spełnione** i nie może być z poziomu repo: wymaga wejścia na `https://alphasense.cedron.net.pl` z telefonu. Po Twojej stronie zostają: rekord A `alphasense` → IP VPS-a (TTL 300), `.env.prod` z `chmod 600`, dwa DSN-y Sentry, redirect URI w Google Cloud Console, a po wdrożeniu `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke` + ręczna lista kontrolna §10.2. **Otwarte z code-review etapu:** job CD w `ci.yml` (niezacommitowany) — `curl --fail` na zawsze-200 `/api/health` niczego nie dowodzi, brak ADR dla zmiany modelu wdrożenia, klucz SSH bez `command=`/`restrict` na koncie z dostępem do gniazda Dockera. |
+| 2026-08-05 | **CD: trzy blokujące z code-review naprawione + ADR-103.** Pełny opis w sekcji „Wdrożenie ciągłe (CD)" wyżej. Nowe: `infra/deploy.sh` (bramka po stronie VPS-a — jedyne polecenie, które klucz z GitHuba może uruchomić przez `restrict,command=`), `docs/adr/ADR-103-wdrozenie-ciagle.md`, `docs/wdrozenie.md` §11 (konto wdrożeniowe, `authorized_keys`, sekrety, co CD robi i czego NIE robi, ręczne cofnięcie). Job `deploy` w `ci.yml` przepisany: nie zawiera już procedury wdrożenia (i nie może — serwer i tak uruchomi swój skrypt), woła `ssh <host> <SHA>`, ma `permissions: {}`, `timeout-minutes: 30`, `BatchMode`/`IdentitiesOnly`, `umask 077` przy zapisie klucza i osobny krok sprawdzający `/api/health` **z parsowaniem ciała przez `jq`** zamiast `curl --fail` (trasa zawsze oddaje 200, więc kod HTTP niczego nie dowodził). Przy okazji ścieżka repo na VPS-ie ujednolicona na `/opt/alphasense/Alphasense` w runbooku, jednostce systemd i **cronie backupu** — ten ostatni nie znalazłby swoich skryptów. | Zweryfikowane w piaskownicy (klon + atrapy `make`/`docker`): wstrzyknięcie w argument, skrócony SHA, commit spoza `origin/main` i commit starszy niż wdrożony — wszystkie odbite przed zmianą czegokolwiek; ścieżka szczęśliwa zostaje na gałęzi `main` z ustawionym `APP_VERSION`; nieudany `prod-up` wycofuje i alarmuje, nieudane wycofanie eskaluje do `fatal`; kod wyjścia 1 w każdej ścieżce błędu. `shellcheck` czysty. **Nie do sprawdzenia z repo:** żywy przebieg na VPS-ie i poprawność wpisu `command=` w `authorized_keys` — procedura w §11.1, do zrobienia PRZED podłączeniem klucza do GitHuba. |

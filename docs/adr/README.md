@@ -12,5 +12,6 @@ Seria 0xx — decyzje przeniesione z v1. Seria 1xx — decyzje v2.
 | ADR-006 | Model przepływów pieniężnych | **Wycofana** — bezprzedmiotowa w v2 |
 | [ADR-101](ADR-101-semantyka-historii.md) | Semantyka historii przy edycji pozycji | Proponowana |
 | [ADR-102](ADR-102-slownik-rynkow.md) | Słownik rynków i indeksów referencyjnych | Proponowana |
+| [ADR-103](ADR-103-wdrozenie-ciagle.md) | Wdrożenie ciągłe z GitHub Actions (zmienia decyzję 4 etapu 7) | Proponowana |
 
 Nowy ADR: komenda `/adr <temat>` albo szablon `_szablon.md`.

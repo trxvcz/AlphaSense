@@ -7,7 +7,7 @@
 #
 # Format `/etc/cron.d` ma POLE UŻYTKOWNIKA (szóste) — to nie jest crontab -e.
 # Ścieżka do repo jest zaszyta; jeśli klonowałeś gdzie indziej niż
-# `/opt/alphasense`, popraw obie linie.
+# `/opt/alphasense/Alphasense`, popraw obie linie.
 #
 # Dlaczego 05:30 czasu HOSTA (na VPS-ie zwykle UTC): ostatnia ingestia EOD to
 # rynek US o 23:15 czasu Nowego Jorku, czyli ok. 04:15 UTC zimą i 03:15 UTC
@@ -22,8 +22,8 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-30 5 * * *   root  cd /opt/alphasense && ./infra/backup/backup.sh
+30 5 * * *   root  cd /opt/alphasense/Alphasense && ./infra/backup/backup.sh
 
 # Test odtworzenia raz w tygodniu (poniedziałek 06:30), na kopii ściągniętej
 # z bucketu. Nie częściej: odtworzenie zajmuje tyle miejsca, ile waży baza.
-30 6 * * 1   root  cd /opt/alphasense && ./infra/backup/restore-test.sh
+30 6 * * 1   root  cd /opt/alphasense/Alphasense && ./infra/backup/restore-test.sh
