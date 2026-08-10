@@ -714,6 +714,20 @@ produkcję). Praca CD została zacommitowana (`d203c14`) jako pierwszy element d
    częścią realnego wyniku inwestora; porównanie portfela w PLN z indeksem w USD mieszałoby dwie
    różne miary. Spójne z zasadą #5 (kursy wyłącznie z NBP).
 
+**Decyzje dopisane 2026-08-10, przy starcie realizacji:**
+
+5. **Backfill cen na 5 lat wstecz** (~1250 sesji). Daje zapas ponad próg 30 obserwacji, betę
+   liczoną na więcej niż jednym epizodzie rynkowym i heatmapę miesięczną z realnym materiałem.
+   **Konsekwencja do obsłużenia:** na takim horyzoncie splity przestają być teoretyczne (CDR, PKN),
+   a zasada #4 wymaga liczenia na `close_adj`. Heurystyka z kroku 28 nigdy nie działała na tak
+   długiej serii — weryfikacja na realnych danych jest częścią kroku zerowego, nie założeniem.
+6. **Dziura w serii łączy łańcuch, z licznikiem pominiętych ogniw w odpowiedzi.** Weekend nie jest
+   luką, tylko brakiem sesji, a zrywanie ogniwa przy każdej dziurze wycinałoby przy nieregularnym
+   workerze większość okresu i **zaniżało zwrot bez ostrzeżenia**. Licznik jest tu istotny: bez
+   niego „zwrot za 1Y policzony z 40 ogniw" wygląda identycznie jak policzony z 250.
+   Zrywa wyłącznie `composition_change=true`.
+7. **Zakres startu: krok zerowy → 40 → 42 → 41**, zgodnie z decyzją 3.
+
 **Stan wyjściowy (zweryfikowany na żywej bazie dev 2026-08-06):**
 
 ```
@@ -726,6 +740,60 @@ WIG20:                 2 notowania (2026-07-30 … 08-03)
 
 Kroki 40-42 są w całości funkcjami szeregu czasowego, którego dziś **nie ma**. Stąd decyzja 2
 i „krok zerowy" (dane) przed krokiem 40.
+
+**Krok zerowy — stan faktyczny zweryfikowany 2026-08-10 (zakres mniejszy, niż zakładał plan)**
+
+Dwa z czterech elementów **już istnieją** — praca z kroku 37 wyprzedziła ten plan:
+`SourceMapSeed("WIG20", "GPW", "yfinance", "WIG20.WA", 2)` i
+`SourceMapSeed("^GSPC", "US", "yfinance", "^GSPC", 1)` (`backend/app/db/seed.py:238,244`),
+oba potwierdzone w bazie dev. Zostaje więc `backfill-prices` i `make seed-history`.
+
+Baza dev na 2026-08-10: `portfolio_valuations` **0 wierszy**, `^GSPC` 0 notowań, `WIG20` 2,
+`^GDAXI` 8, `CDR`/`PKN` po 10, `bitcoin` 12 (seria stoi od 2026-07-24 — worker dev nie chodzi).
+Najdłuższa seria ma 12 punktów przy progu 30 obserwacji, więc dziś każda metryka ryzyka
+zwróciłaby `null`. Krok zerowy jest ścieżką krytyczną etapu, nie dodatkiem.
+
+**`seed-history` reużywa `snapshot_portfolios(run_date)`**, zamiast implementować drugą ścieżkę
+wyceny — druga rozjechałaby się z produkcyjną przy pierwszej zmianie w `current_value`.
+
+**Historia z `seed-history` jest SYNTETYCZNA i tylko tak wolno ją opisywać.**
+`snapshot_portfolios.py:83-84` wycenia portfel w **dzisiejszym** składzie cenami z podanego dnia,
+a `composition_change` bierze z `portfolio.holdings_changed_at == effective_date`. Pętla po
+przeszłości daje więc „ile byłby wart dzisiejszy skład 5 lat temu", nie „ile portfel był wart"
+(ADR-101 — aplikacja z definicji nie zna tej historii). Wniosek praktyczny: `composition_change`
+wyjdzie prawie wszędzie `false`, więc **ta historia nie przećwiczy sedna kroku 40** (zrywania
+ogniwa). Backfill daje objętość dla metryk ryzyka; poprawność łańcucha muszą pokryć testy
+jednostkowe na syntetycznych seriach o znanych liczbach.
+
+**Krok zerowy — co powstało i co znalazły pierwsze przebiegi (2026-08-10)**
+
+Narzędzia: `backfill_prices()` + `_date_chunks()` w `worker/jobs/ingest_market.py`,
+komendy CLI `backfill-prices` i `seed-history`, cele `make backfill` / `make seed-history`
+(parametry `years=`/`from=`), liczniki `count_prices_in_range` / `count_fx_rates_in_range`
+w `marketdata/repository.py`. `ruff` i `mypy` czyste. **Testów jeszcze nie ma — krok zerowy
+NIE jest domknięty.**
+
+Trzy rzeczy wyszły dopiero na żywych danych:
+
+1. **API NBP odrzuca zakresy > 367 dni**, a `nbp.py:53` wkleja zakres prosto w URL. Pięcioletni
+   backfill kursów padłby na pierwszym zapytaniu — kursy są potrzebne, bo `^GSPC` jest w USD,
+   a decyzja 4 każe pokazywać benchmark w PLN. Dzielenie na okna po 365 dni siedzi w warstwie
+   backfillu, **nie w dostawcy**: kontrakt `DataProvider` brzmi „daj mi ten zakres", a pętla
+   w `NbpProvider` dotknęłaby też codziennej ingestii (okna po `_LOOKBACK_DAYS`).
+2. **Pierwsza wersja licznika kłamała.** `_ingest_asset_ohlcv` zwraca nazwę dostawcy także wtedy,
+   gdy `bars` było puste, więc raport pokazał „WIG20: 5 okien" przy jednym wierszu w bazie.
+   Licznik przepisany na **wiersze w bazie** (`count_prices_in_range`). Ta sama klasa błędu co
+   „test przechodzi, ale niczego nie sprawdza" — raport wyglądał na sukces i nim nie był.
+3. **WIG20 nie ma dziś działającego źródła historii.** Stooq zwraca **404** na
+   `https://stooq.pl/q/d/l/?s=cdr&d1=20250810&d2=20260810&i=d` (sprawdzone na CDR; po pięciu
+   porażkach `CircuitBreaker` otworzył obwód — poprawnie, stan w Redisie z TTL 30 dni),
+   a yfinance odpowiada `$WIG20.WA: possibly delisted; no price data found` na każdym oknie.
+   Akcje GPW ratuje yfinance: **CDR → 248 notowań za rok** (~252 sesje, bez weekendów).
+   **To blokuje benchmark WIG20 z kroku 42** — do rozstrzygnięcia przed krokiem 42, czy
+   szukamy trzeciego źródła dla indeksu, czy pierwsza partia jedzie na samym `^GSPC`.
+
+Stan `prices` po przebiegach próbnych: `CDR` 248 (2025-08-11 .. 2026-08-10), `WIG20` 3,
+`^GSPC` 0 (rynek `US` jeszcze nie ruszany), `PKN` 10, `bitcoin` 12.
 
 **Krok zerowy — dane** (`data-provider`)
 Fallback yfinance dla `WIG20` w `asset_source_map` (wpis z backlogu etapu 4 przestaje być

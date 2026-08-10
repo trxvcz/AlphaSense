@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed test check smoke fmt shell psql \
+.PHONY: up down logs migrate revision seed backfill seed-history test check smoke fmt shell psql \
         prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql \
         backup backup-check backup-restore-test
 
@@ -19,6 +19,21 @@ revision:  ## make revision m="opis zmiany"
 
 seed:
 	docker compose exec api python -m app.cli seed
+
+# Etap 8, krok zerowy. `from` i `years` nadpisywalne:
+#   make backfill years=2
+#   make backfill from=2021-01-01
+years ?= 5
+from  ?= $(shell date -d "$(years) years ago" +%Y-%m-%d)
+
+backfill:  ## dev: zaciągnij historię cen i kursów (domyślnie 5 lat wstecz)
+	docker compose exec api python -m app.cli backfill-prices --from $(from)
+
+# Osobno od `backfill` celowo: najpierw oglądasz, co się zaciągnęło, dopiero
+# potem liczysz na tym wyceny. Historia jest SYNTETYCZNA (dzisiejszy skład
+# wyceniony cenami z przeszłości) i komenda odmawia działania poza ENV=dev.
+seed-history:  ## TYLKO DEV: odtwórz portfolio_valuations wstecz dla metryk etapu 8
+	docker compose exec api python -m app.cli seed-history --from $(from)
 
 test:
 	docker compose exec api pytest -q -m "not network"

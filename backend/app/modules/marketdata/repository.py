@@ -417,6 +417,40 @@ async def list_prices_in_range(
     return list(result.scalars().all())
 
 
+async def count_prices_in_range(db: AsyncSession, asset_id: UUID, *, start: date, end: date) -> int:
+    """Liczba wierszy `prices` dla `asset_id` w `[start, end]` (włącznie).
+
+    Istnieje po to, żeby backfill (`worker/jobs/ingest_market.py`) raportował
+    **ile danych faktycznie leży w bazie**, a nie ile razy dostawca
+    odpowiedział. Dostawca potrafi zwrócić pustą listę bez błędu (aktywo nie
+    istniało jeszcze w tym okresie, święto, wycofanie z obrotu), a wtedy
+    `upsert_prices` też kończy się sukcesem — licznik oparty na odpowiedziach
+    pokazywałby komplet tam, gdzie nie ma ani jednego notowania.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Price)
+        .where(Price.asset_id == asset_id, Price.date >= start, Price.date <= end)
+    )
+    return int((await db.execute(stmt)).scalar_one())
+
+
+async def count_fx_rates_in_range(
+    db: AsyncSession, currency: str, *, start: date, end: date
+) -> int:
+    """Odpowiednik `count_prices_in_range` dla `fx_rates` (patrz jego docstring)."""
+    stmt = (
+        select(func.count())
+        .select_from(FxRate)
+        .where(
+            FxRate.currency == currency.upper(),
+            FxRate.date >= start,
+            FxRate.date <= end,
+        )
+    )
+    return int((await db.execute(stmt)).scalar_one())
+
+
 async def get_latest_price_date_for_assets(db: AsyncSession, asset_ids: list[UUID]) -> date | None:
     """`MAX(prices.date)` dla zbiór `asset_ids` — podstawa `eod_marker`
     (segment „data EOD" klucza cache Redis, CLAUDE.md #3.7, plan krok 31).

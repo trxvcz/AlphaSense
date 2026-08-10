@@ -14,15 +14,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Literal, cast
 
 import sentry_sdk
 
+from app.core.config import get_settings
 from app.core.observability import init_sentry
 from app.db.seed import seed_all, seed_reference
 from app.db.session import AsyncSessionLocal
-from worker.jobs.ingest_market import ingest_market
+from worker.jobs.ingest_market import backfill_prices, ingest_market
 from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
 
@@ -94,6 +95,97 @@ def _run_alert(*, message: str, level: str, fingerprint: str) -> int:
     return 0
 
 
+async def _run_backfill(
+    *,
+    start: date,
+    end: date,
+    market_codes: list[str] | None,
+    symbols: list[str] | None,
+) -> None:
+    async with AsyncSessionLocal() as session:
+        counts = await backfill_prices(
+            session,
+            start=start,
+            end=end,
+            market_codes=market_codes,
+            symbols=symbols,
+        )
+
+    if not counts:
+        print(
+            "Nie zaciągnięto ŻADNYCH danych. Sprawdź kolejno: czy rynek/symbol istnieje "
+            "w słowniku, czy aktywo ma wiersz w `asset_source_map`, czy dostawca odpowiada "
+            "(skill `data-provider`, sekcja „Gdy dane wyglądają źle”).",
+            file=sys.stderr,
+        )
+        return
+
+    print(f"Backfill {start.isoformat()} .. {end.isoformat()} — {len(counts)} pozycji z danymi:")
+    for label in sorted(counts):
+        print(f"  {label:<12} {counts[label]} notowań w bazie")
+    print("Sprawdź jakość serii przed liczeniem metryk: `make seed-history` dopiero potem.")
+
+
+async def _run_seed_history(*, start: date, end: date, include_weekends: bool) -> int:
+    """Odtwarza `portfolio_valuations` dzień po dniu, wołając produkcyjny job
+    `snapshot_portfolios(run_date)` — a nie drugą, równoległą implementację
+    wyceny, która rozjechałaby się z pierwszą przy najbliższej zmianie
+    w `portfolio_service.current_value`.
+
+    **Historia wychodzi SYNTETYCZNA i tylko tak wolno ją opisywać.**
+    `snapshot_portfolios` wycenia portfel w DZISIEJSZYM składzie cenami
+    z podanego dnia, a `composition_change` bierze z
+    `portfolio.holdings_changed_at == run_date`. Wynik odpowiada więc na
+    pytanie „ile byłby wart dzisiejszy skład w przeszłości”, a nie „ile
+    portfel był wart” — tej drugiej odpowiedzi aplikacja z definicji nie zna
+    (ADR-101, snapshoty są append-only i historia nie jest przeliczana).
+    Praktyczna konsekwencja: `composition_change` wyjdzie prawie wszędzie
+    `false`, więc te dane NIE ćwiczą zrywania ogniwa z kroku 40 — od tego są
+    testy jednostkowe na syntetycznych seriach.
+
+    Dlatego komenda jest zablokowana poza `ENV=dev`: na produkcji dopisałaby
+    do `portfolio_valuations` wiersze, których nikt nigdy nie zmierzył,
+    nieodróżnialne potem od prawdziwych snapshotów.
+    """
+    settings = get_settings()
+    if settings.env != "dev":
+        print(
+            f"ODMOWA: `seed-history` działa wyłącznie przy ENV=dev (jest {settings.env!r}). "
+            "Komenda dopisuje do `portfolio_valuations` wyceny odtworzone wstecz — na "
+            "produkcji byłyby nieodróżnialne od prawdziwych snapshotów i łamałyby ADR-101.",
+            file=sys.stderr,
+        )
+        return 2
+
+    days = 0
+    skipped_weekends = 0
+    current = start
+    while current <= end:
+        # Weekend pomijany domyślnie i to nie jest kosmetyka: wycena czyta
+        # ceny przez `max(date) <= D`, więc sobota i niedziela dostałyby
+        # wartość z piątku. Seria z 365 „dniami” rocznie zamiast ~252 sesji
+        # ROZCIEŃCZA zmienność (dwa dni zerowego zwrotu w każdym tygodniu),
+        # a `× √252` w kroku 41 zakłada obserwacje sesyjne. Święta zostają
+        # (mniejszy błąd, wymagałyby kalendarza per rynek).
+        if not include_weekends and current.weekday() >= 5:
+            skipped_weekends += 1
+            current += timedelta(days=1)
+            continue
+        await snapshot_portfolios(current)
+        days += 1
+        current += timedelta(days=1)
+
+    print(
+        f"Odtworzono snapshoty dla {days} dni ({start.isoformat()} .. {end.isoformat()}), "
+        f"pominięto {skipped_weekends} dni weekendowych."
+    )
+    print(
+        "UWAGA: to historia SYNTETYCZNA — dzisiejszy skład wyceniony cenami z przeszłości. "
+        "Nadaje się do ćwiczenia metryk, nie do wniosków o przeszłych wynikach."
+    )
+    return 0
+
+
 def _parse_date(value: str) -> date:
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -153,6 +245,72 @@ def main(argv: list[str] | None = None) -> int:
         help="Dzień snapshotu (YYYY-MM-DD); domyślnie dziś (`portfolio_service.today()`)",
     )
 
+    backfill_parser = subparsers.add_parser(
+        "backfill-prices",
+        help=(
+            "Zaciągnij historię cen i kursów za dłuższy okres (etap 8, krok zerowy) "
+            "— jednorazowo, poza harmonogramem workera"
+        ),
+    )
+    backfill_parser.add_argument(
+        "--from",
+        required=True,
+        type=_parse_date,
+        dest="start",
+        help="Początek zakresu (YYYY-MM-DD)",
+    )
+    backfill_parser.add_argument(
+        "--to",
+        type=_parse_date,
+        default=None,
+        dest="end",
+        help="Koniec zakresu (YYYY-MM-DD); domyślnie dziś",
+    )
+    backfill_parser.add_argument(
+        "--market",
+        action="append",
+        default=None,
+        dest="market_codes",
+        help="Kod rynku, można powtórzyć (np. --market GPW --market FX); domyślnie wszystkie",
+    )
+    backfill_parser.add_argument(
+        "--symbol",
+        action="append",
+        default=None,
+        dest="symbols",
+        help="Symbol aktywa lub waluta, można powtórzyć; domyślnie wszystkie z wybranych rynków",
+    )
+
+    history_parser = subparsers.add_parser(
+        "seed-history",
+        help=(
+            "TYLKO DEV: odtwórz `portfolio_valuations` wstecz, żeby metryki etapu 8 "
+            "miały szereg czasowy do liczenia"
+        ),
+    )
+    history_parser.add_argument(
+        "--from",
+        required=True,
+        type=_parse_date,
+        dest="start",
+        help="Pierwszy dzień historii (YYYY-MM-DD)",
+    )
+    history_parser.add_argument(
+        "--to",
+        type=_parse_date,
+        default=None,
+        dest="end",
+        help="Ostatni dzień historii (YYYY-MM-DD); domyślnie dziś",
+    )
+    history_parser.add_argument(
+        "--include-weekends",
+        action="store_true",
+        help=(
+            "Licz snapshoty także w soboty i niedziele. Domyślnie pomijane — patrz "
+            "`_run_seed_history`, weekendy rozcieńczają zmienność"
+        ),
+    )
+
     alert_parser = subparsers.add_parser(
         "alert",
         help=(
@@ -189,8 +347,39 @@ def main(argv: list[str] | None = None) -> int:
     # automatyczne — inaczej `python -m app.cli ingest` na produkcji byłby
     # ślepą plamą. `seed` pomijamy świadomie: to komenda administracyjna
     # uruchamiana pod okiem człowieka, jej błąd i tak ląduje na konsoli.
-    if args.command in {"ingest", "snapshot"}:
+    if args.command in {"ingest", "snapshot", "backfill-prices", "seed-history"}:
         init_sentry("cli")
+
+    if args.command == "backfill-prices":
+        try:
+            asyncio.run(
+                _run_backfill(
+                    start=args.start,
+                    end=args.end or date.today(),
+                    market_codes=args.market_codes,
+                    symbols=args.symbols,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — diagnostyczne narzędzie CLI, nie handler HTTP
+            # Błędy pojedynczych okien/aktywów są łapane w `backfill_prices`
+            # (skill `job-eod`, reguła 6) — tu ląduje tylko porażka całości,
+            # np. baza nieosiągalna albo zły zakres dat.
+            print(f"BŁĄD: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.command == "seed-history":
+        try:
+            return asyncio.run(
+                _run_seed_history(
+                    start=args.start,
+                    end=args.end or date.today(),
+                    include_weekends=args.include_weekends,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — diagnostyczne narzędzie CLI, nie handler HTTP
+            print(f"BŁĄD: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "ingest":
         try:

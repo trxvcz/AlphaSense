@@ -31,8 +31,9 @@ kolejnego dostawcy (`get_provider_symbol`), zamiast raz dla całego łańcucha.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal
+from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
 import sentry_sdk
@@ -46,9 +47,12 @@ from app.modules.marketdata.models import Asset, IngestionRun, Market
 from app.modules.marketdata.providers.base import Capability
 from app.modules.marketdata.providers.guarded import Guarded
 from app.modules.marketdata.repository import (
+    count_fx_rates_in_range,
+    count_prices_in_range,
     get_provider_symbol,
     list_active_assets,
     list_fx_currencies,
+    list_markets,
     upsert_fx_rates,
     upsert_prices,
 )
@@ -395,4 +399,142 @@ async def _ingest_currency_fx(
     )
 
 
-__all__ = ["ingest_market"]
+# --- Backfill historii (etap 8, krok zerowy) --------------------------------
+
+# Okno pojedynczego zapytania do dostawcy. Powód jest konkretny: **API NBP
+# odrzuca zakresy dłuższe niż 367 dni**, a `nbp.py` wkleja `start`/`end`
+# prosto w URL (`_FX_PATH`) — pięcioletni backfill kursów padłby na pierwszym
+# zapytaniu. Dzielimy tutaj, a NIE w dostawcy: kontrakt `DataProvider` brzmi
+# „daj mi ten zakres”, a wstawienie pętli do `NbpProvider` zmieniłoby też
+# ścieżkę codziennej ingestii, gdzie okna mają po kilka dni (`_LOOKBACK_DAYS`)
+# i żadnego dzielenia nie potrzebują.
+#
+# 365 zamiast 367: margines na przestępny rok, żeby nie liczyć dni w kodzie.
+_BACKFILL_CHUNK_DAYS: Final[int] = 365
+
+
+def _date_chunks(start: date, end: date) -> Iterator[tuple[date, date]]:
+    """Dzieli `[start, end]` na okna po najwyżej `_BACKFILL_CHUNK_DAYS` dni.
+
+    Okna są domknięte obustronnie i **nie zachodzą na siebie** — dostawcy
+    zwracają zakres włącznie, a `upsert_*` i tak jest idempotentny, więc
+    zachodzenie byłoby tylko marnowaniem zapytań.
+    """
+    window = timedelta(days=_BACKFILL_CHUNK_DAYS)
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + window, end)
+        yield chunk_start, chunk_end
+        chunk_start = chunk_end + timedelta(days=1)
+
+
+async def backfill_prices(
+    db: AsyncSession,
+    *,
+    start: date,
+    end: date,
+    market_codes: Sequence[str] | None = None,
+    symbols: Sequence[str] | None = None,
+) -> dict[str, int]:
+    """Pobiera historię cen i kursów za `[start, end]` i zapisuje do `prices`
+    / `fx_rates`. Zwraca licznik `{symbol_lub_waluta: liczba_okien_ok}`.
+
+    Odróżnia się od `ingest_market` trzema rzeczami i tylko trzema:
+
+    1. **Zakres liczony w latach, nie w dniach** — stąd dzielenie na okna
+       (`_date_chunks`, patrz komentarz przy `_BACKFILL_CHUNK_DAYS`).
+    2. **Bez blokady doradczej i bez `IngestionRun`.** To operacja ręczna,
+       jednorazowa, uruchamiana z CLI — nie przebieg EOD. Wiersz w
+       `ingestion_runs` z zakresem pięciu lat zafałszowałby `/meta/freshness`,
+       który odpowiada na pytanie „czy dzisiejsze dane są świeże” (ten sam
+       powód, dla którego `snapshot_portfolios` świadomie nie pisze do tej
+       tabeli — patrz jego docstring).
+    3. **Nie woła `snapshot_portfolios`** — wyceną historii zajmuje się
+       osobna komenda (`seed-history`), żeby dało się zaciągnąć same ceny
+       i obejrzeć je przed policzeniem czegokolwiek.
+
+    Reguła 6 ze skilla `job-eod` obowiązuje tak samo: błąd jednego aktywa
+    albo jednego okna nie przerywa reszty.
+    """
+    if start > end:
+        raise ValueError(f"start ({start}) jest po end ({end})")
+
+    markets = (
+        [m.code for m in await list_markets(db)] if market_codes is None else list(market_codes)
+    )
+    wanted = {s.upper() for s in symbols} if symbols else None
+
+    ok_counts: dict[str, int] = {}
+    logger.info(
+        "backfill_prices.starting",
+        start=start.isoformat(),
+        end=end.isoformat(),
+        markets=markets,
+        symbols=sorted(wanted) if wanted else None,
+    )
+
+    for market_code in markets:
+        try:
+            chain = build_fallback_chain(market_code)
+        except Exception as exc:
+            logger.error(
+                "backfill_prices.chain_failed",
+                market_code=market_code,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            continue
+
+        if market_code in _CURRENCY_MARKETS:
+            targets: list[tuple[str, Asset | None]] = [
+                (currency, None) for currency in await list_fx_currencies(db)
+            ]
+        else:
+            targets = [(asset.symbol, asset) for asset in await list_active_assets(db, market_code)]
+
+        for label, asset in targets:
+            if wanted is not None and label.upper() not in wanted:
+                continue
+            for chunk_start, chunk_end in _date_chunks(start, end):
+                try:
+                    if asset is None:
+                        await _ingest_currency_fx(
+                            db, label, chain, start=chunk_start, end=chunk_end
+                        )
+                    else:
+                        await _ingest_asset_ohlcv(
+                            db, asset, chain, start=chunk_start, end=chunk_end
+                        )
+                except Exception as exc:
+                    # Okno bez danych to norma, nie awaria: aktywo mogło nie
+                    # istnieć pięć lat temu (debiut, nowa krypto), a dostawca
+                    # odpowiada wtedy pustką albo 404. Logujemy i idziemy
+                    # dalej — brak historii sprzed debiutu jest poprawny.
+                    logger.warning(
+                        "backfill_prices.chunk_failed",
+                        market_code=market_code,
+                        target=label,
+                        start_=chunk_start.isoformat(),
+                        end=chunk_end.isoformat(),
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    continue
+
+            # Licznik po WIERSZACH W BAZIE, nie po odpowiedziach dostawcy.
+            # Dostawca potrafi zwrócić pustą listę bez błędu (aktywo jeszcze
+            # nie istniało, symbol wycofany, święta) — `upsert_prices` kończy
+            # się wtedy sukcesem i licznik oparty na odpowiedziach pokazywałby
+            # komplet okien tam, gdzie nie ma ANI JEDNEGO notowania. Pierwsza
+            # wersja tej funkcji miała dokładnie ten błąd i zaraportowała
+            # „5 okien" dla WIG20, dla którego przyszedł jeden wiersz.
+            if asset is None:
+                rows = await count_fx_rates_in_range(db, label, start=start, end=end)
+            else:
+                rows = await count_prices_in_range(db, asset.id, start=start, end=end)
+            if rows:
+                ok_counts[label] = rows
+
+    logger.info("backfill_prices.done", targets_with_data=len(ok_counts))
+    return ok_counts
+
+
+__all__ = ["backfill_prices", "ingest_market"]
