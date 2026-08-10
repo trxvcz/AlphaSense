@@ -140,6 +140,37 @@ MARKETS: tuple[MarketSeed, ...] = (
 # `docs/slownik-rynkow.md`: „pokazuje w rankingu samą wagę"). Symbole
 # dosłownie te z zadania/dokumentu (nie symbole dostawcy — te żyją w
 # `asset_source_map`, etap 4, poza zakresem tego kroku).
+# Aktywa referencyjne, które NIE są indeksem rynku — dziś wyłącznie benchmark
+# dla kroku 42 (etap 8). Osobno od `INDEX_ASSETS` celowo: tamta krotka jest
+# mapowana per rynek i dowiązywana do `markets.index_asset_id`, więc dopisanie
+# tu drugiego aktywa GPW po cichu podmieniłoby indeks referencyjny rynku i
+# zmieniło panel „Twoje rynki" (krok 34). Benchmark i indeks rynku to dwie
+# różne role — ta krotka trzyma je rozdzielone.
+#
+# **Dlaczego ETF, a nie sam WIG20** (decyzja użytkownika 2026-08-10): WIG20 nie
+# ma dziś ŻADNEGO działającego darmowego źródła historii. Stooq odpowiada
+# stroną wyzwania anty-bota zamiast CSV (200, 796 B HTML — na każdy symbol
+# i obie domeny), a Yahoo zna `WIG20.WA` jako indeks WSE, ale zwraca dokładnie
+# jeden punkt (dzisiejszy) zamiast serii. `ETFBW20TR.WA` daje przez tego samego
+# dostawcę 1251 sesji za pięć lat.
+#
+# Świadome kompromisy, do pokazania w UI: ETF śledzi WIG20 **Total Return**
+# (z dywidendami), nie indeks cenowy — wobec portfela, który dywidendy
+# otrzymuje, jest to miara uczciwsza, nie gorsza. Dochodzi błąd odwzorowania
+# i opłata za zarządzanie (rzędu 0,5% rocznie). Notowany w PLN, więc dla tego
+# benchmarku przeliczenie kursem NBP (decyzja 4) jest tożsamościowe.
+BENCHMARK_ASSETS: tuple[AssetSeed, ...] = (
+    AssetSeed(
+        "ETFBW20TR",
+        "Beta ETF WIG20TR (proxy WIG20)",
+        "etf",
+        "GPW",
+        "PLN",
+        country="Polska",
+        region="Europa",
+    ),
+)
+
 INDEX_ASSETS: tuple[AssetSeed, ...] = (
     AssetSeed("WIG20", "WIG20", "index", "GPW", "PLN", country="Polska", region="Europa"),
     AssetSeed("^GSPC", "S&P 500", "index", "US", "USD", country="USA", region="Ameryka Północna"),
@@ -242,6 +273,9 @@ SOURCE_MAPS: tuple[SourceMapSeed, ...] = (
     SourceMapSeed("PKN", "GPW", "yfinance", "PKN.WA", 2),
     # US / US_TECH
     SourceMapSeed("^GSPC", "US", "yfinance", "^GSPC", 1),
+    # Benchmark GPW (krok 42) — bez fallbacku Stooq, bo Stooq nie oddaje dziś
+    # CSV nikomu (patrz komentarz przy `BENCHMARK_ASSETS`).
+    SourceMapSeed("ETFBW20TR", "GPW", "yfinance", "ETFBW20TR.WA", 1),
     SourceMapSeed("^NDX", "US_TECH", "yfinance", "^NDX", 1),
     SourceMapSeed("AAPL", "US", "yfinance", "AAPL", 1),
     SourceMapSeed("AAPL", "US", "finnhub", "AAPL", 2),
@@ -385,8 +419,13 @@ async def _get_or_create_source_map(
     )
 
 
-async def _seed_reference(session: AsyncSession) -> dict[str, Asset]:
-    """Rynki, indeksy referencyjne i dowiązanie `markets.index_asset_id`.
+async def _seed_reference(session: AsyncSession) -> tuple[dict[str, Asset], dict[str, Asset]]:
+    """Rynki, indeksy referencyjne, dowiązanie `markets.index_asset_id` oraz
+    aktywa benchmarkowe.
+
+    Zwraca `(indeksy_per_rynek, benchmarki_per_symbol)` — dwie osobne mapy,
+    bo pełnią różne role: pierwsza trafia do `markets.index_asset_id`, druga
+    nie może tam trafić nigdy (patrz komentarz przy `BENCHMARK_ASSETS`).
 
     NIE commituje — robi to wołający (`seed_all` albo `seed_reference`), żeby
     cały seed pozostał jedną transakcją „wszystko albo nic".
@@ -407,7 +446,13 @@ async def _seed_reference(session: AsyncSession) -> dict[str, Asset]:
     for market_code, asset in index_assets_by_market.items():
         await _link_market_index(session, market_code=market_code, index_asset_id=asset.id)
 
-    return index_assets_by_market
+    # 4. Aktywa benchmarkowe — PO dowiązaniu indeksów, żeby nie mogły trafić
+    #    do `index_assets_by_market` i podmienić `markets.index_asset_id`.
+    benchmarks_by_symbol: dict[str, Asset] = {}
+    for asset_seed in BENCHMARK_ASSETS:
+        benchmarks_by_symbol[asset_seed.symbol] = await _get_or_create_asset(session, asset_seed)
+
+    return index_assets_by_market, benchmarks_by_symbol
 
 
 async def seed_reference(session: AsyncSession) -> int:
@@ -427,12 +472,15 @@ async def seed_reference(session: AsyncSession) -> int:
     psuje głośno. Stąd kolejność w runbooku: `prod-migrate` → `prod-seed` →
     **restart workera**.
     """
-    index_assets_by_market = await _seed_reference(session)
+    index_assets_by_market, benchmarks_by_symbol = await _seed_reference(session)
 
-    index_symbols = {asset.symbol for asset in index_assets_by_market.values()}
+    # Benchmarki idą na produkcję razem z indeksami — bez ich `asset_source_map`
+    # krok 42 nie miałby czym zaciągnąć serii porównawczej.
     assets_by_symbol = {asset.symbol: asset for asset in index_assets_by_market.values()}
+    assets_by_symbol.update(benchmarks_by_symbol)
+    reference_symbols = set(assets_by_symbol)
     for source_map_seed in SOURCE_MAPS:
-        if source_map_seed.asset_symbol not in index_symbols:
+        if source_map_seed.asset_symbol not in reference_symbols:
             continue  # mapowanie demo aktywa — nie na produkcję
         await _get_or_create_source_map(
             session,
@@ -450,7 +498,7 @@ async def seed_all(session: AsyncSession) -> SeedResult:
 
     Seed DEWELOPERSKI. Na produkcję patrz `seed_reference` wyżej.
     """
-    index_assets_by_market = await _seed_reference(session)
+    index_assets_by_market, benchmarks_by_symbol = await _seed_reference(session)
 
     # 2. demo aktywa tradowalne
     demo_assets_by_symbol: dict[str, Asset] = {}
@@ -475,6 +523,7 @@ async def seed_all(session: AsyncSession) -> SeedResult:
     all_assets_by_symbol: dict[str, Asset] = {
         asset.symbol: asset for asset in index_assets_by_market.values()
     }
+    all_assets_by_symbol.update(benchmarks_by_symbol)
     all_assets_by_symbol.update(demo_assets_by_symbol)
     for source_map_seed in SOURCE_MAPS:
         asset = all_assets_by_symbol[source_map_seed.asset_symbol]

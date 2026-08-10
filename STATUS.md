@@ -789,8 +789,31 @@ Trzy rzeczy wyszły dopiero na żywych danych:
    porażkach `CircuitBreaker` otworzył obwód — poprawnie, stan w Redisie z TTL 30 dni),
    a yfinance odpowiada `$WIG20.WA: possibly delisted; no price data found` na każdym oknie.
    Akcje GPW ratuje yfinance: **CDR → 248 notowań za rok** (~252 sesje, bez weekendów).
-   **To blokuje benchmark WIG20 z kroku 42** — do rozstrzygnięcia przed krokiem 42, czy
-   szukamy trzeciego źródła dla indeksu, czy pierwsza partia jedzie na samym `^GSPC`.
+   **Rozstrzygnięte tego samego dnia — bez nowego dostawcy.** Diagnoza poszła dalej:
+   Stooq zwraca **200 ze stroną HTML 796 B** (`robots: noindex,nofollow`, wyzwanie anty-bot
+   opisane w skillu `data-provider`) na każdy symbol i obie domeny — nie 404, jak wyglądało
+   z kontenera. Yahoo **zna** `WIG20.WA` jako indeks WSE, ale endpoint wykresu oddaje
+   **dokładnie jeden punkt** (dzisiejszy) zamiast serii; to samo `WIG20TR.WA`. Czyli nie
+   był to nasz błąd w budowaniu zapytania.
+
+   **Decyzja użytkownika 8 (2026-08-10): benchmarkiem GPW jest `ETFBW20TR.WA`** — ETF Beta
+   WIG20TR notowany na GPW, **1251 punktów za pięć lat przez yfinance**, którego już używamy.
+   Zero nowych zależności (CLAUDE.md §10). Kompromisy do pokazania w UI: ETF śledzi WIG20
+   **Total Return** (z dywidendami), nie indeks cenowy — wobec portfela, który dywidendy
+   otrzymuje, jest to miara uczciwsza, nie gorsza; dochodzi błąd odwzorowania i opłata za
+   zarządzanie rzędu 0,5% rocznie. Notowany w PLN, więc dla tego benchmarku przeliczenie
+   kursem NBP (decyzja 4) jest tożsamościowe.
+
+   Wpisany jako **`BENCHMARK_ASSETS`, osobno od `INDEX_ASSETS`** (`app/db/seed.py`): tamta
+   krotka jest mapowana per rynek i dowiązywana do `markets.index_asset_id`, więc dopisanie
+   drugiego aktywa GPW po cichu podmieniłoby indeks referencyjny rynku i zmieniło panel
+   „Twoje rynki" z kroku 34. Zweryfikowane po seedzie: `GPW → WIG20`, `US → ^GSPC` bez zmian.
+   `_seed_reference` zwraca teraz dwie mapy (indeksy per rynek, benchmarki per symbol),
+   a `seed_reference` sieje mapowania benchmarków także na produkcję — bez nich krok 42
+   nie miałby czym zaciągnąć serii porównawczej.
+
+**Stan po backfillach (2026-08-10):** `^GSPC` **1254**, `ETFBW20TR` **1250**, `CDR` 248 notowań
+za pięć lat. Oba benchmarki kroku 42 mają komplet historii.
 
 Stan `prices` po przebiegach próbnych: `CDR` 248 (2025-08-11 .. 2026-08-10), `WIG20` 3,
 `^GSPC` 0 (rynek `US` jeszcze nie ruszany), `PKN` 10, `bitcoin` 12.
