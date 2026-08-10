@@ -21,7 +21,7 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 | `assets` | id | symbol, name, asset_class, **market_code**, currency, isin, sector, country, region, metadata_source, is_active | sektor/kraj z dostawcy, override użytkownika ma pierwszeństwo |
 | `markets` | code | name, index_asset_id, timezone, eod_time | ADR-102, jedno źródło prawdy |
 | `asset_source_map` | (asset_id, provider) | provider_symbol, priority | warunek działania fallbacku |
-| `prices` | (asset_id, date) | open, high, low, close, **close_adj**, volume | wycena zawsze z `close_adj` |
+| `prices` | (asset_id, date) | open, high, low, close, **close_adj**, volume, source | wycena zawsze z `close_adj`; `source` = dostawca wiersza, `NULL` = sprzed migracji `926b382d1715` |
 | `fx_rates` | (currency, date) | rate_pln | NBP tabela A; lookup `max(date) <= D` |
 | `portfolio_valuations` | (portfolio_id, date) | value_pln, **composition_change** | ADR-101, bez kolumny przepływów |
 | `ingestion_runs` | id | market_code, started_at, finished_at, provider, assets_total, assets_ok, status, error | podstawa `/meta/freshness` i alertów |
@@ -49,6 +49,13 @@ ALTER TABLE holdings ADD CONSTRAINT quantity_nonneg CHECK (quantity >= 0);
 ALTER TABLE holdings ADD CONSTRAINT avg_cost_needs_currency
   CHECK (avg_cost IS NULL OR cost_currency IS NOT NULL);
 ALTER TABLE prices  ADD CONSTRAINT close_adj_positive CHECK (close_adj > 0);
+-- `prices.source` (migracja 926b382d1715): nazwa dostawcy wiersza. Konwencje
+-- `close_adj` są niekompatybilne (yfinance koryguje o dywidendy/splity,
+-- Stooq/Finnhub/Binance wpisują close_adj := close), a łańcuch fallbacku
+-- rozstrzyga się per zapytanie — bez tej kolumny serii z wymieszaną
+-- konwencją nie da się wykryć. Wykrywanie: asset, dla którego
+-- count(*) FILTER (WHERE close_adj = close) > 0 i
+-- count(*) FILTER (WHERE close_adj <> close) > 0 jednocześnie.
 ```
 
 ## Droga powrotu (sekcja 10 projektu)

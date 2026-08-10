@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -214,6 +215,69 @@ async def test_upsert_prices_on_conflict_overwrites_not_duplicates(
     assert len(rows) == 1
     assert rows[0].close_adj == Decimal("102")
     assert rows[0].volume == 2000
+
+
+async def test_upsert_prices_records_source_and_defaults_to_null(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """`source` zapisuje dostawcę wiersza; bez parametru zostaje `NULL`
+    (tak jak wiersze sprzed migracji `926b382d1715`).
+    """
+    bar = PriceBar(
+        date=date(2026, 7, 20),
+        open=None,
+        high=None,
+        low=None,
+        close=Decimal("100"),
+        close_adj=Decimal("98"),
+        volume=None,
+    )
+
+    await upsert_prices(db_session, temp_asset.id, [bar], source="yfinance")
+    await upsert_prices(db_session, temp_asset.id, [replace(bar, date=date(2026, 7, 21))])
+
+    result = await db_session.execute(
+        select(Price).where(Price.asset_id == temp_asset.id).order_by(Price.date)
+    )
+    rows = result.scalars().all()
+    assert [row.source for row in rows] == ["yfinance", None]
+
+
+async def test_upsert_prices_on_conflict_overwrites_source_too(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """Nadpisanie dnia zmienia też `source`.
+
+    Sedno kolumny: yfinance oddaje realną cenę skorygowaną, Stooq wpisuje
+    `close_adj := close`. Gdyby `ON CONFLICT` zostawiał stare `source`,
+    seria po przełączeniu dostawcy twierdziłaby, że pochodzi z yfinance,
+    niosąc wartości w konwencji Stooqa — a wtedy kolumna, która ma
+    wykrywać wymieszane konwencje, sama by je maskowała.
+    """
+    bar = PriceBar(
+        date=date(2026, 7, 20),
+        open=None,
+        high=None,
+        low=None,
+        close=Decimal("100"),
+        close_adj=Decimal("98"),  # skorygowana ≠ close
+        volume=None,
+    )
+    await upsert_prices(db_session, temp_asset.id, [bar], source="yfinance")
+
+    # Stooq wraca do gry i nadpisuje ten sam dzień w swojej konwencji
+    await upsert_prices(
+        db_session,
+        temp_asset.id,
+        [replace(bar, close_adj=Decimal("100"))],
+        source="stooq",
+    )
+
+    result = await db_session.execute(select(Price).where(Price.asset_id == temp_asset.id))
+    rows = result.scalars().all()
+    assert len(rows) == 1
+    assert rows[0].source == "stooq"
+    assert rows[0].close_adj == Decimal("100")
 
 
 async def test_upsert_prices_with_empty_list_is_noop(

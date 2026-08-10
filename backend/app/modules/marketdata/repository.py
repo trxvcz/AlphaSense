@@ -170,13 +170,27 @@ async def upsert_fx_rates(db: AsyncSession, quotes: list[FxQuote]) -> None:
     logger.info("marketdata.upsert_fx_rates.done", count=len(values))
 
 
-async def upsert_prices(db: AsyncSession, asset_id: UUID, bars: list[PriceBar]) -> None:
+async def upsert_prices(
+    db: AsyncSession, asset_id: UUID, bars: list[PriceBar], *, source: str | None = None
+) -> None:
     """Zapisuje `bars` do `prices` dla `asset_id`, idempotentnie
     (`ON CONFLICT (asset_id, date) DO UPDATE`).
 
     Ogólna dla wszystkich providerów OHLCV (NBP/złoto dziś, Stooq/yfinance/
     Finnhub w kroku 22) — providerzy dostarczają `PriceBar`, ten moduł nie
-    wie, skąd świeca pochodzi.
+    wie, skąd świeca pochodzi. Dlatego `source` (nazwa dostawcy) jest
+    parametrem wołającego, a nie odczytem z `PriceBar`: to warstwa ingestii
+    rozstrzyga łańcuch fallbacku i tylko ona wie, który dostawca faktycznie
+    odpowiedział.
+
+    `source` jest zapisywane także przy nadpisaniu istniejącego wiersza —
+    jeśli dzień przyszedł wcześniej ze Stooqa, a dziś z yfinance, to od
+    teraz pochodzi z yfinance i kolumna musi to odzwierciedlać. Zostawienie
+    starej wartości dałoby serię, w której `source` kłamie o połowie
+    wierszy — czyli gorzej niż brak kolumny (patrz `Price.source`).
+
+    `source=None` oznacza „wołający nie podał źródła" i zostawia `NULL`,
+    tak jak wiersze sprzed tej kolumny.
 
     Pilnuje CHECK `close_adj > 0` (baza i tak by odrzuciła cały `INSERT`,
     ale wolimy odsiać pojedynczy zepsuty wiersz z logiem niż stracić zapis
@@ -208,6 +222,7 @@ async def upsert_prices(db: AsyncSession, asset_id: UUID, bars: list[PriceBar]) 
                 "close": bar.close,
                 "close_adj": bar.close_adj,
                 "volume": bar.volume,
+                "source": source,
             }
         )
 
@@ -225,11 +240,17 @@ async def upsert_prices(db: AsyncSession, asset_id: UUID, bars: list[PriceBar]) 
             "close": stmt.excluded.close,
             "close_adj": stmt.excluded.close_adj,
             "volume": stmt.excluded.volume,
+            "source": stmt.excluded.source,
         },
     )
     await db.execute(stmt)
     await db.commit()
-    logger.info("marketdata.upsert_prices.done", asset_id=str(asset_id), count=len(values))
+    logger.info(
+        "marketdata.upsert_prices.done",
+        asset_id=str(asset_id),
+        count=len(values),
+        source=source,
+    )
 
 
 async def list_active_assets(db: AsyncSession, market_code: str) -> list[Asset]:

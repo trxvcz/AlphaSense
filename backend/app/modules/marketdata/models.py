@@ -122,6 +122,22 @@ class Price(Base):
     close: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), default=None)
     close_adj: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     volume: Mapped[int | None] = mapped_column(BigInteger(), default=None)
+    # Nazwa dostawcy, od którego pochodzi TEN wiersz (`Guarded.name`:
+    # `yfinance`, `stooq`, `finnhub`, `binance`, `nbp`). Nie jest ozdobą
+    # diagnostyczną — konwencje `close_adj` między dostawcami są
+    # niekompatybilne: yfinance oddaje realną cenę skorygowaną o dywidendy
+    # i splity, a Stooq/Finnhub/Binance wpisują `close_adj := close`
+    # (patrz docstringi providerów). Łańcuch fallbacku rozstrzyga się per
+    # zapytanie, więc jedna seria potrafi wymieszać obie konwencje i
+    # wyprodukować na styku skok rzędu kilkunastu procent, którego nie
+    # widać w surowym `close` (czyli i heurystyka splitu z kroku 28 go nie
+    # złapie). Bez tej kolumny nie da się takiej serii ani wykryć, ani
+    # naprawić — a kroki 40-42 policzyłyby ten skok jako realny zwrot.
+    #
+    # `NULL` = wiersz sprzed tej kolumny, źródło nieznane. Świadomie nie
+    # zgadujemy go wstecz: „nie wiem" jest tu informacją, a wpisanie
+    # prawdopodobnego dostawcy zamieniłoby brak wiedzy w fałszywą pewność.
+    source: Mapped[str | None] = mapped_column(String(), default=None)
 
 
 # Indeks `(asset_id, date DESC)` — wykresy i wycena czytają najnowsze ceny

@@ -352,7 +352,11 @@ async def _ingest_asset_ohlcv(
                 error=errors[provider.name],
             )
             continue
-        await upsert_prices(db, asset.id, bars)
+        # `source=provider.name` — to jedyne miejsce, które wie, który
+        # dostawca wygrał łańcuch dla TEGO zapytania. Rozstrzygnięcie jest
+        # per okno/przebieg, nie per aktywo, więc bez zapisania go przy
+        # wierszu informacja przepada (patrz `Price.source`).
+        await upsert_prices(db, asset.id, bars, source=provider.name)
         return provider.name
 
     raise ProviderUnavailableError(
