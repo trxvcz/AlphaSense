@@ -10,7 +10,6 @@ w obu projektach (375 px i desktop) z niezerową wyceną portfela. Wdrożenie id
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 **Następny ruch:** etap 8 (metryki i ryzyko, Faza 2) — plan uzgodniony 2026-08-06, sekcja
 „Plan etapu 8" niżej, warunek startu (domknięty etap 7) właśnie spełniony.
-Do zrobienia poza ścieżką krytyczną: skasowanie kont `smoke-%` z produkcyjnej bazy.
 **Ostatnia aktualizacja:** 2026-08-10
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
@@ -629,6 +628,27 @@ job kończy się zielony, wypisując `::notice::` i nie dotykając produkcji.
   na końcu. Serwer nigdy tego klucza nie zobaczył, więc szukanie przyczyny w `authorized_keys`
   prowadzi w ślepy zaułek.
 
+### `infra/deploy.sh` był w gicie bez bitu wykonywalności — naprawione 2026-08-10
+
+Drugie wdrożenie z CI (przebieg 31374494720, commit `a1c9fa3`) padło z `exit code 126`:
+`bash: /opt/alphasense/AlphaSense/infra/***.sh: Permission denied`. SSH uwierzytelnił się
+poprawnie — nie wykonał się sam skrypt.
+
+**Przyczyna:** `infra/deploy.sh` był zapisany w repo jako `100644`, choć lokalnie i na VPS-ie
+miał `+x` nadany ręcznie po `git add`. Cztery skrypty backupu mają poprawne `100755` — ten
+jeden wypadł z konwencji.
+
+**Dlaczego pierwsze wdrożenie przeszło, a drugie nie:** `deploy.sh:222` robi
+`git reset --hard "$TARGET_SHA"`, czyli przywraca tryby plików zapisane w repo. Pierwszy
+przebieg wystartował z ręcznie nadanego `+x`, po czym **sam sobie ten bit odebrał**. Skrypt
+wyłączył się przy pierwszym użyciu — awaria ujawniłaby się przy kolejnym wdrożeniu niezależnie
+od tego, co by nim było.
+
+Naprawa: `git update-index --chmod=+x infra/deploy.sh`. Od tego commita `reset --hard` sam
+utrzymuje `755`. **Jednorazowo trzeba przerwać zakleszczenie na VPS-ie** (`chmod +x
+/opt/alphasense/AlphaSense/infra/deploy.sh`) — wdrożenie nie może naprawić skryptu, którego
+nie jest w stanie uruchomić.
+
 ## Pierwsze udane wdrożenie z CI — 2026-08-10
 
 Przebieg 31115680458 (re-run zadania wdrożeniowego po naprawie sekretu): `Konfiguracja SSH` ✓,
@@ -667,10 +687,11 @@ tak samo jak ten `curl`, a zielony deploy na niezaufanym certyfikacie byłby zie
   portfel → pozycja → wartość → struktura % → ranking rynków. Wartość portfela wyszła niezerowa
   (`smoke.spec.ts:109` wymusza `/[1-9]/`), czyli produkcja ma realne ceny **i** kurs NBP — nie
   trzeba było ręcznego `python -m app.cli ingest --market CRYPTO` przewidzianego w §10 runbooka.
-- [ ] **Posprzątać konta smoke z produkcyjnej bazy** — test zostawia `smoke-<znacznik>@alphasense.example`
-  z portfelem i pozycją (dwa konta, po jednym na projekt Playwrighta). `make prod-psql` →
-  `DELETE FROM users WHERE email LIKE 'smoke-%@alphasense.example';` (kasowanie kaskaduje).
-  Procedura: `docs/wdrozenie.md` §10.
+- [x] **Posprzątać konta smoke z produkcyjnej bazy** — zrobione 2026-08-10 przez użytkownika.
+  Test zostawia `smoke-<znacznik>@alphasense.example` z portfelem i pozycją (dwa konta, po jednym
+  na projekt Playwrighta); `DELETE FROM users WHERE email LIKE 'smoke-%@alphasense.example';`
+  kaskaduje na jedno i drugie. **Powtarzaj po każdym smoke na produkcji** — procedura
+  `docs/wdrozenie.md` §10.
 
 ## Plan etapu 8 — metryki i ryzyko (uzgodniony 2026-08-06, przed rozpoczęciem)
 
