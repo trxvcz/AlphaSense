@@ -3,13 +3,15 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36–39 zrobione po stronie repo**).
-Zostało samo **wdrożenie na VPS** — rekord A, `.env.prod`, DSN-y Sentry, Google Console — i przepuszczenie
-przez produkcję `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`. Dopiero to zamyka Fazę 1.
+**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36–39 zrobione, aplikacja stoi na produkcji**).
+Rekord A, `.env.prod` i Google Console załatwione. **Pierwsze udane wdrożenie z CI: 2026-08-10** —
+`https://alphasense.cedron.net.pl` odpowiada, `/api/health` → `ok` na wersji `fd4946f`.
+Do zamknięcia Fazy 1 zostały **dwie rzeczy**: przełączenie Caddy ze stagingowego certyfikatu na
+produkcyjne Let's Encrypt (przez to jest czerwony ostatni krok CI) i `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 Praca nad CD zacommitowana 2026-08-06 (`d203c14`). **Etap 8 zaplanowany 2026-08-06** (`/etap 8`,
 sekcja „Plan etapu 8" niżej) — start dopiero po domknięciu etapu 7, taka była decyzja.
-**Ostatnia aktualizacja:** 2026-08-06
+**Ostatnia aktualizacja:** 2026-08-10
 **Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -23,7 +25,7 @@ sekcja „Plan etapu 8" niżej) — start dopiero po domknięciu etapu 7, taka b
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
-| 7 | Wdrożenie produkcyjne | 🟡 kroki 36-39 zrobione, czeka na wdrożenie na VPS |
+| 7 | Wdrożenie produkcyjne | 🟡 wdrożone na VPS 2026-08-10; zostaje produkcyjny cert + smoke |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ zaplanowany 2026-08-06, start po etapie 7 |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
@@ -93,12 +95,14 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
   nie na apeksie — potwierdzone przez użytkownika 2026-08-05. Wchodzi do `.env.prod` jako
   `DOMAIN=alphasense.cedron.net.pl`, `CORS_ORIGINS=https://alphasense.cedron.net.pl` i
   `GOOGLE_REDIRECT_URI=https://alphasense.cedron.net.pl/api/auth/google/callback`.
-  - [ ] **Rekord A `alphasense` do utworzenia** i wskazania na IP VPS-a (apeks `@` obsługuje parking
+  - [x] ~~**Rekord A `alphasense` do utworzenia**~~ — istnieje, `alphasense.cedron.net.pl → 163.192.200.84`
+    (zweryfikowane 2026-08-10). Oryginalna notatka: wskazać na IP VPS-a (apeks `@` obsługuje parking
     cyberFolks `91.198.146.229`, TTL 3600 — nie ruszamy go). Nowy rekord zakładaj od razu z TTL 300:
     przy 3600 pomyłka w IP oznacza godzinę, w której walidacja HTTP-01 trafia w cudzy serwer i pali
     limit BŁĘDÓW produkcyjnego Let's Encrypt.
-  - [ ] **Google Cloud Console** — do *Authorized redirect URIs* dopisać
-    `https://alphasense.cedron.net.pl/api/auth/google/callback` (dosłownie, bez ukośnika na końcu),
+  - [x] **Google Cloud Console** — `https://alphasense.cedron.net.pl/api/auth/google/callback` dopisane
+    przez użytkownika 2026-08-10 (do zweryfikowania klikiem przez flow po produkcyjnym certyfikacie).
+    Wymóg brzmiał: wpisać do *Authorized redirect URIs* dosłownie, bez ukośnika na końcu,
     **nie usuwając** wpisu `http://localhost:8000/api/auth/google/callback` używanego w devie.
     *Authorized JavaScript origins* zostaje puste — flow jest w całości serwerowy (Authlib).
   - `www` nie dotyczy tej konfiguracji — `infra/caddy/Caddyfile` obsługuje dokładnie jeden host
@@ -616,12 +620,38 @@ Przebieg 31115157646 zielony w całości.
 i padał na `ssh`. Teraz `DEPLOY_CONFIGURED` (`jobs.<id>.env`, bo kontekst `secrets` nie jest dostępny
 w `jobs.<id>.if`) pilnuje `SSH_PRIVATE_KEY_ALPHASENSE` **i** `SSH_KNOWN_HOSTS`; przy braku któregoś
 job kończy się zielony, wypisując `::notice::` i nie dotykając produkcji.
-- [ ] **`SSH_KNOWN_HOSTS` to jedyny brakujący sekret wdrożeniowy** — `SSH_PRIVATE_KEY_ALPHASENSE`,
-  `SSH_HOST`, `SSH_PORT` i `SSH_USER` są w repo od 2026-08-04. Bez `known_hosts` `ssh` z
-  `StrictHostKeyChecking=yes` kończy się `Host key verification failed` (kod 255, przebieg
-  31114724201). Generowanie: `ssh-keyscan -p <port> <host>`. **Zanim go wgrasz**, przejdź procedurę
-  `docs/wdrozenie.md` §11.1 (sprawdzenie `command=` w `authorized_keys`) — po wgraniu sekretu każdy
-  push na `main` realnie wdraża.
+- [x] ~~**`SSH_KNOWN_HOSTS` to jedyny brakujący sekret wdrożeniowy**~~ — wgrany 2026-08-06, ale
+  wdrożenie padało dalej: **klucz prywatny w `SSH_PRIVATE_KEY_ALPHASENSE` był uszkodzony**
+  (`Load key "/home/runner/.ssh/id_ed25519": error in libcrypto` → `Permission denied (publickey)`,
+  przebieg 31115680458 z 2026-08-07). Sekret wgrany ponownie przez użytkownika 2026-08-10 08:07.
+  **Uwaga na przyszłość:** `error in libcrypto` to nie odrzucenie klucza przez serwer, tylko
+  niepoprawny PEM po stronie runnera — zwykle obcięty nagłówek/stopka albo brak znaku nowej linii
+  na końcu. Serwer nigdy tego klucza nie zobaczył, więc szukanie przyczyny w `authorized_keys`
+  prowadzi w ślepy zaułek.
+
+## Pierwsze udane wdrożenie z CI — 2026-08-10
+
+Przebieg 31115680458 (re-run zadania wdrożeniowego po naprawie sekretu): `Konfiguracja SSH` ✓,
+**`Wdrożenie zatwierdzonego commita` ✓**. Produkcja podniesiona do `fd4946f` — `/api/health` zwraca
+`{"status":"ok","db":"up","redis":"up","version":"fd4946f6f65d"}`, wcześniej ten endpoint dawał 404,
+bo na VPS-ie stał obraz sprzed kroku 37. Ścieżka CD (GitHub → SSH → `deploy.sh` → `make prod-up`)
+jest tym samym potwierdzona end-to-end.
+
+**Nadal czerwony jest krok `Sprawdzenie z zewnątrz`** i to jest prawdziwa usterka produkcji, nie
+szum w pipeline: Caddy serwuje **certyfikat ze stagingu Let's Encrypt** (`issuer=(STAGING)
+Artificial Amaranth YE1`, wystawiony 2026-08-04), więc `curl` bez `-k` kończy się kodem 60
+(`unable to get local issuer certificate`) na wszystkich 10 próbach. Ten sam endpoint z `-k`
+odpowiada `ok`. **Kroku weryfikacyjnego nie rozluźniamy** — przeglądarka użytkownika ufa dokładnie
+tak samo jak ten `curl`, a zielony deploy na niezaufanym certyfikacie byłby zielonym kłamstwem.
+
+- [ ] **Przełączenie na produkcyjne CA** — akcja na VPS-ie, procedura `docs/wdrozenie.md` §4
+  (zakomentować `ACME_CA` w `.env.prod` → `make prod-up` → `docker exec … rm -rf
+  /data/caddy/certificates` → `make prod-logs s=caddy`). Usunięcie katalogu certyfikatów jest
+  konieczne, inaczej Caddy zostanie przy stagingowym z wolumenu. Domyka jednocześnie ostrzeżenie
+  w przeglądarce i ostatni czerwony krok CI.
+- [ ] **Smoke test na produkcji** — `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`,
+  dopiero po produkcyjnym certyfikacie (Playwright też weryfikuje łańcuch). To ostatni warunek
+  zamknięcia etapu 7 i Fazy 1.
 
 ## Plan etapu 8 — metryki i ryzyko (uzgodniony 2026-08-06, przed rozpoczęciem)
 
