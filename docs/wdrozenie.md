@@ -96,16 +96,58 @@ W logach szukasz `certificate obtained successfully`. Przeglądarka pokaże ostr
 niezaufanym certyfikacie — **tak ma być**, staging używa własnego CA. Sprawdzasz tylko, czy
 cała ścieżka (DNS → Caddy → ACME) działa.
 
-Gdy jest zielono: zakomentuj `ACME_CA` z powrotem i przełącz na produkcyjny certyfikat:
+Gdy jest zielono: zakomentuj `ACME_CA` z powrotem i przełącz na produkcyjny certyfikat.
+
+**Najpierw sprawdź, czy zakomentowanie w ogóle zadziałało** — i dopiero potem restartuj:
+
+```bash
+grep -n ACME_CA .env.prod     # żadne wystąpienie nie może być odkomentowane
+docker compose --env-file .env.prod -f docker-compose.prod.yml config | grep -i acme
+```
+
+Drugie polecenie pokazuje wartość po pełnej interpolacji, zanim cokolwiek wystartuje. Ma
+tam być `acme-v02`; jeśli widzisz `acme-staging-v02`, restart tylko przyniesie kolejny
+stagingowy certyfikat i będzie wyglądał na sukces (`certificate obtained successfully`
+pojawi się tak samo). Trzy przyczyny, w kolejności prawdopodobieństwa:
+
+1. **Druga linia `ACME_CA=` niżej w pliku** — w plikach env wygrywa OSTATNIE wystąpienie,
+   więc zakomentowanie pierwszego nic nie daje. Zdarzyło się przy pierwszym wdrożeniu
+   2026-08-10; stąd `grep -n` zamiast zerknięcia okiem.
+2. **Edycja trafiła w `.env.prod.example`** zamiast w `.env.prod`.
+3. **`ACME_CA` wyeksportowane w powłoce** — przy interpolacji `${...}` compose czyta
+   środowisko powłoki PRZED `--env-file`, więc `export` cicho przykrywa plik. Leczy `unset`.
+
+Gdy `config` pokazuje `acme-v02`:
 
 ```bash
 make prod-up          # podniesie zmienioną konfigurację
-docker exec -it alphasense-prod-caddy-1 rm -rf /data/caddy/certificates
 make prod-logs s=caddy
 ```
 
-(Usunięcie katalogu certyfikatów zmusza Caddy do ponownego wystawienia — bez tego zostałby
-przy certyfikacie stagingowym z wolumenu.)
+**Nie `docker compose restart caddy`** — `restart` odpala ten sam kontener z tym samym,
+wcześniej wstrzykniętym środowiskiem, więc zmiany w `.env.prod` w ogóle nie zobaczy.
+Tylko `up -d` (czyli `make prod-up`) odtwarza kontener z nowymi zmiennymi.
+
+Katalogu `/data/caddy/certificates` **nie trzeba czyścić przy zmianie CA**: Caddy trzyma
+certyfikaty w podkatalogu nazwanym od hosta CA, więc po przełączeniu na inny katalog ACME
+nie znajdzie nic swojego i poprosi o nowy. Czyszczenie przydaje się tylko wtedy, gdy
+wymuszasz ponowne wystawienie w obrębie TEGO SAMEGO CA:
+
+```bash
+docker exec -it alphasense-prod-caddy-1 rm -rf /data/caddy/certificates
+```
+
+Weryfikacja z zewnątrz, z dowolnej maszyny (nie z VPS-a):
+
+```bash
+echo | openssl s_client -connect <domena>:443 -servername <domena> 2>/dev/null \
+  | openssl x509 -noout -issuer -dates
+curl -sS https://<domena>/api/health      # bez -k
+```
+
+W `issuer` nie może być słowa `STAGING`, a `curl` bez `-k` musi zwrócić `{"status":"ok",...}`.
+To ten sam warunek, który sprawdza krok `Sprawdzenie z zewnątrz` w CI — dopóki jest czerwony,
+wdrożenie jest czerwone, i słusznie: przeglądarka użytkownika ufa dokładnie tak samo jak ten `curl`.
 
 ## 5. Migracje i seed słownika rynków
 

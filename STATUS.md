@@ -3,16 +3,16 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 7 — Wdrożenie produkcyjne (**kroki 36–39 zrobione, aplikacja stoi na produkcji**).
-Rekord A, `.env.prod` i Google Console załatwione. **Pierwsze udane wdrożenie z CI: 2026-08-10** —
-`https://alphasense.cedron.net.pl` odpowiada, `/api/health` → `ok` na wersji `fd4946f`.
-Do zamknięcia Fazy 1 zostały **dwie rzeczy**: przełączenie Caddy ze stagingowego certyfikatu na
-produkcyjne Let's Encrypt (przez to jest czerwony ostatni krok CI) i `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`.
+**Aktualny etap:** 7 — Wdrożenie produkcyjne **ZAMKNIĘTY 2026-08-10. FAZA 1 ZAKOŃCZONA.**
+`https://alphasense.cedron.net.pl` działa na produkcyjnym certyfikacie Let's Encrypt, `/api/health`
+zwraca `ok` (db i redis `up`, wersja `fd4946f`), a smoke test Fazy 1 przechodzi na żywej produkcji
+w obu projektach (375 px i desktop) z niezerową wyceną portfela. Wdrożenie idzie z CI po pushu na `main`.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
-Praca nad CD zacommitowana 2026-08-06 (`d203c14`). **Etap 8 zaplanowany 2026-08-06** (`/etap 8`,
-sekcja „Plan etapu 8" niżej) — start dopiero po domknięciu etapu 7, taka była decyzja.
+**Następny ruch:** etap 8 (metryki i ryzyko, Faza 2) — plan uzgodniony 2026-08-06, sekcja
+„Plan etapu 8" niżej, warunek startu (domknięty etap 7) właśnie spełniony.
+Do zrobienia poza ścieżką krytyczną: skasowanie kont `smoke-%` z produkcyjnej bazy.
 **Ostatnia aktualizacja:** 2026-08-10
-**Faza:** 1 (etapy 0–7, cel: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
+**Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
 
@@ -25,7 +25,7 @@ sekcja „Plan etapu 8" niżej) — start dopiero po domknięciu etapu 7, taka b
 | 4 | Warstwa danych rynkowych | 🟢 zrobiony |
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
-| 7 | Wdrożenie produkcyjne | 🟡 wdrożone na VPS 2026-08-10; zostaje produkcyjny cert + smoke |
+| 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
 | 8 | Metryki i ryzyko (Faza 2) | ⚪ zaplanowany 2026-08-06, start po etapie 7 |
 | 9 | Otoczka (Faza 3) | ⚪ |
 
@@ -72,7 +72,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 36 Caddy + compose produkcyjny (wdrożenie na VPS: po Twojej stronie)
 [x] 37 Sentry + /health + alerty
 [x] 38 Backup pg_dump (skrypty + cron + test odtworzenia; bucket do założenia po Twojej stronie)
-[x] 39 Smoke test 375px + desktop (`make smoke`; przebieg na produkcji po Twoim wdrożeniu)  ← KONIEC FAZY 1
+[x] 39 Smoke test 375px + desktop (`make smoke`; przeszedł na produkcji 2026-08-10, 2 passed)  ← KONIEC FAZY 1
 [ ] 40 Zwroty dzienne (bez dni composition_change)
 [ ] 41 Ryzyko: zmienność, Sharpe, drawdown, beta
 [ ] 42 Benchmark (WIG20, S&P 500)
@@ -644,14 +644,33 @@ Artificial Amaranth YE1`, wystawiony 2026-08-04), więc `curl` bez `-k` kończy 
 odpowiada `ok`. **Kroku weryfikacyjnego nie rozluźniamy** — przeglądarka użytkownika ufa dokładnie
 tak samo jak ten `curl`, a zielony deploy na niezaufanym certyfikacie byłby zielonym kłamstwem.
 
-- [ ] **Przełączenie na produkcyjne CA** — akcja na VPS-ie, procedura `docs/wdrozenie.md` §4
-  (zakomentować `ACME_CA` w `.env.prod` → `make prod-up` → `docker exec … rm -rf
-  /data/caddy/certificates` → `make prod-logs s=caddy`). Usunięcie katalogu certyfikatów jest
-  konieczne, inaczej Caddy zostanie przy stagingowym z wolumenu. Domyka jednocześnie ostrzeżenie
-  w przeglądarce i ostatni czerwony krok CI.
-- [ ] **Smoke test na produkcji** — `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`,
-  dopiero po produkcyjnym certyfikacie (Playwright też weryfikuje łańcuch). To ostatni warunek
-  zamknięcia etapu 7 i Fazy 1.
+- [x] **Przełączenie na produkcyjne CA** — zrobione 2026-08-10. Certyfikat: `issuer=C = US,
+  O = Let's Encrypt, CN = YE2` (bez `STAGING`), `subject=CN = alphasense.cedron.net.pl`,
+  SAN `DNS:alphasense.cedron.net.pl`, ważny do 2026-11-08. `curl` bez `-k` zwraca
+  `{"status":"ok","db":"up","redis":"up","version":"fd4946f6f65d"}`, `ssl_verify_result=0`.
+  **Kosztowało to dwa nieudane podejścia i oba warto pamiętać:**
+  1. Pierwsza próba przyniosła świeży, ale **wciąż stagingowy** certyfikat — w `.env.prod` było
+     **drugie, niezakomentowane wystąpienie `ACME_CA=` niżej w pliku**, a w plikach env wygrywa
+     ostatnie. Objaw jest zdradliwy: Caddy wypisuje `certificate obtained successfully` tak samo
+     jak przy sukcesie, więc log nie odróżnia dobrego przebiegu od złego. Jedyne rozstrzygające
+     sprawdzenie to `docker compose --env-file .env.prod -f docker-compose.prod.yml config
+     | grep -i acme` **przed** restartem.
+  2. `docker compose restart caddy` nie zobaczyłby zmiany w `.env.prod` — `restart` odpala ten sam
+     kontener z wcześniej wstrzykniętym środowiskiem. Tylko `up -d` (`make prod-up`) go odtwarza.
+
+  Runbook uzupełniony o oba punkty plus weryfikację z zewnątrz (`docs/wdrozenie.md` §4)
+  i o ostrzeżenie przy samej zmiennej (`.env.prod.example`). Przy okazji sprostowane: kasowanie
+  `/data/caddy/certificates` **nie jest** potrzebne przy zmianie CA — Caddy trzyma certyfikaty
+  w podkatalogu nazwanym od hosta CA, więc po przełączeniu i tak nie znajdzie nic swojego.
+- [x] **Smoke test na produkcji** — `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke`,
+  2026-08-10: **2 passed** (`desktop` 6,0 s i `mobile-375` 7,3 s), pełna ścieżka rejestracja →
+  portfel → pozycja → wartość → struktura % → ranking rynków. Wartość portfela wyszła niezerowa
+  (`smoke.spec.ts:109` wymusza `/[1-9]/`), czyli produkcja ma realne ceny **i** kurs NBP — nie
+  trzeba było ręcznego `python -m app.cli ingest --market CRYPTO` przewidzianego w §10 runbooka.
+- [ ] **Posprzątać konta smoke z produkcyjnej bazy** — test zostawia `smoke-<znacznik>@alphasense.example`
+  z portfelem i pozycją (dwa konta, po jednym na projekt Playwrighta). `make prod-psql` →
+  `DELETE FROM users WHERE email LIKE 'smoke-%@alphasense.example';` (kasowanie kaskaduje).
+  Procedura: `docs/wdrozenie.md` §10.
 
 ## Plan etapu 8 — metryki i ryzyko (uzgodniony 2026-08-06, przed rozpoczęciem)
 
