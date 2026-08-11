@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
@@ -47,12 +48,14 @@ from app.modules.marketdata.models import Asset, IngestionRun, Market
 from app.modules.marketdata.providers.base import Capability
 from app.modules.marketdata.providers.guarded import Guarded
 from app.modules.marketdata.repository import (
+    PriceSeriesDiagnostics,
     count_fx_rates_in_range,
     count_prices_in_range,
     get_provider_symbol,
     list_active_assets,
     list_fx_currencies,
     list_markets,
+    price_series_diagnostics,
     upsert_fx_rates,
     upsert_prices,
 )
@@ -432,6 +435,40 @@ def _date_chunks(start: date, end: date) -> Iterator[tuple[date, date]]:
         chunk_start = chunk_end + timedelta(days=1)
 
 
+@dataclass(frozen=True, slots=True)
+class BackfillTarget:
+    """Wynik backfillu dla jednego celu (aktywo albo waluta).
+
+    Istnieje zamiast `dict[str, int]`, bo jedna liczba nie odróżnia trzech
+    różnych stanów, a każdy z nich wymaga innej reakcji operatora: „nic nie
+    przyszło, bo aktywo jeszcze nie istniało" (norma), „nic nie przyszło, bo
+    dostawca odmawia" (do naprawy) i „przyszło, ale seria jest zszyta z
+    dwóch niekompatybilnych konwencji `close_adj`" (dane trzeba wyrzucić i
+    pobrać ponownie z jednego dostawcy).
+    """
+
+    label: str
+    rows_before: int
+    rows_after: int
+    windows_total: int
+    windows_failed: int
+    unavailable: bool
+    diagnostics: PriceSeriesDiagnostics | None
+
+    @property
+    def rows_added(self) -> int:
+        """Ile wierszy przybyło W TYM przebiegu.
+
+        Sam `rows_after` kłamie dla aktywa, które miało już historię: raport
+        pokazywałby komplet także wtedy, gdy każde okno padło.
+        """
+        return self.rows_after - self.rows_before
+
+    @property
+    def is_empty(self) -> bool:
+        return self.rows_after == 0
+
+
 async def backfill_prices(
     db: AsyncSession,
     *,
@@ -439,9 +476,20 @@ async def backfill_prices(
     end: date,
     market_codes: Sequence[str] | None = None,
     symbols: Sequence[str] | None = None,
-) -> dict[str, int]:
+    provider: str | None = None,
+) -> list[BackfillTarget]:
     """Pobiera historię cen i kursów za `[start, end]` i zapisuje do `prices`
-    / `fx_rates`. Zwraca licznik `{symbol_lub_waluta: liczba_okien_ok}`.
+    / `fx_rates`. Zwraca po jednym `BackfillTarget` na cel — **także dla
+    celów, dla których nic nie przyszło** („czego brakuje" jest ważniejsze
+    niż lista sukcesów).
+
+    `provider=` przypina cały przebieg do jednego dostawcy zamiast puszczać
+    łańcuch fallbacku. Przy codziennej ingestii fallback jest zaletą, przy
+    historii — zagrożeniem: rozstrzyga się per okno, więc jedna seria potrafi
+    powstać z dwóch dostawców o niekompatybilnej konwencji `close_adj`
+    (patrz `PriceSeriesDiagnostics`). Rynek, w którego łańcuchu nie ma
+    wskazanego dostawcy, jest pomijany z ostrzeżeniem — cicha zmiana na
+    innego dostawcę byłaby dokładnie tym, przed czym ta flaga chroni.
 
     Odróżnia się od `ingest_market` trzema rzeczami i tylko trzema:
 
@@ -468,13 +516,14 @@ async def backfill_prices(
     )
     wanted = {s.upper() for s in symbols} if symbols else None
 
-    ok_counts: dict[str, int] = {}
+    results: list[BackfillTarget] = []
     logger.info(
         "backfill_prices.starting",
         start=start.isoformat(),
         end=end.isoformat(),
         markets=markets,
         symbols=sorted(wanted) if wanted else None,
+        provider=provider,
     )
 
     for market_code in markets:
@@ -488,6 +537,16 @@ async def backfill_prices(
             )
             continue
 
+        if provider is not None:
+            chain = [p for p in chain if p.name == provider]
+            if not chain:
+                logger.warning(
+                    "backfill_prices.provider_not_in_chain",
+                    market_code=market_code,
+                    provider=provider,
+                )
+                continue
+
         if market_code in _CURRENCY_MARKETS:
             targets: list[tuple[str, Asset | None]] = [
                 (currency, None) for currency in await list_fx_currencies(db)
@@ -498,7 +557,22 @@ async def backfill_prices(
         for label, asset in targets:
             if wanted is not None and label.upper() not in wanted:
                 continue
-            for chunk_start, chunk_end in _date_chunks(start, end):
+
+            # Stan PRZED przebiegiem — bez niego nie da się odróżnić „pobrano
+            # historię" od „historia leżała tu od wczoraj, a dziś nie przyszło
+            # nic". Licznik po wierszach w bazie, nie po odpowiedziach
+            # dostawcy: dostawca potrafi zwrócić pustą listę bez błędu (aktywo
+            # jeszcze nie istniało, symbol wycofany, święta) i `upsert_*`
+            # kończy się wtedy sukcesem. Pierwsza wersja tej funkcji liczyła
+            # odpowiedzi i zaraportowała „5 okien" dla WIG20, dla którego
+            # przyszedł jeden wiersz.
+            rows_before = await _count_rows(db, label, asset, start=start, end=end)
+
+            windows = list(_date_chunks(start, end))
+            windows_failed = 0
+            unavailable = False
+
+            for window_index, (chunk_start, chunk_end) in enumerate(windows):
                 try:
                     if asset is None:
                         await _ingest_currency_fx(
@@ -508,11 +582,27 @@ async def backfill_prices(
                         await _ingest_asset_ohlcv(
                             db, asset, chain, start=chunk_start, end=chunk_end
                         )
+                except ProviderUnavailableError as exc:
+                    # Żaden dostawca nie ma dla tego celu ani symbolu, ani
+                    # danych — kolejne okna padną tak samo, a każda próba
+                    # dobija `CircuitBreaker`. Przerywamy i zaznaczamy stan,
+                    # bo „nie ma kogo zapytać" to inna diagnoza niż „zapytano
+                    # i nie ma danych".
+                    windows_failed += len(windows) - window_index
+                    unavailable = True
+                    logger.warning(
+                        "backfill_prices.target_unavailable",
+                        market_code=market_code,
+                        target=label,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    break
                 except Exception as exc:
                     # Okno bez danych to norma, nie awaria: aktywo mogło nie
                     # istnieć pięć lat temu (debiut, nowa krypto), a dostawca
                     # odpowiada wtedy pustką albo 404. Logujemy i idziemy
                     # dalej — brak historii sprzed debiutu jest poprawny.
+                    windows_failed += 1
                     logger.warning(
                         "backfill_prices.chunk_failed",
                         market_code=market_code,
@@ -523,22 +613,42 @@ async def backfill_prices(
                     )
                     continue
 
-            # Licznik po WIERSZACH W BAZIE, nie po odpowiedziach dostawcy.
-            # Dostawca potrafi zwrócić pustą listę bez błędu (aktywo jeszcze
-            # nie istniało, symbol wycofany, święta) — `upsert_prices` kończy
-            # się wtedy sukcesem i licznik oparty na odpowiedziach pokazywałby
-            # komplet okien tam, gdzie nie ma ANI JEDNEGO notowania. Pierwsza
-            # wersja tej funkcji miała dokładnie ten błąd i zaraportowała
-            # „5 okien" dla WIG20, dla którego przyszedł jeden wiersz.
-            if asset is None:
-                rows = await count_fx_rates_in_range(db, label, start=start, end=end)
-            else:
-                rows = await count_prices_in_range(db, asset.id, start=start, end=end)
-            if rows:
-                ok_counts[label] = rows
+            rows_after = await _count_rows(db, label, asset, start=start, end=end)
+            diagnostics = (
+                await price_series_diagnostics(db, asset.id, start=start, end=end)
+                if asset is not None
+                else None
+            )
 
-    logger.info("backfill_prices.done", targets_with_data=len(ok_counts))
-    return ok_counts
+            results.append(
+                BackfillTarget(
+                    label=label,
+                    rows_before=rows_before,
+                    rows_after=rows_after,
+                    windows_total=len(windows),
+                    windows_failed=windows_failed,
+                    unavailable=unavailable,
+                    diagnostics=diagnostics,
+                )
+            )
+
+    logger.info(
+        "backfill_prices.done",
+        targets=len(results),
+        targets_with_data=sum(1 for t in results if not t.is_empty),
+        targets_unavailable=sum(1 for t in results if t.unavailable),
+    )
+    return results
 
 
-__all__ = ["backfill_prices", "ingest_market"]
+async def _count_rows(
+    db: AsyncSession, label: str, asset: Asset | None, *, start: date, end: date
+) -> int:
+    """`prices` dla aktywa, `fx_rates` dla waluty — jedno wywołanie zamiast
+    powtarzania tego `if` przed i po przebiegu."""
+    if asset is None:
+        return await count_fx_rates_in_range(db, label, start=start, end=end)
+    return await count_prices_in_range(db, asset.id, start=start, end=end)
+
+
+__all__ = ["BackfillTarget", "backfill_prices", "ingest_market"]

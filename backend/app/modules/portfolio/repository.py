@@ -17,15 +17,16 @@ ustawić `PortfolioValuation.composition_change`.
 from __future__ import annotations
 
 import calendar
+from dataclasses import dataclass
 from datetime import date as date_
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.marketdata.models import Asset
+from app.modules.marketdata.models import Asset, Price
 from app.modules.portfolio.models import Holding, Portfolio, PortfolioValuation
 
 # `?range=` w `GET /valuations` — liczba miesięcy do odjęcia od „dziś" dla
@@ -104,6 +105,58 @@ async def get_portfolio_by_id(db: AsyncSession, portfolio_id: UUID) -> Portfolio
     bezpośrednio z `routes.py` (patrz `core/deps.get_owned_portfolio` dla
     ścieżki dotykającej żądania HTTP)."""
     return await db.get(Portfolio, portfolio_id)
+
+
+@dataclass(frozen=True, slots=True)
+class HeldAssetPriceCoverage:
+    """Od kiedy wycena WSZYSTKICH trzymanych pozycji jest możliwa.
+
+    Silnik wyceny (`worker/jobs/snapshot_portfolios.py`) pomija pozycję bez
+    ceny, zamiast liczyć ją jako zero — poprawnie, bo zero byłoby kłamstwem.
+    Skutek uboczny: dla dnia sprzed debiutu jednej pozycji snapshot i tak
+    powstanie, tylko cząstkowy, a w `portfolio_valuations` (append-only,
+    ADR-101) nie da się go potem odróżnić od pełnego. Stąd guard w
+    `seed-history`, a nie sprzątanie po fakcie.
+    """
+
+    first_full_date: date_ | None
+    assets_without_prices: tuple[str, ...]
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.assets_without_prices and self.first_full_date is not None
+
+
+async def held_asset_price_coverage(db: AsyncSession) -> HeldAssetPriceCoverage:
+    """Pokrycie cenami aktywów faktycznie trzymanych w jakimkolwiek portfelu.
+
+    `first_full_date` to **maksimum z minimów** per aktywo, nie globalne
+    `MIN(prices.date)`: pełne pokrycie zaczyna się dopiero tam, gdzie ma już
+    dane pozycja o najpóźniejszym debiucie. Globalne minimum przepuściłoby
+    dokładnie te dni, przed którymi guard ma chronić.
+
+    Aktywa spoza portfeli są pomijane — jeden nienotowany walor w słowniku
+    `assets` nie może blokować `seed-history` wszystkim.
+    """
+    held = select(Holding.asset_id).distinct().subquery()
+    stmt = (
+        select(Asset.symbol, func.min(Price.date))
+        .select_from(held)
+        .join(Asset, Asset.id == held.c.asset_id)
+        .outerjoin(Price, Price.asset_id == held.c.asset_id)
+        .group_by(Asset.symbol)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    missing = tuple(sorted(symbol for symbol, first in rows if first is None))
+    firsts = [first for _, first in rows if first is not None]
+    return HeldAssetPriceCoverage(
+        # Przy choćby jednym aktywie bez cen dzień pełnego pokrycia nie
+        # istnieje w ogóle — `max()` z pozostałych byłby wtedy datą, przed
+        # którą pokrycie i tak nie jest pełne, czyli fałszywym zielonym.
+        first_full_date=max(firsts) if firsts and not missing else None,
+        assets_without_prices=missing,
+    )
 
 
 def bump_holdings_version(portfolio: Portfolio, *, changed_at: date_) -> None:

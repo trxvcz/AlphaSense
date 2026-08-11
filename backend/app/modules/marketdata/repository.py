@@ -22,6 +22,7 @@ ten sam dzień nadpisuje, nie duplikuje (CLAUDE.md #3.9).
 from __future__ import annotations
 
 import calendar
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -470,6 +471,73 @@ async def count_fx_rates_in_range(
         )
     )
     return int((await db.execute(stmt)).scalar_one())
+
+
+@dataclass(frozen=True, slots=True)
+class PriceSeriesDiagnostics:
+    """Stan serii `prices` jednego aktywa w zadanym zakresie — na tyle, żeby
+    odpowiedzieć na pytanie „czy tej serii wolno używać do liczenia zwrotów".
+
+    `close_adj` nie ma jednej konwencji między dostawcami: yfinance zwraca
+    prawdziwą cenę skorygowaną o dywidendy i splity (`close_adj != close`),
+    a Stooq/Finnhub/Binance ustawiają `close_adj := close`, bo korekty nie
+    mają. Zszycie obu w jednej serii daje skok w miejscu styku, niewidoczny
+    w surowym `close` i nie do odróżnienia od prawdziwego ruchu ceny —
+    a wycena i wykresy idą po `close_adj` (CLAUDE.md #3.4).
+    """
+
+    rows: int
+    adjusted_rows: int
+    unadjusted_rows: int
+    sources: tuple[str | None, ...]
+
+    @property
+    def mixed_convention(self) -> bool:
+        """Seria zawiera i wiersze skorygowane, i nieskorygowane."""
+        return self.adjusted_rows > 0 and self.unadjusted_rows > 0
+
+    @property
+    def mixed_sources(self) -> bool:
+        """Więcej niż jeden znany dostawca w serii.
+
+        Słabszy sygnał niż `mixed_convention` (dwóch dostawców o tej samej
+        konwencji jest nieszkodliwych), ale wychodzi też tam, gdzie różnica
+        konwencji jeszcze się nie ujawniła — bo w pobranym okresie nie było
+        dywidendy ani splitu. `None` (wiersze sprzed kolumny `source`) nie
+        liczy się jako osobny dostawca; o nich mówi `mixed_convention`.
+        """
+        return len({s for s in self.sources if s is not None}) > 1
+
+
+async def price_series_diagnostics(
+    db: AsyncSession, asset_id: UUID, *, start: date, end: date
+) -> PriceSeriesDiagnostics:
+    """Diagnostyka serii `prices` dla `asset_id` w `[start, end]` (włącznie).
+
+    Dwa zapytania zamiast jednego, bo `DISTINCT` po `source` nie składa się z
+    agregatami zliczającymi w tym samym `SELECT`.
+    """
+    stmt = select(
+        func.count(),
+        func.count().filter(Price.close.is_not(None), Price.close_adj != Price.close),
+        func.count().filter(Price.close.is_not(None), Price.close_adj == Price.close),
+    ).where(Price.asset_id == asset_id, Price.date >= start, Price.date <= end)
+    rows, adjusted, unadjusted = (await db.execute(stmt)).one()
+
+    sources_stmt = (
+        select(Price.source)
+        .where(Price.asset_id == asset_id, Price.date >= start, Price.date <= end)
+        .distinct()
+        .order_by(Price.source)
+    )
+    sources = tuple((await db.execute(sources_stmt)).scalars().all())
+
+    return PriceSeriesDiagnostics(
+        rows=int(rows),
+        adjusted_rows=int(adjusted),
+        unadjusted_rows=int(unadjusted),
+        sources=sources,
+    )
 
 
 async def get_latest_price_date_for_assets(db: AsyncSession, asset_ids: list[UUID]) -> date | None:

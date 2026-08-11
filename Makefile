@@ -20,20 +20,30 @@ revision:  ## make revision m="opis zmiany"
 seed:
 	docker compose exec api python -m app.cli seed
 
-# Etap 8, krok zerowy. `from` i `years` nadpisywalne:
+# Etap 8, krok zerowy. `from`, `years`, `to` i `provider` nadpisywalne:
 #   make backfill years=2
-#   make backfill from=2021-01-01
-years ?= 5
-from  ?= $(shell date -d "$(years) years ago" +%Y-%m-%d)
+#   make backfill from=2021-01-01 to=2024-12-31
+#   make backfill provider=yfinance          <- zalecane dla historii
+#
+# `provider=` przypina wszystkie okna do jednego dostawcy. Bez tego fallback
+# rozstrzyga się per okno i potrafi zszyć w jedną serię dwie niekompatybilne
+# konwencje `close_adj` (yfinance koryguje o dywidendy/splity, Stooq nie).
+#
+# `date -d` jest GNU-owe — na macOS/BSD trzeba podać `from=` wprost.
+years    ?= 5
+from     ?= $(shell date -d "$(years) years ago" +%Y-%m-%d)
+to       ?=
+provider ?=
 
 backfill:  ## dev: zaciągnij historię cen i kursów (domyślnie 5 lat wstecz)
-	docker compose exec api python -m app.cli backfill-prices --from $(from)
+	docker compose exec api python -m app.cli backfill-prices --from $(from) \
+		$(if $(to),--to $(to),) $(if $(provider),--provider $(provider),)
 
 # Osobno od `backfill` celowo: najpierw oglądasz, co się zaciągnęło, dopiero
 # potem liczysz na tym wyceny. Historia jest SYNTETYCZNA (dzisiejszy skład
 # wyceniony cenami z przeszłości) i komenda odmawia działania poza ENV=dev.
 seed-history:  ## TYLKO DEV: odtwórz portfolio_valuations wstecz dla metryk etapu 8
-	docker compose exec api python -m app.cli seed-history --from $(from)
+	docker compose exec api python -m app.cli seed-history --from $(from) $(if $(to),--to $(to),)
 
 test:
 	docker compose exec api pytest -q -m "not network"

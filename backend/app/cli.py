@@ -23,6 +23,8 @@ from app.core.config import get_settings
 from app.core.observability import init_sentry
 from app.db.seed import seed_all, seed_reference
 from app.db.session import AsyncSessionLocal
+from app.modules.portfolio.repository import held_asset_price_coverage
+from app.modules.portfolio.service import today as today_utc
 from worker.jobs.ingest_market import backfill_prices, ingest_market
 from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
@@ -101,32 +103,92 @@ async def _run_backfill(
     end: date,
     market_codes: list[str] | None,
     symbols: list[str] | None,
-) -> None:
+    provider: str | None = None,
+) -> int:
+    """Raportuje KAŻDY cel, nie tylko te z danymi — pytanie operatora brzmi
+    „czego brakuje", a lista samych sukcesów na nie nie odpowiada.
+
+    Zwraca 1, gdy którakolwiek seria wyszła z dwiema konwencjami `close_adj`:
+    dane są wtedy do wyrzucenia i pobrania ponownie z jednego dostawcy
+    (`--provider`), a nie do liczenia na nich metryk. Zerowy kod przy takim
+    stanie oznaczałby, że skrypt/CI przejdzie dalej po cichu.
+    """
     async with AsyncSessionLocal() as session:
-        counts = await backfill_prices(
+        targets = await backfill_prices(
             session,
             start=start,
             end=end,
             market_codes=market_codes,
             symbols=symbols,
+            provider=provider,
         )
 
-    if not counts:
+    if not targets:
         print(
-            "Nie zaciągnięto ŻADNYCH danych. Sprawdź kolejno: czy rynek/symbol istnieje "
-            "w słowniku, czy aktywo ma wiersz w `asset_source_map`, czy dostawca odpowiada "
-            "(skill `data-provider`, sekcja „Gdy dane wyglądają źle”).",
+            "Nie było CZEGO zaciągać — żaden cel nie pasuje do podanych filtrów. Sprawdź "
+            "kolejno: czy rynek/symbol istnieje w słowniku, czy aktywo jest aktywne, czy "
+            "podany `--provider` w ogóle jest w łańcuchu tego rynku.",
             file=sys.stderr,
         )
-        return
+        return 1
 
-    print(f"Backfill {start.isoformat()} .. {end.isoformat()} — {len(counts)} pozycji z danymi:")
-    for label in sorted(counts):
-        print(f"  {label:<12} {counts[label]} notowań w bazie")
+    with_data = [t for t in targets if not t.is_empty]
+    print(
+        f"Backfill {start.isoformat()} .. {end.isoformat()} — "
+        f"{len(with_data)} z {len(targets)} celów ma dane:"
+    )
+    for target in sorted(targets, key=lambda t: t.label):
+        if target.unavailable:
+            state = "DOSTAWCA NIEDOSTĘPNY (brak mapowania albo odmowa)"
+        elif target.is_empty:
+            state = "brak danych"
+        else:
+            state = f"+{target.rows_added} nowych, {target.rows_after} w bazie"
+        if target.windows_failed and not target.unavailable:
+            state += f" [{target.windows_failed}/{target.windows_total} okien bez danych]"
+        print(f"  {target.label:<12} {state}")
+
+    if not with_data:
+        # Powtórzony backfill na komplecie danych daje `rows_added == 0` i jest
+        # sukcesem — dlatego progiem jest „ŻADEN cel nie ma wierszy w bazie",
+        # nie „nic nie przybyło".
+        print(
+            "\nNie zaciągnięto ŻADNYCH danych — żaden cel nie ma wierszy w bazie za ten "
+            "zakres. Sprawdź kolejno: czy aktywo ma wiersz w `asset_source_map` dla tego "
+            "dostawcy, czy dostawca odpowiada (skill `data-provider`, sekcja „Gdy dane "
+            "wyglądają źle”).",
+            file=sys.stderr,
+        )
+        return 1
+
+    mixed = [t for t in targets if t.diagnostics is not None and t.diagnostics.mixed_convention]
+    if mixed:
+        print(
+            "\nBLOKADA: poniższe serie mają wiersze w DWÓCH konwencjach `close_adj` "
+            "(yfinance koryguje o dywidendy i splity, Stooq/Finnhub/Binance ustawiają "
+            "`close_adj := close`). Na styku powstaje skok nieodróżnialny od ruchu ceny, "
+            "a wycena i wykresy idą po `close_adj` (CLAUDE.md #3.4). Usuń te wiersze i "
+            "pobierz zakres ponownie z jednym dostawcą (`--provider`):",
+            file=sys.stderr,
+        )
+        for target in sorted(mixed, key=lambda t: t.label):
+            diagnostics = target.diagnostics
+            assert diagnostics is not None  # zawężenie typu — filtr wyżej to gwarantuje
+            sources = ", ".join(s or "(brak)" for s in diagnostics.sources)
+            print(
+                f"  {target.label:<12} {diagnostics.adjusted_rows} skorygowanych / "
+                f"{diagnostics.unadjusted_rows} nieskorygowanych, źródła: {sources}",
+                file=sys.stderr,
+            )
+        return 1
+
     print("Sprawdź jakość serii przed liczeniem metryk: `make seed-history` dopiero potem.")
+    return 0
 
 
-async def _run_seed_history(*, start: date, end: date, include_weekends: bool) -> int:
+async def _run_seed_history(
+    *, start: date, end: date, include_weekends: bool, allow_incomplete: bool = False
+) -> int:
     """Odtwarza `portfolio_valuations` dzień po dniu, wołając produkcyjny job
     `snapshot_portfolios(run_date)` — a nie drugą, równoległą implementację
     wyceny, która rozjechałaby się z pierwszą przy najbliższej zmianie
@@ -146,6 +208,15 @@ async def _run_seed_history(*, start: date, end: date, include_weekends: bool) -
     Dlatego komenda jest zablokowana poza `ENV=dev`: na produkcji dopisałaby
     do `portfolio_valuations` wiersze, których nikt nigdy nie zmierzył,
     nieodróżnialne potem od prawdziwych snapshotów.
+
+    Drugi guard dotyczy dolnej granicy zakresu: silnik wyceny POMIJA pozycję
+    bez ceny (nie liczy jej jako zero), więc dzień bez kompletu notowań daje
+    wycenę cząstkową — a `portfolio_valuations` jest append-only i takiego
+    wiersza nie da się potem odróżnić od pełnego. Seria zaczynałaby się
+    blisko zera i skakała w miarę „pojawiania się" pozycji: krok 40
+    policzyłby z tego absurdalny zwrot, krok 41 — drawdown bliski 100%.
+    `allow_incomplete=True` przepuszcza to świadomie (guard jest
+    zabezpieczeniem, nie zakazem).
     """
     settings = get_settings()
     if settings.env != "dev":
@@ -156,6 +227,41 @@ async def _run_seed_history(*, start: date, end: date, include_weekends: bool) -
             file=sys.stderr,
         )
         return 2
+
+    if start > end:
+        print(
+            f"ODMOWA: początek zakresu ({start.isoformat()}) jest po jego końcu "
+            f"({end.isoformat()}).",
+            file=sys.stderr,
+        )
+        return 2
+
+    async with AsyncSessionLocal() as session:
+        coverage = await held_asset_price_coverage(session)
+
+    if not allow_incomplete:
+        if coverage.assets_without_prices:
+            print(
+                "ODMOWA: te trzymane pozycje nie mają w bazie ANI JEDNEGO notowania: "
+                f"{', '.join(coverage.assets_without_prices)}. Każda wycena wstecz byłaby "
+                "o nie zaniżona, a wiersze `portfolio_valuations` są append-only (ADR-101) "
+                "— nie da się ich potem odróżnić od pełnych. Uruchom najpierw "
+                "`make backfill`, albo wymuś świadomie flagą --allow-incomplete.",
+                file=sys.stderr,
+            )
+            return 2
+        if coverage.first_full_date is not None and start < coverage.first_full_date:
+            print(
+                f"ODMOWA: pełne pokrycie cenami zaczyna się dopiero "
+                f"{coverage.first_full_date.isoformat()}, a zakres startuje "
+                f"{start.isoformat()}. Wcześniejsze dni dałyby wyceny cząstkowe "
+                "(pozycja bez ceny jest pomijana, nie liczona jako zero) — krok 40 "
+                "policzyłby z tego absurdalny zwrot, krok 41 drawdown bliski 100%. "
+                f"Podaj --from {coverage.first_full_date.isoformat()} albo wymuś "
+                "świadomie flagą --allow-incomplete.",
+                file=sys.stderr,
+            )
+            return 2
 
     days = 0
     skipped_weekends = 0
@@ -183,6 +289,19 @@ async def _run_seed_history(*, start: date, end: date, include_weekends: bool) -
         "UWAGA: to historia SYNTETYCZNA — dzisiejszy skład wyceniony cenami z przeszłości. "
         "Nadaje się do ćwiczenia metryk, nie do wniosków o przeszłych wynikach."
     )
+    # Ostrzegamy tylko wtedy, gdy flaga FAKTYCZNIE coś przepuściła — inaczej
+    # `--allow-incomplete` na komplecie danych straszyłby bez powodu i
+    # nauczyłby ignorować ten komunikat.
+    if allow_incomplete and (
+        coverage.assets_without_prices
+        or (coverage.first_full_date is not None and start < coverage.first_full_date)
+    ):
+        print(
+            "UWAGA: --allow-incomplete pominął guard pokrycia cenami — część tych wycen "
+            "jest CZĄSTKOWA (pozycje bez notowań zostały pominięte) i nie da się ich "
+            "potem odróżnić od pełnych.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -280,6 +399,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="symbols",
         help="Symbol aktywa lub waluta, można powtórzyć; domyślnie wszystkie z wybranych rynków",
     )
+    backfill_parser.add_argument(
+        "--provider",
+        default=None,
+        help=(
+            "Przypnij przebieg do jednego dostawcy (np. --provider yfinance) zamiast "
+            "łańcucha fallbacku. Bez tego łańcuch rozstrzyga się per okno i jedna seria "
+            "może powstać z dwóch niekompatybilnych konwencji `close_adj`"
+        ),
+    )
 
     history_parser = subparsers.add_parser(
         "seed-history",
@@ -308,6 +436,15 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Licz snapshoty także w soboty i niedziele. Domyślnie pomijane — patrz "
             "`_run_seed_history`, weekendy rozcieńczają zmienność"
+        ),
+    )
+    history_parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help=(
+            "Licz snapshoty także dla dni bez kompletu notowań wszystkich trzymanych "
+            "pozycji. Domyślnie zablokowane — wyceny cząstkowe są append-only i "
+            "nieodróżnialne potem od pełnych (patrz `_run_seed_history`)"
         ),
     )
 
@@ -352,12 +489,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "backfill-prices":
         try:
-            asyncio.run(
+            return asyncio.run(
                 _run_backfill(
                     start=args.start,
-                    end=args.end or date.today(),
+                    end=args.end or today_utc(),
                     market_codes=args.market_codes,
                     symbols=args.symbols,
+                    provider=args.provider,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — diagnostyczne narzędzie CLI, nie handler HTTP
@@ -366,15 +504,15 @@ def main(argv: list[str] | None = None) -> int:
             # np. baza nieosiągalna albo zły zakres dat.
             print(f"BŁĄD: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
-        return 0
 
     if args.command == "seed-history":
         try:
             return asyncio.run(
                 _run_seed_history(
                     start=args.start,
-                    end=args.end or date.today(),
+                    end=args.end or today_utc(),
                     include_weekends=args.include_weekends,
+                    allow_incomplete=args.allow_incomplete,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — diagnostyczne narzędzie CLI, nie handler HTTP

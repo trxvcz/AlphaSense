@@ -28,9 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.marketdata.models import Asset, FxRate, Price
 from app.modules.marketdata.providers.base import FxQuote, PriceBar
 from app.modules.marketdata.repository import (
+    count_fx_rates_in_range,
+    count_prices_in_range,
     detect_price_jump,
     get_latest_price,
     get_rate_pln,
+    price_series_diagnostics,
     upsert_fx_rates,
     upsert_prices,
 )
@@ -507,3 +510,106 @@ async def test_upsert_prices_with_all_invalid_bars_persists_nothing(
 
     result = await db_session.execute(select(Price).where(Price.asset_id == temp_asset.id))
     assert result.scalars().all() == []
+
+
+async def test_count_prices_in_range_includes_both_boundaries(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """Zakres jest domknięty obustronnie — off-by-one tutaj zaniżałby
+    raport backfillu o dzień na każdym końcu okna."""
+    for day in (date(2026, 7, 19), date(2026, 7, 20), date(2026, 7, 25), date(2026, 7, 26)):
+        db_session.add(
+            Price(asset_id=temp_asset.id, date=day, close=Decimal("10"), close_adj=Decimal("10"))
+        )
+    await db_session.commit()
+
+    counted = await count_prices_in_range(
+        db_session, temp_asset.id, start=date(2026, 7, 20), end=date(2026, 7, 25)
+    )
+    assert counted == 2, "dzień przed i po zakresie nie liczy się"
+
+    single = await count_prices_in_range(
+        db_session, temp_asset.id, start=date(2026, 7, 20), end=date(2026, 7, 20)
+    )
+    assert single == 1
+
+    empty = await count_prices_in_range(
+        db_session, temp_asset.id, start=date(2026, 7, 21), end=date(2026, 7, 24)
+    )
+    assert empty == 0
+
+
+async def test_count_fx_rates_in_range_includes_both_boundaries(db_session: AsyncSession) -> None:
+    await upsert_fx_rates(
+        db_session,
+        [
+            FxQuote(date=date(2026, 7, 19), currency=_TEST_CURRENCY, rate_pln=Decimal("4")),
+            FxQuote(date=date(2026, 7, 20), currency=_TEST_CURRENCY, rate_pln=Decimal("4")),
+            FxQuote(date=date(2026, 7, 25), currency=_TEST_CURRENCY, rate_pln=Decimal("4")),
+            FxQuote(date=date(2026, 7, 26), currency=_TEST_CURRENCY, rate_pln=Decimal("4")),
+        ],
+    )
+
+    counted = await count_fx_rates_in_range(
+        db_session, _TEST_CURRENCY, start=date(2026, 7, 20), end=date(2026, 7, 25)
+    )
+    assert counted == 2
+
+
+async def test_price_series_diagnostics_splits_conventions_and_sources(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """Konwencje `close_adj` per wiersz — podstawa wykrywania serii zszytej
+    z dwóch dostawców (blokujące znalezisko #1 code-review kroku zerowego)."""
+    db_session.add_all(
+        [
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 20),
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                source="stooq",
+            ),
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 21),
+                close=Decimal("100"),
+                close_adj=Decimal("98"),
+                source="yfinance",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    diagnostics = await price_series_diagnostics(
+        db_session, temp_asset.id, start=date(2026, 7, 1), end=date(2026, 7, 31)
+    )
+
+    assert diagnostics.rows == 2
+    assert diagnostics.adjusted_rows == 1
+    assert diagnostics.unadjusted_rows == 1
+    assert diagnostics.mixed_convention
+    assert diagnostics.mixed_sources
+    assert diagnostics.sources == ("stooq", "yfinance")
+
+
+async def test_price_series_diagnostics_ignores_rows_without_close(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """NBP/złoto zapisuje samą cenę (`close` NULL) — takich wierszy nie da
+    się zaklasyfikować i nie wolno ich liczyć jako nieskorygowane, bo
+    fałszowałyby obraz aktywów bez OHLC."""
+    db_session.add(
+        Price(asset_id=temp_asset.id, date=date(2026, 7, 20), close=None, close_adj=Decimal("100"))
+    )
+    await db_session.commit()
+
+    diagnostics = await price_series_diagnostics(
+        db_session, temp_asset.id, start=date(2026, 7, 1), end=date(2026, 7, 31)
+    )
+
+    assert diagnostics.rows == 1
+    assert diagnostics.adjusted_rows == 0
+    assert diagnostics.unadjusted_rows == 0
+    assert not diagnostics.mixed_convention
+    assert diagnostics.sources == (None,)
