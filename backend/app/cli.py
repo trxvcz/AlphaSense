@@ -161,23 +161,25 @@ async def _run_backfill(
         )
         return 1
 
-    mixed = [t for t in targets if t.diagnostics is not None and t.diagnostics.mixed_convention]
+    mixed = [t for t in targets if t.diagnostics is not None and t.diagnostics.mixed_sources]
     if mixed:
         print(
-            "\nBLOKADA: poniższe serie mają wiersze w DWÓCH konwencjach `close_adj` "
-            "(yfinance koryguje o dywidendy i splity, Stooq/Finnhub/Binance ustawiają "
-            "`close_adj := close`). Na styku powstaje skok nieodróżnialny od ruchu ceny, "
-            "a wycena i wykresy idą po `close_adj` (CLAUDE.md #3.4). Usuń te wiersze i "
-            "pobierz zakres ponownie z jednym dostawcą (`--provider`):",
+            "\nBLOKADA: poniższe serie pochodzą z WIĘCEJ NIŻ JEDNEGO źródła, a dostawcy "
+            "różnią się konwencją `close_adj` (yfinance koryguje o dywidendy i splity, "
+            "Stooq/Finnhub/Binance ustawiają `close_adj := close`). Na styku powstaje skok "
+            "nieodróżnialny od ruchu ceny, a wycena i wykresy idą po `close_adj` "
+            "(CLAUDE.md #3.4). Usuń te wiersze i pobierz zakres ponownie z jednym dostawcą "
+            "(`--provider`):",
             file=sys.stderr,
         )
         for target in sorted(mixed, key=lambda t: t.label):
             diagnostics = target.diagnostics
             assert diagnostics is not None  # zawężenie typu — filtr wyżej to gwarantuje
-            sources = ", ".join(s or "(brak)" for s in diagnostics.sources)
+            sources = ", ".join(s or "(nieznane)" for s in diagnostics.sources)
             print(
-                f"  {target.label:<12} {diagnostics.adjusted_rows} skorygowanych / "
-                f"{diagnostics.unadjusted_rows} nieskorygowanych, źródła: {sources}",
+                f"  {target.label:<12} źródła: {sources} "
+                f"({diagnostics.adjusted_rows} wierszy skorygowanych, "
+                f"{diagnostics.unadjusted_rows} nieskorygowanych z {diagnostics.rows})",
                 file=sys.stderr,
             )
         return 1

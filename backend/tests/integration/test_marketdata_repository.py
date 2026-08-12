@@ -588,9 +588,83 @@ async def test_price_series_diagnostics_splits_conventions_and_sources(
     assert diagnostics.rows == 2
     assert diagnostics.adjusted_rows == 1
     assert diagnostics.unadjusted_rows == 1
-    assert diagnostics.mixed_convention
     assert diagnostics.mixed_sources
     assert diagnostics.sources == ("stooq", "yfinance")
+
+
+async def test_single_provider_series_is_not_mixed_despite_both_conventions(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """Regresja: seria od JEDNEGO dostawcy nie jest wymieszana, nawet gdy ma
+    i wiersze skorygowane, i nieskorygowane.
+
+    Współczynnik korekty jest równy 1 dla ogona serii — po ostatniej
+    dywidendzie nie ma czego korygować — więc każda czysta seria yfinance
+    kończy się wierszami `close_adj == close`. Pierwsza wersja
+    `mixed_convention` blokowała dokładnie na tym układzie i zapalała się na
+    każdym realnym backfillu (AAPL 1252/2, MSFT 1198/56, CDR 969/280).
+    """
+    db_session.add_all(
+        [
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 20),
+                close=Decimal("100"),
+                close_adj=Decimal("98"),
+                source="yfinance",
+            ),
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 21),
+                close=Decimal("101"),
+                close_adj=Decimal("101"),
+                source="yfinance",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    diagnostics = await price_series_diagnostics(
+        db_session, temp_asset.id, start=date(2026, 7, 1), end=date(2026, 7, 31)
+    )
+
+    assert diagnostics.adjusted_rows == 1
+    assert diagnostics.unadjusted_rows == 1
+    assert not diagnostics.mixed_sources, "jeden dostawca = jedna konwencja, blokady być nie może"
+
+
+async def test_rows_without_source_count_as_own_provenance(
+    db_session: AsyncSession, temp_asset: Asset
+) -> None:
+    """Wiersze sprzed kolumny `source` wymieszane ze znanym dostawcą —
+    pochodzenia starych nie da się ustalić, więc seria jest podejrzana."""
+    db_session.add_all(
+        [
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 20),
+                close=Decimal("100"),
+                close_adj=Decimal("100"),
+                source=None,
+            ),
+            Price(
+                asset_id=temp_asset.id,
+                date=date(2026, 7, 21),
+                close=Decimal("101"),
+                close_adj=Decimal("101"),
+                source="yfinance",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    diagnostics = await price_series_diagnostics(
+        db_session, temp_asset.id, start=date(2026, 7, 1), end=date(2026, 7, 31)
+    )
+
+    assert diagnostics.mixed_sources
+    # `ORDER BY source` w Postgresie to domyślnie NULLS LAST.
+    assert diagnostics.sources == ("yfinance", None)
 
 
 async def test_price_series_diagnostics_ignores_rows_without_close(
@@ -611,5 +685,5 @@ async def test_price_series_diagnostics_ignores_rows_without_close(
     assert diagnostics.rows == 1
     assert diagnostics.adjusted_rows == 0
     assert diagnostics.unadjusted_rows == 0
-    assert not diagnostics.mixed_convention
+    assert not diagnostics.mixed_sources
     assert diagnostics.sources == (None,)

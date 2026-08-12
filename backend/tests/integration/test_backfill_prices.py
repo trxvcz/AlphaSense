@@ -245,14 +245,16 @@ async def test_provider_pinning_skips_other_providers(
     assert diagnostics.sources == ("yfinance",)
 
 
-async def test_mixed_close_adj_convention_is_detected(
+async def test_series_stitched_from_two_providers_is_detected(
     db_session: AsyncSession, temp_assets: list[Asset], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Blokujące znalezisko #1: seria z dwiema konwencjami `close_adj`.
+    """Blokujące znalezisko #1: seria zszyta z dwóch dostawców.
 
-    Wiersz nieskorygowany (`close_adj == close`, konwencja Stooq/Finnhub/
-    Binance) obok skorygowanego (`close_adj != close`, yfinance) — na styku
-    powstaje skok niewidoczny w surowym `close`.
+    Wiersz Stooqa (konwencja `close_adj := close`) obok wiersza yfinance
+    (korekta o dywidendy i splity) — na styku powstaje skok niewidoczny
+    w surowym `close`. Rozstrzyga `source`, nie relacja `close_adj` do
+    `close`: ta druga jest równa także w ogonie czystej serii yfinance
+    (patrz `PriceSeriesDiagnostics`).
     """
     asset = temp_assets[0]
     db_session.add(
@@ -279,10 +281,9 @@ async def test_mixed_close_adj_convention_is_detected(
 
     diagnostics = targets[0].diagnostics
     assert diagnostics is not None
-    assert diagnostics.mixed_convention, "jedna seria, dwie konwencje — musi być wykryte"
+    assert diagnostics.mixed_sources, "jedna seria, dwa źródła — musi być wykryte"
     assert diagnostics.adjusted_rows == 1
     assert diagnostics.unadjusted_rows == 1
-    assert diagnostics.mixed_sources
     assert set(diagnostics.sources) == {"stooq", "yfinance"}
 
 

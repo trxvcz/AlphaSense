@@ -484,6 +484,16 @@ class PriceSeriesDiagnostics:
     mają. Zszycie obu w jednej serii daje skok w miejscu styku, niewidoczny
     w surowym `close` i nie do odróżnienia od prawdziwego ruchu ceny —
     a wycena i wykresy idą po `close_adj` (CLAUDE.md #3.4).
+
+    **Konwencji NIE da się wyczytać z relacji `close_adj` do `close`** —
+    dlatego rozstrzyga `source`, nie liczniki. Współczynnik korekty jest
+    z definicji równy 1 dla ogona serii (po ostatniej dywidendzie/splicie
+    nie ma czego korygować), więc każda seria yfinance ma na końcu wiersze
+    z `close_adj == close`. Pierwsza wersja tej klasy blokowała na
+    „są jedne i drugie" i zapalała się na KAŻDEJ czystej serii yfinance:
+    AAPL 1252/2, MSFT 1198/56, CDR 969/280 — same wyniki jednego przebiegu
+    z `--provider yfinance`. Liczniki zostają jako informacja diagnostyczna
+    („czy ta seria w ogóle jest korygowana"), nie jako kryterium blokady.
     """
 
     rows: int
@@ -492,21 +502,18 @@ class PriceSeriesDiagnostics:
     sources: tuple[str | None, ...]
 
     @property
-    def mixed_convention(self) -> bool:
-        """Seria zawiera i wiersze skorygowane, i nieskorygowane."""
-        return self.adjusted_rows > 0 and self.unadjusted_rows > 0
-
-    @property
     def mixed_sources(self) -> bool:
-        """Więcej niż jeden znany dostawca w serii.
+        """Seria pochodzi z więcej niż jednego źródła — jedyny wiarygodny
+        sygnał wymieszanej konwencji (patrz docstring klasy).
 
-        Słabszy sygnał niż `mixed_convention` (dwóch dostawców o tej samej
-        konwencji jest nieszkodliwych), ale wychodzi też tam, gdzie różnica
-        konwencji jeszcze się nie ujawniła — bo w pobranym okresie nie było
-        dywidendy ani splitu. `None` (wiersze sprzed kolumny `source`) nie
-        liczy się jako osobny dostawca; o nich mówi `mixed_convention`.
+        `None` (wiersze sprzed kolumny `source`, migracja `926b382d1715`)
+        liczy się jako osobna wartość, bo jest nieznanego pochodzenia:
+        seria pół-NULL, pół-yfinance może być mieszanką i nie ma jak tego
+        rozstrzygnąć. Dwóch dostawców o tej samej konwencji zapali się tu
+        niepotrzebnie — to fałszywy alarm w bezpieczną stronę, a naprawa
+        jest ta sama i tania (pobrać zakres ponownie z `--provider`).
         """
-        return len({s for s in self.sources if s is not None}) > 1
+        return len(set(self.sources)) > 1
 
 
 async def price_series_diagnostics(
