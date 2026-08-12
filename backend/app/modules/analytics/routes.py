@@ -28,8 +28,11 @@ from app.modules.analytics.schemas import (
     IndexChangeOut,
     MarketIndexOut,
     MarketRankingItemOut,
+    PerformanceOut,
+    PerformancePointOut,
 )
 from app.modules.marketdata.schemas import PricePointOut
+from app.modules.portfolio.routes import ValuationRangeParam
 
 router = APIRouter(tags=["analytics"])
 
@@ -45,6 +48,38 @@ class AllocationDimensionParam(StrEnum):
     GEO = "geo"
     CURRENCY = "currency"
     MARKET = "market"
+
+
+@router.get("/portfolios/{portfolio_id}/performance", response_model=PerformanceOut)
+async def get_performance(
+    portfolio: PortfolioDep,
+    db: DbSession,
+    range_: Annotated[ValuationRangeParam, Query(alias="range")] = ValuationRangeParam.MAX,
+) -> PerformanceOut:
+    """Zwrot za okres i seria indeksu łańcuchowego ze snapshotów (krok 40,
+    ADR-101). Dni zmiany składu zrywają ogniwo — patrz `analytics.returns`.
+
+    `range` reużywa `ValuationRangeParam` z `portfolio.routes` zamiast
+    definiować drugi enum o tych samych wartościach: obie trasy schodzą do
+    tego samego `repository._range_start`, więc rozjazd list byłby błędem
+    typu „422 na `1M`, które gdzie indziej działa". Import trasy z trasy nie
+    tworzy cyklu (`portfolio.routes` nie zna `analytics`) i niczego nie
+    rejestruje — routery wpina jawnie `app/main.py`.
+    """
+    result = await service.performance(db, portfolio, range_=range_.value)
+    return PerformanceOut(
+        range=result.range,
+        period_return=result.period_return,
+        first_date=result.first_date,
+        last_date=result.last_date,
+        links=result.links,
+        skipped_composition_change=result.skipped_composition_change,
+        skipped_zero_base=result.skipped_zero_base,
+        points=[
+            PerformancePointOut(date=p.date, value_pln=p.value_pln, ret=p.ret, index=p.index)
+            for p in result.points
+        ],
+    )
 
 
 @router.get("/portfolios/{portfolio_id}/allocation", response_model=AllocationOut)

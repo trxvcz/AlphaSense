@@ -306,6 +306,32 @@ async def list_valuations(
     return list(result.scalars().all())
 
 
+async def valuations_marker(db: AsyncSession, portfolio_id: UUID) -> str:
+    """Segment klucza cache dla wyników liczonych z `portfolio_valuations`
+    (`MAX(date)` i `COUNT(*)`, plan krok 40).
+
+    **`MAX(date)` samo nie wystarczy** — inaczej niż `_eod_marker` w
+    `analytics.service`, który pilnuje danych rynkowych przyrastających
+    wyłącznie od najnowszej strony. Tutaj wiersze przybywają też WSTECZ:
+    `seed-history` (krok zerowy etapu 8) dopisuje pełne lata historii, nie
+    ruszając maksimum. Sam `MAX` dałby po takim przebiegu trafienie w cache
+    ze zwrotem policzonym z poprzedniej, krótszej serii — czyli błędną liczbę
+    podaną z pełnym przekonaniem, do wygaśnięcia TTL.
+
+    `COUNT(*)` domyka też usunięcie wiersza. Nie domyka nadpisania `value_pln`
+    za istniejący dzień przy tej samej liczbie wierszy (powtórka joba EOD za
+    ten sam dzień) — na to jest TTL, ten sam kompromis co w kroku 31.
+    Deterministyczne `"none"` dla portfela bez historii.
+    """
+    stmt = select(func.max(PortfolioValuation.date), func.count()).where(
+        PortfolioValuation.portfolio_id == portfolio_id
+    )
+    latest, count = (await db.execute(stmt)).one()
+    if latest is None:
+        return "none"
+    return f"{latest.isoformat()}:{count}"
+
+
 async def upsert_valuation(
     db: AsyncSession,
     *,

@@ -118,3 +118,50 @@ class MarketRankingItemOut(BaseModel):
     @field_serializer("weight")
     def _ser_weight(self, v: Decimal) -> str:
         return _ser_decimal(v)
+
+
+class PerformancePointOut(BaseModel):
+    """Punkt serii wyników (`GET /performance`, plan krok 40).
+
+    `ret=null` znaczy „zwrotu za ten dzień NIE ZNAMY" — pierwszy punkt serii
+    albo dzień zmiany składu (ADR-101). To nie to samo co `"0"` i UI nie
+    może tych przypadków zlewać (CLAUDE.md #3.15).
+    """
+
+    date: date
+    value_pln: Decimal
+    ret: Decimal | None
+    index: Decimal
+
+    @field_serializer("value_pln", "index")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+    @field_serializer("ret")
+    def _ser_optional(self, v: Decimal | None) -> str | None:
+        return None if v is None else _ser_decimal(v)
+
+
+class PerformanceOut(BaseModel):
+    """Wyjście `GET /portfolios/{portfolio_id}/performance?range=`.
+
+    `period_return=null` dla serii bez ani jednego ogniwa (portfel bez
+    historii) — znowu: brak zwrotu, nie zwrot zerowy.
+
+    `links`/`skipped_*` są częścią odpowiedzi, nie diagnostyką: zwrot za rok
+    policzony z 40 ogniw wygląda tak samo jak z 250, a znaczy co innego
+    (decyzja 6 planu etapu 8).
+    """
+
+    range: str
+    period_return: Decimal | None
+    first_date: date | None
+    last_date: date | None
+    links: int
+    skipped_composition_change: int
+    skipped_zero_base: int
+    points: list[PerformancePointOut]
+
+    @field_serializer("period_return")
+    def _ser_optional(self, v: Decimal | None) -> str | None:
+        return None if v is None else _ser_decimal(v)

@@ -43,7 +43,84 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 ## Ryzyko i wyniki (Faza 2)
 
-`GET /portfolios/{portfolio_id}/risk`, `GET /portfolios/{portfolio_id}/performance?benchmark=WIG20`
+| Metoda | Ścieżka | Opis |
+|---|---|---|
+| GET | `/portfolios/{portfolio_id}/performance?range=1M\|3M\|1Y\|YTD\|max` | zwrot za okres + seria indeksu łańcuchowego (krok 40, cache Redis) |
+| GET | `/portfolios/{portfolio_id}/risk?range=&benchmark=` | zmienność, Sharpe, drawdown, beta (krok 41 — **jeszcze nie ma**) |
+
+`?benchmark=` w `/performance` dochodzi w kroku 42, razem z drugą serią znormalizowaną do 100.
+
+```jsonc
+// GET /portfolios/{id}/performance?range=1M  (etap 8, krok 40)
+{
+  "range": "1M",
+  "period_return": "0.1000",       // null, gdy nie ma ANI JEDNEGO ogniwa
+  "first_date": "2026-07-13",
+  "last_date": "2026-08-12",
+  "links": 22,                     // z ilu ogniw policzono zwrot
+  "skipped_composition_change": 1, // ogniwa zerwane przez zmianę składu
+  "skipped_zero_base": 0,          // ogniwa z zerową bazą (dane wyglądają źle)
+  "points": [
+    { "date": "2026-07-13", "value_pln": "1000.00000000", "ret": null,       "index": "100.0000" },
+    { "date": "2026-07-14", "value_pln": "1100.00000000", "ret": "0.100000", "index": "110.0000" },
+    // dzień zmiany składu: wartość rośnie o dopłatę, indeks STOI, zwrotu nie znamy
+    { "date": "2026-07-15", "value_pln": "1600.00000000", "ret": null,       "index": "110.0000" }
+  ]
+}
+```
+
+**Zwrot jest łańcuchowy, nie `V_koniec / V_start - 1`.** Snapshoty nie znają przepływów (ADR-101, CLAUDE.md #1), więc dzień dopisania pozycji podniósłby zwrot o wartość dopłaty. Ogniwo `t-1 → t` w dniu `composition_change=true` **wypada z łańcucha**, ale `V_t` zostaje bazą ogniwa następnego — kasowanie obu dni wycięłoby prawdziwy zwrot dnia po dopłacie.
+
+**`ret: null` to nie `"0"`.** `null` znaczy „zwrotu za ten dzień nie znamy" (pierwszy punkt serii albo zerwane ogniwo), `"0"` znaczy „portfel nic nie zarobił". UI nie może tych przypadków zlewać (CLAUDE.md #3.15). Tak samo `period_return: null` dla portfela bez historii.
+
+**Przerwa w serii łączy łańcuch.** Weekend, święto i dzień bez przebiegu workera wyglądają w tabeli tak samo — jako brak wiersza. Zrywanie przy każdej przerwie zaniżałoby zwrot bez ostrzeżenia, dlatego przerwa łączy, a `links` mówi, ile ogniw faktycznie weszło do iloczynu: „zwrot za 1Y z 40 ogniw" ma wyglądać inaczej niż ten sam zwrot z 250.
+
+**`index` (baza 100 w pierwszym punkcie) to seria dla wykresu, nie `value_pln`.** Ta sama seria jest podstawą drawdownu w kroku 41 i porównania z benchmarkiem w kroku 42.
+
+## Newsy (Faza 3)
+
+`GET /portfolios/{portfolio_id}/news?limit=&with_sentiment_only=`
+
+Feed jest **zawsze w kontekście portfela** — nie ma trasy „wszystkie newsy". Powód produktowy: ekran odpowiada na pytanie „co się dzieje z moimi pozycjami", a nie „co słychać w gospodarce" (CLAUDE.md §1). Efekt uboczny jest bezpieczeństwowy: każda trasa newsowa przechodzi przez `get_owned_portfolio`.
+
+```jsonc
+// GET /portfolios/{id}/news → 200
+{
+  "items": [
+    {
+      "id": "…",
+      "title": "WIG20 z nowym rekordem zamknięcia",
+      "url": "https://www.bankier.pl/…",
+      "source": "bankier.pl",
+      "published_at": "2026-08-10T18:12:00Z",
+      "summary": "…",
+      "sentiment": null,          // string | null — patrz niżej
+      "sentiment_source": null,
+      "assets": [                 // wyłącznie aktywa Z TEGO portfela
+        { "symbol": "WIG20", "match_confidence": "heuristic" },
+        { "symbol": "AAPL",  "match_confidence": "source" }
+      ]
+    }
+  ],
+  "assets_covered": 3,
+  "assets_without_news": ["CDR", "PKN"]
+}
+```
+
+`sentiment` jest `null` dla wszystkich źródeł polskich — żaden feed RSS go nie publikuje, a darmowe źródła, które go liczą, pokrywają w praktyce wyłącznie spółki US. To **stan normalny**, nie brak do uzupełnienia; UI ma to oznaczyć (CLAUDE.md #3.15). `sentiment_source` odróżnia „dostawca ocenił neutralnie" (`sentiment: "0"`) od „nikt nie oceniał" (`sentiment: null`). Jedynym dostawcą oceny jest dziś Alpha Vantage (`NEWS_SENTIMENT`); Finnhub jej na darmowym planie nie oddaje (`/news-sentiment` → 403).
+
+`assets[].match_confidence` mówi, **skąd wzięło się powiązanie** newsu z aktywem:
+
+| wartość | znaczenie | źródło |
+|---|---|---|
+| `source` | dostawca pytany o symbol sam wskazał to powiązanie — **fakt** | Finnhub `/company-news`, Alpha Vantage `ticker_sentiment` (trafność ≥ 0,9) |
+| `heuristic` | dopasowanie polskiego tekstu po naszej stronie — **przybliżenie** | `app/modules/news/matching.py` |
+
+UI ma obowiązek pokazać tę różnicę (CLAUDE.md #3.15). Pole jest **per aktywo, nie per news**, i to jest istotne: jedna depesza bywa pewnie powiązana z `AAPL` (bo Finnhub tak powiedział) i jednocześnie zgadnięta dla złota (bo w tekście padło słowo „złoto"). Jedna zbiorcza flaga musiałaby wybrać jedną z tych dwóch prawd i drugą przekłamać.
+
+Lista `assets` jest **zawężona do aktywów pytającego portfela**. To wymóg izolacji, nie optymalizacja: wiersz `news` jest współdzielony przez wszystkich użytkowników (newsy nie mają FK do `users`), więc nieprzefiltrowana lista powiedziałaby użytkownikowi, co trzymają inni (CLAUDE.md #3.2).
+
+`assets_without_news` wymienia pozycje portfela, dla których nie ma **żadnego** powiązanego newsu. Pole istnieje, bo pusty feed ma dwie różne przyczyny — nic się nie ukazało albo nie umiemy rozpoznać spółki w tekście (dopasowanie jest heurystyką na polskim tekście, patrz `app/modules/news/matching.py`) — a użytkownik widzi w obu przypadkach to samo.
 
 ## Pomocnicze
 
@@ -235,9 +312,12 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 allocation:{portfolio_id}:{by}:{holdings_version}:{eod_marker}
 concentration:{portfolio_id}:{holdings_version}:{eod_marker}
 markets:{portfolio_id}:{holdings_version}:{eod_marker}
+performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}
 ```
 
 `holdings_version` to znacznik ostatniej zmiany składu portfela (`Portfolio.holdings_version`, bumpowany przy każdym CRUD `holdings`). `eod_marker` to `MAX(prices.date)` wśród aktywów **faktycznie trzymanych** w tym portfelu (`"none"`, jeśli portfel jest pusty albo żadne z jego aktywów nie ma jeszcze notowania) — zmienia się dopiero, gdy dla tego portfela realnie przyjdą nowe dane EOD, nie o północy jak `today()`. TTL: 6 godzin (Redis nie puchnie starymi kluczami; dane EOD i tak nie zmieniają się śróddziennie).
+
+`GET /performance` (krok 40) używa **innego markera**: `valuations_marker` = `MAX(date)` i `COUNT(*)` w `portfolio_valuations` tego portfela (`"none"` przy braku historii). Sam `MAX(date)` by tu nie wystarczył — inaczej niż ceny, snapshoty przybywają też **wstecz** (`seed-history` z kroku zerowego etapu 8 dopisuje pełne lata historii, nie ruszając maksimum), a wtedy klucz oparty na samym maksimum dałby trafienie w cache ze zwrotem policzonym z krótszej serii.
 
 Redis można wyczyścić w każdej chwili — awaria/brak Redisa nie zwraca błędu, endpoint liczy wynik na żywo (wolniej, nie: `500`).
 

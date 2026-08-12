@@ -124,8 +124,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_key, get_cached_json, set_cached_json
+from app.modules.analytics.returns import ValuationPoint, chain_index, period_return
 from app.modules.marketdata import repository as marketdata_repository
 from app.modules.marketdata.models import Asset, Price
+from app.modules.portfolio import repository as portfolio_repository
 from app.modules.portfolio import service as portfolio_service
 from app.modules.portfolio.models import Portfolio
 from app.modules.portfolio.service import ValuedHolding
@@ -141,6 +143,13 @@ _INDEX_SERIES_DAYS = 30
 # w całym API były spójne.
 _MONEY_QUANT = Decimal("0.00000001")  # 8 miejsc — precyzja NUMERIC(20,8)
 _PCT_QUANT = Decimal("0.0001")  # 4 miejsca — ułamek (waga/HHI), nie kwota PLN
+
+# Krok 40: zwrot DZIENNY dostaje 6 miejsc, nie 4. Przy `_PCT_QUANT` ruch
+# o 3 punkty bazowe (0,0003) traciłby jedną cyfrę znaczącą, a takich dni jest
+# na wykresie większość — seria spłaszczyłaby się schodkowo. Indeks
+# łańcuchowy ma bazę 100, więc 4 miejsca to tam 1e-6 względnie: wystarczy.
+_RETURN_QUANT = Decimal("0.000001")
+_INDEX_QUANT = Decimal("0.0001")
 
 # Krok 31 (cache Redis, CLAUDE.md #3.7) — patrz docstring modułu, sekcja
 # „Krok 31", dla uzasadnienia markera i TTL.
@@ -167,6 +176,14 @@ def _quantize_money(value: Decimal) -> Decimal:
 
 def _quantize_pct(value: Decimal) -> Decimal:
     return value.quantize(_PCT_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _quantize_return(value: Decimal) -> Decimal:
+    return value.quantize(_RETURN_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _quantize_index(value: Decimal) -> Decimal:
+    return value.quantize(_INDEX_QUANT, rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True, slots=True)
@@ -669,3 +686,142 @@ async def market_ranking(db: AsyncSession, portfolio: Portfolio) -> list[MarketR
 
     await set_cached_json(key, _market_ranking_to_json(items), ttl_seconds=_CACHE_TTL_SECONDS)
     return items
+
+
+# --- wyniki portfela (plan krok 40, etap 8) --------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PerformancePoint:
+    """Punkt serii wyników. `ret=None` — zwrotu za ten dzień NIE ZNAMY
+    (pierwszy punkt albo zerwane ogniwo), co jest czym innym niż `0`."""
+
+    date: date
+    value_pln: Decimal
+    ret: Decimal | None
+    index: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class Performance:
+    """Wynik `GET /portfolios/{id}/performance?range=`.
+
+    `links` i `skipped_*` nie są diagnostyką dla programisty, tylko częścią
+    odpowiedzi na pytanie „ile ten zwrot znaczy": ta sama liczba policzona
+    z 250 ogniw i z 40 wygląda identycznie, a znaczy co innego (decyzja 6
+    planu etapu 8). UI ma z czego zbudować „za mało danych" bez zgadywania.
+    """
+
+    range: str
+    period_return: Decimal | None
+    first_date: date | None
+    last_date: date | None
+    links: int
+    skipped_composition_change: int
+    skipped_zero_base: int
+    points: list[PerformancePoint]
+
+
+def _performance_to_json(result: Performance) -> str:
+    return json.dumps(
+        {
+            "range": result.range,
+            "period_return": None if result.period_return is None else str(result.period_return),
+            "first_date": None if result.first_date is None else result.first_date.isoformat(),
+            "last_date": None if result.last_date is None else result.last_date.isoformat(),
+            "links": result.links,
+            "skipped_composition_change": result.skipped_composition_change,
+            "skipped_zero_base": result.skipped_zero_base,
+            "points": [
+                {
+                    "date": p.date.isoformat(),
+                    "value_pln": str(p.value_pln),
+                    "ret": None if p.ret is None else str(p.ret),
+                    "index": str(p.index),
+                }
+                for p in result.points
+            ],
+        }
+    )
+
+
+def _performance_from_json(raw: str) -> Performance:
+    data = json.loads(raw)
+    return Performance(
+        range=data["range"],
+        period_return=(None if data["period_return"] is None else Decimal(data["period_return"])),
+        first_date=(None if data["first_date"] is None else date.fromisoformat(data["first_date"])),
+        last_date=(None if data["last_date"] is None else date.fromisoformat(data["last_date"])),
+        links=data["links"],
+        skipped_composition_change=data["skipped_composition_change"],
+        skipped_zero_base=data["skipped_zero_base"],
+        points=[
+            PerformancePoint(
+                date=date.fromisoformat(p["date"]),
+                value_pln=Decimal(p["value_pln"]),
+                ret=None if p["ret"] is None else Decimal(p["ret"]),
+                index=Decimal(p["index"]),
+            )
+            for p in data["points"]
+        ],
+    )
+
+
+async def performance(db: AsyncSession, portfolio: Portfolio, *, range_: str) -> Performance:
+    """`GET /portfolios/{portfolio_id}/performance?range=` — orkiestracja I/O
+    wokół czystego `analytics.returns` (plan krok 40, ADR-101).
+
+    Marker cache to `valuations_marker`, NIE `_eod_marker`: seria bierze się
+    ze snapshotów, nie z cen, a snapshoty potrafią przybyć wstecz
+    (`seed-history`) — patrz docstring `portfolio.repository.valuations_marker`.
+    `holdings_version` zostaje w kluczu mimo to: zmiana pozycji nie zmienia
+    historii wycen, ale zmienia dzisiejszy snapshot już przy najbliższym
+    przebiegu EOD, a wtedy i tak potrzebny jest nowy klucz.
+
+    `period_return=None` (nie `0`) dla serii bez ani jednego ogniwa: portfel
+    założony wczoraj nie ma zwrotu równego zeru — on go po prostu nie ma,
+    i UI musi móc te przypadki rozróżnić (CLAUDE.md #3.15).
+    """
+    key = cache_key(
+        "performance",
+        portfolio.id,
+        portfolio.holdings_version,
+        await portfolio_repository.valuations_marker(db, portfolio.id),
+        range_,
+    )
+    cached = await get_cached_json(key)
+    if cached is not None:
+        return _performance_from_json(cached)
+
+    valuations = await portfolio_repository.list_valuations(
+        db, portfolio.id, range_=range_, today=portfolio_service.today()
+    )
+    points = [
+        ValuationPoint(date=v.date, value_pln=v.value_pln, composition_change=v.composition_change)
+        for v in valuations
+    ]
+
+    total, series = period_return(points)
+    index = chain_index(points)
+
+    result = Performance(
+        range=range_,
+        period_return=_quantize_pct(total) if series.links else None,
+        first_date=points[0].date if points else None,
+        last_date=points[-1].date if points else None,
+        links=series.links,
+        skipped_composition_change=series.skipped_composition_change,
+        skipped_zero_base=series.skipped_zero_base,
+        points=[
+            PerformancePoint(
+                date=p.date,
+                value_pln=_quantize_money(p.value_pln),
+                ret=None if p.ret is None else _quantize_return(p.ret),
+                index=_quantize_index(p.index),
+            )
+            for p in index
+        ],
+    )
+
+    await set_cached_json(key, _performance_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
+    return result
