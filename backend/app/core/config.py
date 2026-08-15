@@ -62,8 +62,35 @@ class Settings(BaseSettings):
     # — 60/min to ten sam konserwatywny domyślny limit co reszta dostawców
     # bez udokumentowanego limitu (Binance wyżej), nie wartość zmierzona.
     rate_limit_nbp: int = 60
+    # Feedy RSS są plikami statycznymi na cudzym CDN-ie i nie mają
+    # publikowanego limitu — 30/min jest celowo niższe niż u dostawców API,
+    # bo job newsowy odpytuje kilka feedów naraz i nie ma powodu, żeby
+    # robić to szybciej niż źródło je publikuje (CLAUDE.md #23).
+    rate_limit_rss: int = 30
+    # Alpha Vantage: darmowy plan ma limit **dobowy** (25 zapytań), nie
+    # minutowy — `RateLimiter` operuje na oknie minutowym, więc 5/min jest
+    # tu tylko bezpiecznikiem przed pętlą w kodzie. Realną ochroną budżetu
+    # jest rzadki harmonogram joba (`_SENTIMENT_INTERVAL_MINUTES`
+    # w `worker/scheduler.py`) i jedno zapytanie na wiele symboli naraz.
+    rate_limit_alphavantage: int = 5
     circuit_failure_threshold: int = 5
     circuit_reset_seconds: int = 600
+
+    # --- newsy (krok 46, etap 9) ---
+    # Lista feedów jako `str` rozdzielony przecinkami, nie `list[str]`:
+    # `pydantic-settings` czyta `list` ze zmiennej środowiskowej jako JSON,
+    # co w pliku `.env` oznacza cudzysłowy i nawiasy w wartości — łatwe do
+    # zepsucia przy ręcznej edycji na VPS-ie. Rozbicie robi `rss_feed_list`.
+    news_rss_feeds: str = (
+        "https://www.bankier.pl/rss/wiadomosci.xml,"
+        "https://www.money.pl/rss/rss.xml,"
+        "https://www.stockwatch.pl/wiadomosci/feed/"
+    )
+    # Ile dni wstecz job zapisuje przy pierwszym uruchomieniu. Feedy oddają
+    # przesuwające się okno kilkudziesięciu pozycji, więc historii i tak nie
+    # ma skąd wziąć — ten limit chroni przed zapisaniem archiwum, gdy jakiś
+    # feed nagle odda wszystko od początku świata.
+    news_max_age_days: int = 14
 
     # --- rate limiting API (slowapi, krok 16) ---
     # Liczniki w Redisie (`storage_uri=redis_url`), nie w pamięci procesu —
@@ -85,6 +112,18 @@ class Settings(BaseSettings):
 
     # --- obserwowalność ---
     sentry_dsn: str = ""
+
+    @property
+    def rss_feed_list(self) -> list[str]:
+        """`news_rss_feeds` rozbite na adresy, z pominięciem pustych wpisów.
+
+        Puste wpisy nie są tu teoretyczne: `NEWS_RSS_FEEDS=""` (wyłączenie
+        newsów w danym środowisku) i przecinek na końcu listy to dwa
+        najczęstsze kształty tej zmiennej w pliku `.env` edytowanym ręcznie.
+        Job newsowy ma wtedy nie mieć czego pobierać, a nie próbować
+        odpytać adres pusty.
+        """
+        return [url.strip() for url in self.news_rss_feeds.split(",") if url.strip()]
 
     @model_validator(mode="after")
     def _validate_secret_key_outside_dev(self) -> Settings:

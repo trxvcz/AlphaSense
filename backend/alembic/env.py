@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.modules.auth import models as auth_models  # noqa: F401  (rejestracja w Base.metadata)
 from app.modules.marketdata import models as marketdata_models  # noqa: F401
+from app.modules.news import models as news_models  # noqa: F401
 from app.modules.portfolio import models as portfolio_models  # noqa: F401
 
 # this is the Alembic Config object, which provides

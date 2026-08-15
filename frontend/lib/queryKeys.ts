@@ -21,4 +21,10 @@ export const qk = {
     ["allocation", portfolioId, by] as const,
   concentration: (portfolioId: string) => ["concentration", portfolioId] as const,
   markets: (portfolioId: string) => ["markets", portfolioId] as const,
+  // `withSentimentOnly` jest CZĘŚCIĄ klucza, nie parametrem odczytu: filtr
+  // zawęża zbiór po stronie API, więc odpowiedzi z `true` i `false` to dwa
+  // różne zasoby. Wspólny klucz pokazywałby po przełączeniu filtra dane
+  // z poprzedniego zapytania jako świeże.
+  news: (portfolioId: string, withSentimentOnly: boolean) =>
+    ["news", portfolioId, withSentimentOnly] as const,
 };

@@ -24,12 +24,14 @@ import signal
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
 from app.core.observability import init_sentry
 from app.db.session import AsyncSessionLocal
 from app.modules.marketdata.models import Market
 from worker.jobs.ingest_market import ingest_market
+from worker.jobs.ingest_news import ingest_news, ingest_news_sentiment
 
 logger = structlog.get_logger(__name__)
 
@@ -39,6 +41,16 @@ logger = structlog.get_logger(__name__)
 # przebiegi tego samego dnia i tak są idempotentne, `ON CONFLICT DO
 # UPDATE`, więc spóźnione odpalenie nie szkodzi).
 _MISFIRE_GRACE_SECONDS = 3600
+# Co ile minut odpytujemy feedy RSS. 30 minut to kompromis między
+# świeżością a ruchem do cudzych serwerów: feedy oddają przesuwające się
+# okno kilkudziesięciu pozycji, więc przy tym interwale nic nie umyka,
+# a dobowy ruch to ~48 żądań na feed.
+_NEWS_INTERVAL_MINUTES = 30
+# Sentyment z Alpha Vantage — 120 minut, czyli 12 przebiegów na dobę przy
+# jednym zapytaniu zbiorczym każdy. Ta liczba wynika wprost z limitu
+# darmowego planu (25 zapytań/dobę): zostawia zapas na restart workera
+# i na ręczne uruchomienie joba, zamiast trafiać w limit co do sztuki.
+_SENTIMENT_INTERVAL_MINUTES = 120
 
 
 async def _load_markets() -> list[Market]:
@@ -76,6 +88,43 @@ def _register_jobs(scheduler: AsyncIOScheduler, markets: list[Market]) -> None:
             eod_time=market.eod_time.isoformat(),
         )
 
+    # Newsy (krok 46, etap 9) — joby cykliczne, nie per rynek.
+    # Feed RSS nie ma godziny zamknięcia ani przypisania do rynku, więc
+    # `markets`/ADR-102 go nie dotyczą (uzasadnienie w `jobs/ingest_news.py`).
+    # Interwał, nie cron: publikacja idzie przez cały dzień, a stała godzina
+    # oznaczałaby, że poranna depesza czeka do wieczora.
+    scheduler.add_job(
+        ingest_news,
+        trigger=IntervalTrigger(minutes=_NEWS_INTERVAL_MINUTES),
+        # `news:ingest`, nie `news:rss` — od dołożenia Finnhuba ten job
+        # obsługuje dwa źródła, a `id` jest widoczne w logach i w panelu
+        # diagnostycznym, więc nie może opisywać połowy zakresu.
+        id="news:ingest",
+        name="ingest_news",
+        replace_existing=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
+    logger.info(
+        "scheduler.job_registered", job="ingest_news", interval_minutes=_NEWS_INTERVAL_MINUTES
+    )
+
+    # Sentyment (Alpha Vantage) chodzi RZADZIEJ i dlatego jest osobnym jobem:
+    # darmowy plan to 25 zapytań na dobę, a `ingest_news` odpala się 48 razy.
+    # Pełne uzasadnienie w docstringu `ingest_news_sentiment`.
+    scheduler.add_job(
+        ingest_news_sentiment,
+        trigger=IntervalTrigger(minutes=_SENTIMENT_INTERVAL_MINUTES),
+        id="news:sentiment",
+        name="ingest_news_sentiment",
+        replace_existing=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
+    logger.info(
+        "scheduler.job_registered",
+        job="ingest_news_sentiment",
+        interval_minutes=_SENTIMENT_INTERVAL_MINUTES,
+    )
+
 
 async def main() -> None:
     # Krok 37: bez DSN to no-op (dev). Padnięty job trafia do Sentry przez
@@ -90,7 +139,10 @@ async def main() -> None:
     scheduler = AsyncIOScheduler()
     _register_jobs(scheduler, markets)
     scheduler.start()
-    logger.info("scheduler.started", jobs=len(markets))
+    # Liczone z harmonogramu, nie z `len(markets)` — od kroku 46 jobów jest
+    # więcej niż rynków (`ingest_news`, `ingest_news_sentiment`), a licznik,
+    # który o tym nie wie, po cichu kłamie w logach startowych.
+    logger.info("scheduler.started", jobs=len(scheduler.get_jobs()))
 
     stop_event = asyncio.Event()
 

@@ -27,7 +27,8 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 | `ingestion_runs` | id | market_code, started_at, finished_at, provider, assets_total, assets_ok, status, error | podstawa `/meta/freshness` i alertów |
 | `watchlists`, `watchlist_items` | | | Faza 2 |
 | `tags`, `asset_tags` | | | Faza 2 |
-| `news`, `news_assets` | | | Faza 3 |
+| `news` | id | title, url **UNIQUE**, source, published_at, fetched_at, content_hash **UNIQUE**, summary, sentiment, sentiment_source | krok 46; dwa ograniczenia unikalności, bo ta sama depesza PAP chodzi po serwisach pod różnymi URL-ami |
+| `news_assets` | (news_id, asset_id) | published_at (zdenormalizowane), match_confidence | krok 46; `ON DELETE CASCADE` w obie strony, brak FK do `users` — newsy nie są własnością użytkownika. `match_confidence`: `source` (powiązanie podał dostawca pytany o symbol — fakt) albo `heuristic` (dopasowanie tekstu po naszej stronie — przybliżenie, UI ma je oznaczyć, CLAUDE.md #3.15). Domyślnie `heuristic`, bo pominięcie kolumny ma zaniżać deklarowaną pewność, nie zawyżać |
 | `dividend_events` | | | Faza 3 |
 
 ## Indeksy
@@ -40,6 +41,7 @@ CREATE INDEX ON assets (symbol);
 CREATE INDEX ON portfolio_valuations (portfolio_id, date DESC);
 CREATE INDEX ON ingestion_runs (market_code, started_at DESC);
 CREATE INDEX ON news_assets (asset_id, published_at DESC);
+CREATE INDEX ON news (published_at DESC);
 ```
 
 ## Ograniczenia

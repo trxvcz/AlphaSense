@@ -15,6 +15,13 @@ slowapi==0.1.10
 httpx==0.28.1
 yfinance==1.5.2
 apscheduler==3.11.3
+# Newsy (krok 46, etap 9). Parsuje sam XML/Atom — pobieranie zostaje po
+# naszej stronie (httpx + `get_with_backoff`), żeby feedy przechodziły przez
+# ten sam RateLimiter i CircuitBreaker co reszta dostawców. Powód wyboru
+# biblioteki zamiast `xml.etree`: feedy RSS w praktyce łamią specyfikację
+# (różne formaty dat, RSS 2.0 obok Atoma, encje HTML w tytułach), a to jest
+# dokładnie ta warstwa zgodności, której nie chcemy pisać sami.
+feedparser==6.0.11
 # Obserwowalność (krok 37). Extra `[fastapi]` dociąga tylko warunek wersji
 # FastAPI/Starlette — integracje SDK włączają się same, gdy framework jest
 # zainstalowany. Bez `SENTRY_DSN` w środowisku pakiet nic nie robi (dev).
