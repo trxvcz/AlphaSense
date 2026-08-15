@@ -116,6 +116,12 @@ class _Counters:
     # Nazwa mówiąca „linked" kłamałaby w logu przy diagnozowaniu przyrostu.
     upserted: int = 0
     duplicates: int = 0
+    # Ile razy ocena dojechała do newsa zapisanego wcześniej BEZ niej.
+    # Liczone osobno od `stored`, bo to jedyny sygnał, że job sentymentu
+    # robi coś więcej niż podnoszenie `match_confidence` — przy zerze przez
+    # kilka przebiegów albo Alpha Vantage nic nie oddaje, albo dedup
+    # zjada wpisy, zanim ocena zdąży trafić do bazy.
+    sentiment_filled: int = 0
     skipped_old: int = 0
     skipped_unmatched: int = 0
 
@@ -202,6 +208,7 @@ async def _run(max_age_days: int) -> None:
         stored=counters.stored,
         upserted=counters.upserted,
         duplicates=counters.duplicates,
+        sentiment_filled=counters.sentiment_filled,
         skipped_old=counters.skipped_old,
         skipped_unmatched=counters.skipped_unmatched,
     )
@@ -278,6 +285,7 @@ async def _run_sentiment(max_age_days: int) -> None:
         stored=counters.stored,
         upserted=counters.upserted,
         duplicates=counters.duplicates,
+        sentiment_filled=counters.sentiment_filled,
         skipped_old=counters.skipped_old,
         skipped_unmatched=counters.skipped_unmatched,
     )
@@ -337,6 +345,19 @@ async def _store(
             # Wiersz zniknął między `INSERT` a odczytem (równoległy przebieg
             # + czyszczenie). Nie ma czego wiązać.
             return
+        # Duplikat mógł przyjść z oceną, której wiersz w bazie nie ma —
+        # tak wygląda normalny przebieg `ingest_news_sentiment` dla depeszy
+        # zapisanej wcześniej przez RSS albo Finnhuba. `upsert_news` wyżej
+        # sam z siebie tej oceny nie dowiezie (`DO NOTHING`), więc bez tego
+        # kroku sentyment ginie i feed kłamie, że nikt newsa nie ocenił.
+        if item.sentiment is not None and item.sentiment_source is not None:
+            if await repository.fill_missing_sentiment(
+                db,
+                news_id=news_id,
+                sentiment=item.sentiment,
+                sentiment_source=item.sentiment_source,
+            ):
+                counters.sentiment_filled += 1
     else:
         counters.stored += 1
 

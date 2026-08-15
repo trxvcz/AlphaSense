@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   confidenceLabel,
   hasHeuristicMatches,
+  isSafeHttpUrl,
   sentimentLabel,
   sentimentTone,
   type NewsItem,
@@ -105,5 +106,36 @@ describe("hasHeuristicMatches", () => {
 
   it("pusty feed nie ma czego oznaczać", () => {
     expect(hasHeuristicMatches([])).toBe(false);
+  });
+});
+
+describe("isSafeHttpUrl", () => {
+  /**
+   * Druga linia obrony — pierwsza jest przy ingestii
+   * (`news/providers/base.py:is_safe_http_url`). Ta broni przed wierszami
+   * zapisanymi przed tamtą walidacją i przed dostawcą dopisanym bez niej.
+   */
+  it.each([
+    "https://www.bankier.pl/wiadomosc/WIG20-rekord-1234567.html",
+    "http://stooq.pl/n/?f=1",
+    "HTTPS://www.money.pl/x",
+  ])("przepuszcza zwykły adres: %s", (url) => {
+    expect(isSafeHttpUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "javascript:alert(document.cookie)",
+    "JaVaScRiPt:alert(1)",
+    // Znak sterujący w środku: przeglądarka usuwa go PRZED interpretacją
+    // schematu, więc to jest wykonywalne `javascript:`.
+    "java\nscript:alert(1)",
+    "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+    "vbscript:msgbox(1)",
+    "file:///etc/passwd",
+    // Adres względny — nie mamy dokąd prowadzić.
+    "/wiadomosc/x",
+    "",
+  ])("odrzuca adres, który nie jest zwykłym linkiem: %s", (url) => {
+    expect(isSafeHttpUrl(url)).toBe(false);
   });
 });

@@ -18,7 +18,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,6 +101,41 @@ async def upsert_news(
     result = await db.execute(statement)
     row = result.scalar_one_or_none()
     return row
+
+
+async def fill_missing_sentiment(
+    db: AsyncSession,
+    *,
+    news_id: UUID,
+    sentiment: Decimal,
+    sentiment_source: str,
+) -> bool:
+    """Dopisuje ocenę do newsa, który jeszcze żadnej nie ma. Zwraca, czy zapisano.
+
+    **Wyjątek od zasady „pierwsza wersja wygrywa"** z `upsert_news`, i to
+    wyjątek wąski z wyboru. Tamta zasada broni treści: tytuł i zajawka mają
+    zostać takie, jak podał wydawca, który był pierwszy. Sentyment jest inny
+    — pierwsze źródło (RSS Bankiera, Finnhub `/company-news`) go **w ogóle
+    nie ma**, więc `ON CONFLICT DO NOTHING` nie chronił tu żadnej wartości,
+    tylko wyrzucał jedyną, jaka kiedykolwiek przyszła. Skutek był taki, że
+    `?with_sentiment_only=true` pokazywał pustkę, a UI twierdziło „nikt tego
+    nie ocenił" — dokładnie to przekłamanie, przed którym broni CLAUDE.md
+    #3.15, tylko odwrócone.
+
+    `WHERE sentiment IS NULL` jest częścią kontraktu, nie optymalizacją:
+    ocena raz zapisana nie ma być nadpisywana przy kolejnym przebiegu, bo
+    wtedy wartość w bazie zależałaby od kolejności jobów, a nie od danych.
+    Warunek jest w SQL-u, więc rozstrzyga go baza — sprawdzenie w Pythonie
+    przegrałoby z równoległym przebiegiem drugiego workera.
+    """
+    statement = (
+        update(News)
+        .where(News.id == news_id, News.sentiment.is_(None))
+        .values(sentiment=sentiment, sentiment_source=sentiment_source)
+        .returning(News.id)
+    )
+    result = await db.execute(statement)
+    return result.scalar_one_or_none() is not None
 
 
 async def get_news_id_by_url(db: AsyncSession, url: str) -> UUID | None:

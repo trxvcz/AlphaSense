@@ -33,6 +33,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol, TypeVar, runtime_checkable
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -60,12 +61,49 @@ class NewsCapability(StrEnum):
     PER_SYMBOL = "per_symbol"
 
 
+# Adres newsa jest w całości pod kontrolą cudzego feedu i trafia prosto
+# do `href` w przeglądarce użytkownika. React **nie** blokuje `javascript:`
+# ani `data:` w `href` — wypisuje ostrzeżenie w konsoli i renderuje link,
+# więc jeden wpis w przejętym feedzie wydawcy wystarczy do wykonania skryptu
+# w kontekście zalogowanej sesji. Dziedzina jest domknięta od strony
+# dozwolonych schematów (allowlist), nie od strony zakazanych: lista
+# schematów, które przeglądarki umieją wykonać, rośnie, a lista tych,
+# których potrzebuje link do artykułu, ma dokładnie dwa elementy.
+_SAFE_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def is_safe_http_url(url: str) -> bool:
+    """Czy adres nadaje się do wstawienia w `href` bez ryzyka wykonania kodu.
+
+    Znaki sterujące odrzucane osobno i **przed** parsowaniem, bo przeglądarki
+    usuwają je z adresu przed interpretacją schematu: `"java\\nscript:alert(1)"`
+    przechodzi przez `urlsplit` jako ścieżka względna bez schematu, a w `href`
+    wykonuje się jako `javascript:`. `urlsplit` sam z siebie tej różnicy nie widzi.
+
+    Wymagany jest też niepusty host — `http:///cokolwiek` ma poprawny schemat,
+    ale nie jest adresem, pod który da się pójść.
+    """
+    if not url or any(ch in url for ch in "\t\r\n") or any(ord(ch) < 0x20 for ch in url):
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        # Nieparsowalny adres (np. nawiasy kwadratowe w IPv6 bez domknięcia).
+        return False
+    return parts.scheme.lower() in _SAFE_URL_SCHEMES and bool(parts.netloc)
+
+
 @dataclass(frozen=True, slots=True)
 class NewsItem:
     """Jedna informacja zwrócona przez dostawcę — jeszcze bez `asset_id`
     i bez `content_hash`. Jedno i drugie dokłada warstwa ingestii: tłumaczenie
     na aktywa wymaga bazy, a hash jest naszą konwencją deduplikacji, nie
     własnością źródła.
+
+    `url` **musi przejść przez `is_safe_http_url`** po stronie providera —
+    wpis z niebezpiecznym schematem jest pomijany tak samo jak wpis bez
+    tytułu czy bez daty, a nie wpuszczany do bazy z nadzieją, że front go
+    odfiltruje. Warstwa ingestii dostaje adresy już bezpieczne.
 
     `published_at` **musi być świadome strefy czasowej**. Feedy RSS bywają
     pod tym względem niechlujne (czas lokalny bez strefy, `+0000` doklejone

@@ -42,7 +42,7 @@ from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.modules.marketdata.providers.http_client import get_with_backoff
 from app.modules.marketdata.providers.rate_limiter import RateLimiter
-from app.modules.news.providers.base import NewsCapability, NewsItem
+from app.modules.news.providers.base import NewsCapability, NewsItem, is_safe_http_url
 
 logger = structlog.get_logger(__name__)
 
@@ -123,6 +123,11 @@ class FinnhubNewsProvider:
         if (
             not headline
             or not url
+            # Adres trafia do `href` w przeglądarce — schemat inny niż
+            # http(s) potrafi wykonać kod (patrz `is_safe_http_url`).
+            # Finnhub jest pośrednikiem, więc `url` pochodzi od wydawcy,
+            # nie od niego, i zaufanie do dostawcy nic tu nie zmienia.
+            or not is_safe_http_url(url)
             or isinstance(published_ts, bool)
             or not isinstance(published_ts, (int, float))
         ):

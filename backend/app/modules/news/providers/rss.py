@@ -43,7 +43,7 @@ from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.modules.marketdata.providers.http_client import get_with_backoff
 from app.modules.marketdata.providers.rate_limiter import RateLimiter
-from app.modules.news.providers.base import NewsCapability, NewsItem
+from app.modules.news.providers.base import NewsCapability, NewsItem, is_safe_http_url
 
 logger = structlog.get_logger(__name__)
 
@@ -207,6 +207,18 @@ class RssProvider:
             link = (getattr(entry, "link", "") or "").strip()
             title = (getattr(entry, "title", "") or "").strip()
             if not link or not title:
+                continue
+            if not is_safe_http_url(link):
+                # Logowane osobno i głośniej niż brak daty: wpis bez daty to
+                # niechlujstwo wydawcy, a `javascript:` w `<link>` to albo
+                # przejęty feed, albo celowa próba — jedno i drugie chcemy
+                # zobaczyć w logach, a nie policzyć po cichu.
+                logger.warning(
+                    "rss_entry_unsafe_url",
+                    provider=self.name,
+                    feed=feed_url,
+                    url=link[:200],
+                )
                 continue
             published = _published_at(entry)
             if published is None:

@@ -357,6 +357,88 @@ async def test_powiazanie_od_zrodla_podnosi_pewnosc_heurystyczna(
     assert item["assets"] == [{"symbol": news_assets.covered.symbol, "match_confidence": "source"}]
 
 
+async def test_ocena_dojezdza_do_newsa_zapisanego_wczesniej_bez_oceny(
+    client: AsyncClient, db_session: AsyncSession, news_assets: NewsAssets
+) -> None:
+    """Sentyment z Alpha Vantage ma dojechać do depeszy, którą wcześniej
+    zapisał RSS albo Finnhub — obaj bez oceny.
+
+    Realny przebieg i realny błąd: `upsert_news` robi `ON CONFLICT DO
+    NOTHING`, więc drugie wejście tej samej depeszy nie wnosiło NICZEGO poza
+    `match_confidence`, a `sentiment` szedł do kosza. Skutek był widoczny
+    dokładnie tam, gdzie boli: `?with_sentiment_only=true` pokazywał pustkę,
+    a UI twierdziło „nikt tego nie ocenił" — czyli przekłamanie z gatunku
+    tych, przed którymi broni CLAUDE.md #3.15, tylko odwrócone.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_holding(client, token, portfolio_id, news_assets.covered.id)
+    slug = f"{news_assets.covered.symbol}-sentyment"
+    news_id = await _insert_news(
+        db_session,
+        asset_ids=[news_assets.covered.id],
+        slug=slug,
+        sentiment=None,
+        sentiment_source=None,
+    )
+
+    filled = await repository.fill_missing_sentiment(
+        db_session,
+        news_id=news_id,
+        sentiment=Decimal("0.34"),
+        sentiment_source="alphavantage_news",
+    )
+    await db_session.commit()
+
+    assert filled is True
+    resp = await client.get(
+        f"/api/portfolios/{portfolio_id}/news?with_sentiment_only=true",
+        headers=_auth(token),
+    )
+
+    item = next(i for i in resp.json()["items"] if i["url"].endswith(slug))
+    # String w JSON, nie float (CLAUDE.md #3.1); skala z `NUMERIC(20,8)`.
+    assert item["sentiment"] == "0.34000000"
+    assert item["sentiment_source"] == "alphavantage_news"
+
+
+async def test_ocena_juz_zapisana_nie_jest_nadpisywana(
+    client: AsyncClient, db_session: AsyncSession, news_assets: NewsAssets
+) -> None:
+    """`WHERE sentiment IS NULL` jest kontraktem, nie optymalizacją.
+
+    Bez tego warunku wartość w bazie zależałaby od kolejności przebiegów
+    jobów, a nie od danych — a przy dwóch replikach workera kolejność nie
+    jest niczym gwarantowana.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_holding(client, token, portfolio_id, news_assets.covered.id)
+    slug = f"{news_assets.covered.symbol}-ocena-pierwsza"
+    news_id = await _insert_news(
+        db_session,
+        asset_ids=[news_assets.covered.id],
+        slug=slug,
+        sentiment=Decimal("0.80"),
+        sentiment_source="finnhub_news",
+    )
+
+    filled = await repository.fill_missing_sentiment(
+        db_session,
+        news_id=news_id,
+        sentiment=Decimal("-0.90"),
+        sentiment_source="alphavantage_news",
+    )
+    await db_session.commit()
+
+    assert filled is False
+    resp = await client.get(f"/api/portfolios/{portfolio_id}/news", headers=_auth(token))
+
+    item = next(i for i in resp.json()["items"] if i["url"].endswith(slug))
+    assert item["sentiment"] == "0.80000000"
+    assert item["sentiment_source"] == "finnhub_news"
+
+
 async def test_dopasowanie_heurystyczne_nie_obniza_pewnosci_od_zrodla(
     client: AsyncClient, db_session: AsyncSession, news_assets: NewsAssets
 ) -> None:

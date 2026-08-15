@@ -110,6 +110,30 @@ export function sentimentTone(sentiment: string): SentimentTone {
   return "neutral";
 }
 
+/**
+ * Czy adres nadaje się do wstawienia w `href`.
+ *
+ * **Druga linia obrony, nie pierwsza** — providerzy odrzucają niebezpieczne
+ * schematy już przy ingestii (`news/providers/base.py:is_safe_http_url`),
+ * więc do bazy nie powinny w ogóle trafiać. Ta funkcja broni przed
+ * wierszami zapisanymi przed tamtą walidacją i przed przyszłym dostawcą
+ * dopisanym bez niej: React **nie** blokuje `javascript:` w `href`,
+ * tylko wypisuje ostrzeżenie w konsoli i renderuje link.
+ *
+ * `new URL` zamiast ręcznego parsowania, bo normalizuje dokładnie tak jak
+ * przeglądarka — łącznie z wielkością liter w schemacie i znakami
+ * sterującymi w środku (`"java\nscript:"`).
+ */
+export function isSafeHttpUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    // Adres względny albo niepoprawny — nie mamy dokąd prowadzić.
+    return false;
+  }
+}
+
 export function sentimentLabel(tone: SentimentTone): string {
   if (tone === "positive") return "wydźwięk pozytywny";
   if (tone === "negative") return "wydźwięk negatywny";

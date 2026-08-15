@@ -39,6 +39,7 @@ import {
   confidenceLabel,
   getPortfolioNews,
   hasHeuristicMatches,
+  isSafeHttpUrl,
   sentimentLabel,
   sentimentTone,
   type NewsAssetRef,
@@ -117,16 +118,31 @@ function SentimentBadge({ item }: { item: NewsItem }) {
 }
 
 function NewsRow({ item }: { item: NewsItem }) {
+  // Tytuł bez linku, gdy adres nie jest zwykłym http(s) — treść newsa
+  // zostaje widoczna, znika tylko kliknięcie prowadzące nie wiadomo gdzie.
+  // Ukrycie całego wpisu byłoby gorsze: użytkownik nie wiedziałby, że
+  // coś zniknęło, a to jest sytuacja, o której ma się dowiedzieć.
+  const linkable = isSafeHttpUrl(item.url);
+
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <a
-        href={item.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="font-medium text-zinc-900 underline-offset-2 outline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-zinc-50"
-      >
-        {item.title}
-      </a>
+      {linkable ? (
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-zinc-900 underline-offset-2 outline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-zinc-50"
+        >
+          {item.title}
+        </a>
+      ) : (
+        <p className="font-medium text-zinc-900 dark:text-zinc-50">
+          {item.title}{" "}
+          <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
+            (odnośnik pominięty — źródło podało niepoprawny adres)
+          </span>
+        </p>
+      )}
 
       {item.summary && (
         <p className="line-clamp-3 text-sm text-zinc-600 dark:text-zinc-400">{item.summary}</p>

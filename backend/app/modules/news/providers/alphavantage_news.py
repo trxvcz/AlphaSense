@@ -39,7 +39,7 @@ from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.modules.marketdata.providers.http_client import decimal_or_none, get_with_backoff
 from app.modules.marketdata.providers.rate_limiter import RateLimiter
-from app.modules.news.providers.base import NewsCapability, NewsItem
+from app.modules.news.providers.base import NewsCapability, NewsItem, is_safe_http_url
 
 logger = structlog.get_logger(__name__)
 
@@ -168,7 +168,10 @@ class AlphaVantageNewsProvider:
         title = str(raw.get("title") or "").strip()
         url = str(raw.get("url") or "").strip()
         published = _parse_time(raw.get("time_published"))
-        if not title or not url or published is None:
+        # `is_safe_http_url` z tego samego powodu co u pozostałych dwóch
+        # dostawców: `url` pochodzi od wydawcy depeszy, nie od Alpha Vantage,
+        # i idzie prosto do `href` w przeglądarce użytkownika.
+        if not title or not url or published is None or not is_safe_http_url(url):
             return None
 
         symbols = tuple(
