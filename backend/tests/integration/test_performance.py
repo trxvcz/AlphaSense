@@ -238,6 +238,32 @@ async def test_performance_of_other_user_is_404(client: AsyncClient) -> None:
     assert resp.status_code == 404
 
 
+async def test_performance_with_benchmark_of_other_user_is_404(client: AsyncClient) -> None:
+    """Ten sam 404 z parametrem `?benchmark=` (CLAUDE.md #3.10).
+
+    Osobny przypadek, bo sparametryzowany harness w `tests/test_isolation.py`
+    przechodzi trasy po `app.routes` i **nie dokłada query stringów** — wariant
+    z benchmarkiem nie jest tam przejeżdżany. Zależność autoryzacyjna wykonuje
+    się przed handlerem, więc realnego wycieku nie ma; test broni tego stanu
+    przed regresją, w której benchmark byłby liczony przed sprawdzeniem
+    własności zasobu.
+
+    Oczekiwane jest **404**, nie 403 i nie 200 z pustym benchmarkiem: cudzy
+    portfel ma nie istnieć, a nie „istnieć, ale bez dostępu".
+    """
+    token_a = await _register_and_login(client, EMAIL_A)
+    token_b = await _register_and_login(client, EMAIL_B)
+    portfolio_id = await _create_portfolio(client, token_a)
+
+    resp = await client.get(
+        f"/api/portfolios/{portfolio_id}/performance?benchmark=WIG20", headers=_auth(token_b)
+    )
+
+    assert resp.status_code == 404
+    # Nazwa portfela ani nic z jego treści nie może wyciec w komunikacie.
+    assert "WIG20" not in resp.text
+
+
 # --- cache -----------------------------------------------------------------
 
 
@@ -330,7 +356,7 @@ async def test_performance_survives_redis_outage(
 # zderzałby się z prawdziwym wierszem, a test „benchmark bez notowań" nigdy
 # nie zobaczyłby pustki. Mapowanie klucz → symbol jest podmieniane przez
 # `monkeypatch` na `service.BENCHMARKS`; że w produkcji wskazuje ono na
-# ETF-a, pilnuje osobny test bez bazy (`test_real_benchmark_mapping`).
+# ETF-a, pilnuje osobny test kontraktu w `tests/unit/test_benchmark_mapping.py`.
 # Waluta obca to `XTS` (kod zarezerwowany na testy) — `USD` ma realne kursy
 # NBP z backfillu i nadpisywanie ich psułoby dane dev (ta sama zasada co
 # w `test_analytics.py`).
@@ -420,21 +446,6 @@ async def _add_fx(db_session: AsyncSession, *rows: tuple[int, str]) -> None:
         ]
     )
     await db_session.commit()
-
-
-def test_real_benchmark_mapping() -> None:
-    """Bez bazy: to, na co wskazują klucze W PRODUKCJI. Decyzja 8 planu —
-    WIG20 nie ma dostępnego źródła historii, więc liczy go ETF, a odpowiedź
-    musi to ujawniać (CLAUDE.md #3.15)."""
-    wig20 = analytics_service.BENCHMARKS["WIG20"]
-
-    assert wig20.symbol == "ETFBW20TR"
-    assert wig20.approximate is True
-    assert wig20.note and "ETF" in wig20.note
-
-    sp500 = analytics_service.BENCHMARKS["^GSPC"]
-    assert sp500.symbol == "^GSPC"
-    assert sp500.approximate is False
 
 
 async def test_benchmark_series_is_normalized_to_the_portfolio_start(
@@ -601,3 +612,100 @@ async def test_new_benchmark_quote_invalidates_the_cache(
     after = (await _get(client, token, portfolio_id, benchmark="WIG20"))["benchmark"]
 
     assert Decimal(after["points"][-1]["index"]) == Decimal("130")
+
+
+async def test_benchmark_history_added_backwards_invalidates_the_cache(
+    client: AsyncClient, db_session: AsyncSession, benchmark_pln: BenchmarkFixture
+) -> None:
+    """Regresja: notowania benchmarku przybywają też WSTECZ.
+
+    `make backfill` dopisuje ETFBW20TR.WA ponad tysiąc sesji historii, nie
+    ruszając `MAX(prices.date)` — dzisiejszy wiersz zwykle już jest. Marker
+    oparty na samym maksimum trzymałby w cache odpowiedź policzoną z krótszej
+    serii (albo `unavailable_reason`) do wygaśnięcia sześciogodzinnego TTL,
+    mimo że historia już jest. Stąd `COUNT(*)` w segmencie markera.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_valuations(db_session, portfolio_id, (2, "1000"), (1, "1100"), (0, "1200"))
+    # Notowanie tylko na dziś: brak wspólnego punktu startu dla obu serii.
+    await _add_quotes(db_session, benchmark_pln.asset, (0, "260"))
+
+    before = (await _get(client, token, portfolio_id, benchmark="WIG20"))["benchmark"]
+    assert before["unavailable_reason"] is not None
+    assert before["points"] == []
+
+    # Backfill: `MAX(date)` bez zmian, `COUNT(*)` w górę.
+    await _add_quotes(db_session, benchmark_pln.asset, (2, "200"), (1, "220"))
+    after = (await _get(client, token, portfolio_id, benchmark="WIG20"))["benchmark"]
+
+    assert after["unavailable_reason"] is None
+    assert len(after["points"]) == 3
+
+
+async def test_new_fx_rate_invalidates_the_cache(
+    client: AsyncClient, db_session: AsyncSession, benchmark_foreign: BenchmarkFixture
+) -> None:
+    """Regresja: kurs NBP na dzień, który wcześniej niósł kurs z poprzedniej sesji.
+
+    To jest stan CODZIENNY, nie skrajny — NBP publikuje tabelę ok. 12:00,
+    a notowania `^GSPC` przychodzą z ingestii wieczorem, więc świeże notowanie
+    potrafi przez chwilę wisieć na wczorajszym kursie. Bez `MAX(fx_rates.date)`
+    w markerze doniesiony kurs nie unieważniałby klucza i ostatni punkt serii
+    zostałby przeliczony starym kursem aż do wygaśnięcia TTL.
+
+    Nadpisanie kursu za istniejący dzień to osobna sprawa i marker go
+    świadomie NIE łapie — na to jest TTL, ten sam kompromis co przy
+    nadpisaniu `value_pln` w kroku 40.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_valuations(db_session, portfolio_id, (1, "1000"), (0, "1100"))
+    await _add_quotes(db_session, benchmark_foreign.asset, (1, "200"), (0, "220"))
+    # Kurs tylko za wczoraj — dzisiejsze notowanie niesie go naprzód.
+    await _add_fx(db_session, (1, "4"))
+
+    before = (await _get(client, token, portfolio_id, benchmark="^GSPC"))["benchmark"]
+    assert Decimal(before["points"][-1]["index"]) == Decimal("110")
+
+    # Kurs za dziś dochodzi później tego samego dnia.
+    await _add_fx(db_session, (0, "8"))
+    after = (await _get(client, token, portfolio_id, benchmark="^GSPC"))["benchmark"]
+
+    assert Decimal(after["points"][-1]["index"]) == Decimal("220"), (
+        "podwojony kurs musi podwoić wartość benchmarku w PLN"
+    )
+
+
+async def test_outperformance_is_computed_by_the_backend(
+    client: AsyncClient, db_session: AsyncSession, benchmark_pln: BenchmarkFixture
+) -> None:
+    """Różnica portfel − benchmark idzie z API jako string liczony na `Decimal`.
+
+    Front jej nie odtwarza (CLAUDE.md §8) — to jest liczba pokazywana
+    użytkownikowi, a nie pomocnicza wartość wykresu.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_valuations(db_session, portfolio_id, (1, "1000"), (0, "1100"))
+    await _add_quotes(db_session, benchmark_pln.asset, (1, "200"), (0, "208"))
+
+    bench = (await _get(client, token, portfolio_id, benchmark="WIG20"))["benchmark"]
+
+    # Portfel 110, benchmark 104 → +6 p.p.
+    assert Decimal(bench["outperformance"]) == Decimal("6")
+    assert isinstance(bench["outperformance"], str)
+
+
+async def test_outperformance_is_null_without_a_series(
+    client: AsyncClient, db_session: AsyncSession, benchmark_pln: BenchmarkFixture
+) -> None:
+    """Brak serii to nie remis — `null`, nie `"0"` (CLAUDE.md #3.15)."""
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio_id = await _create_portfolio(client, token)
+    await _add_valuations(db_session, portfolio_id, (1, "1000"), (0, "1100"))
+
+    bench = (await _get(client, token, portfolio_id, benchmark="WIG20"))["benchmark"]
+
+    assert bench["unavailable_reason"] is not None
+    assert bench["outperformance"] is None

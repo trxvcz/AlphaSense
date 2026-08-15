@@ -115,18 +115,23 @@ Decyzje nieprecyzowane wprost przez zadanie:
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+
+# `date_`, bo pole `date: date` w klasach niżej PRZESŁANIA nazwę typu
+# w ciele klasy — kolejne adnotacje (`as_of`) widziałyby wtedy pole, nie typ.
 from datetime import date as date_
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_key, get_cached_json, set_cached_json
 from app.modules.analytics.benchmark import Quote, benchmark_index
-from app.modules.analytics.returns import ValuationPoint, chain_index, period_return
+from app.modules.analytics.returns import IndexPoint, ValuationPoint, chain_index, period_return
 from app.modules.marketdata import repository as marketdata_repository
 from app.modules.marketdata.models import Asset, Price
 from app.modules.portfolio import repository as portfolio_repository
@@ -155,6 +160,8 @@ _INDEX_QUANT = Decimal("0.0001")
 
 # Krok 31 (cache Redis, CLAUDE.md #3.7) — patrz docstring modułu, sekcja
 # „Krok 31", dla uzasadnienia markera i TTL.
+logger = structlog.get_logger(__name__)
+
 _EOD_MARKER_NONE = "none"
 _CACHE_TTL_SECONDS = 6 * 60 * 60  # 6h
 
@@ -790,6 +797,13 @@ async def performance(
     i UI musi móc te przypadki rozróżnić (CLAUDE.md #3.15).
     """
     spec = BENCHMARKS[benchmark] if benchmark is not None else None
+    # Aktywo benchmarku wyszukane RAZ i podane obu wołającym: marker potrzebuje
+    # go do policzenia świeżości, a seria do notowań i waluty.
+    benchmark_asset = (
+        await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
+        if spec is not None
+        else None
+    )
     key = cache_key(
         "performance",
         portfolio.id,
@@ -801,7 +815,7 @@ async def performance(
         # `valuations_marker` nie drgnie, gdy dojdzie nowe notowanie
         # `^GSPC`. Bez tego wykres z benchmarkiem zamarzałby na TTL.
         spec.key if spec is not None else "none",
-        await _benchmark_marker(db, spec),
+        await _benchmark_marker(db, spec, benchmark_asset),
     )
     cached = await get_cached_json(key)
     if cached is not None:
@@ -836,9 +850,7 @@ async def performance(
             for p in index
         ],
         benchmark=(
-            await _benchmark_series(db, spec, [p.date for p in points])
-            if spec is not None
-            else None
+            await _benchmark_series(db, spec, benchmark_asset, index) if spec is not None else None
         ),
     )
 
@@ -902,10 +914,17 @@ class BenchmarkSeries:
     key: str
     symbol: str
     label: str
-    currency: str
+    # `None`, gdy serii nie da się policzyć — pusty string udawałby kod waluty
+    # spoza dziedziny opisanej w kontrakcie API.
+    currency: str | None
     approximate: bool
     note: str | None
     unavailable_reason: str | None
+    # Różnica ostatnich punktów obu serii w punktach procentowych (baza 100).
+    # Liczona TUTAJ, na `Decimal`, bo trafia do użytkownika (CLAUDE.md §8),
+    # a backend jako jedyny ma obie serie w pełnej precyzji. `None`, gdy
+    # którejś serii brakuje albo ich ostatnie punkty nie są z tego samego dnia.
+    outperformance: Decimal | None
     points: list[BenchmarkSeriesPoint]
 
 
@@ -920,6 +939,7 @@ def _benchmark_to_json(series: BenchmarkSeries | None) -> Any:
         "approximate": series.approximate,
         "note": series.note,
         "unavailable_reason": series.unavailable_reason,
+        "outperformance": None if series.outperformance is None else str(series.outperformance),
         "points": [
             {"date": p.date.isoformat(), "as_of": p.as_of.isoformat(), "index": str(p.index)}
             for p in series.points
@@ -938,6 +958,7 @@ def _benchmark_from_json(raw: Any) -> BenchmarkSeries | None:
         approximate=raw["approximate"],
         note=raw["note"],
         unavailable_reason=raw["unavailable_reason"],
+        outperformance=(None if raw["outperformance"] is None else Decimal(raw["outperformance"])),
         points=[
             BenchmarkSeriesPoint(
                 date=date.fromisoformat(p["date"]),
@@ -949,25 +970,66 @@ def _benchmark_from_json(raw: Any) -> BenchmarkSeries | None:
     )
 
 
-async def _benchmark_marker(db: AsyncSession, spec: BenchmarkSpec | None) -> str:
-    """Segment świeżości klucza cache dla serii benchmarku — `MAX(prices.date)`
-    aktywa benchmarku (`"none"` bez benchmarku albo bez notowań).
+async def _benchmark_marker(
+    db: AsyncSession, spec: BenchmarkSpec | None, asset: Asset | None
+) -> str:
+    """Segment świeżości klucza cache dla serii benchmarku.
 
     Osobny od `valuations_marker`, bo to dwa niezależne źródła: snapshoty
     portfela przyrastają z joba wyceny, notowania benchmarku z ingestii
     rynkowej. Portfel bez ruchu i świeże notowanie `^GSPC` to sytuacja
     codzienna — na wspólnym markerze wykres stałby do wygaśnięcia TTL.
+
+    Marker składa się z **trzech** części, bo każda łapie inną zmianę:
+
+    - `MAX(prices.date)` — nowe notowanie od najnowszej strony;
+    - `COUNT(*)` notowań — historia dopisana **wstecz** przez `make backfill`
+      (`price_marker_for_asset` tłumaczy, dlaczego samo maksimum kłamie);
+    - `MAX(fx_rates.date)` waluty benchmarku, gdy nie jest nim PLN — nowy
+      kurs NBP bez nowego notowania jest stanem codziennym, nie skrajnym.
+
+    `asset` przychodzi z zewnątrz zamiast być wyszukiwany tutaj: `_benchmark_series`
+    i tak go potrzebuje, a dwa `get_asset_by_symbol` na jednej ścieżce żądania
+    to jedno zapytanie za dużo.
     """
-    if spec is None:
+    if spec is None or asset is None:
         return _EOD_MARKER_NONE
-    asset = await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
-    if asset is None:
-        return _EOD_MARKER_NONE
-    latest = await marketdata_repository.get_latest_price_date_for_assets(db, [asset.id])
-    return latest.isoformat() if latest is not None else _EOD_MARKER_NONE
+    latest, count = await marketdata_repository.price_marker_for_asset(db, asset.id)
+    segments = [latest.isoformat() if latest is not None else _EOD_MARKER_NONE, str(count)]
+    if asset.currency != "PLN":
+        fx_latest = await marketdata_repository.get_latest_fx_rate_date(db, asset.currency)
+        segments.append(fx_latest.isoformat() if fx_latest is not None else _EOD_MARKER_NONE)
+    return ":".join(segments)
 
 
-def _unavailable(spec: BenchmarkSpec, currency: str, reason: str) -> BenchmarkSeries:
+def _outperformance(
+    portfolio_points: Sequence[IndexPoint], benchmark_points: Sequence[BenchmarkSeriesPoint]
+) -> Decimal | None:
+    """O ile punktów procentowych portfel pobił benchmark na końcu okna.
+
+    Obie serie mają bazę 100 w pierwszym wspólnym dniu, więc różnica ostatnich
+    wartości **jest** różnicą stóp zwrotu w punktach procentowych — nie trzeba
+    niczego dzielić.
+
+    Liczone tutaj, nie we froncie: wynik trafia do użytkownika, a CLAUDE.md §8
+    zabrania liczenia takich rzeczy na `float`. Backend jako jedyny ma obie
+    serie w `Decimal`.
+
+    **Zgodność ostatnich dat jest sprawdzana, nie zakładana.** Dziś
+    `benchmark_index` wyrównuje się do dat portfela, więc warunek jest zawsze
+    spełniony — ale funkcja porównująca dwie serie nie ma prawa milcząco
+    zakładać, że ktoś ją tak zawoła. Rozjazd daje `None` („nie wiemy"),
+    nie liczbę policzoną z dwóch różnych dni.
+    """
+    if not portfolio_points or not benchmark_points:
+        return None
+    last_portfolio, last_benchmark = portfolio_points[-1], benchmark_points[-1]
+    if last_portfolio.date != last_benchmark.date:
+        return None
+    return _quantize_index(last_portfolio.index - last_benchmark.index)
+
+
+def _unavailable(spec: BenchmarkSpec, currency: str | None, reason: str) -> BenchmarkSeries:
     return BenchmarkSeries(
         key=spec.key,
         symbol=spec.symbol,
@@ -976,12 +1038,16 @@ def _unavailable(spec: BenchmarkSpec, currency: str, reason: str) -> BenchmarkSe
         approximate=spec.approximate,
         note=spec.note,
         unavailable_reason=reason,
+        outperformance=None,
         points=[],
     )
 
 
 async def _benchmark_series(
-    db: AsyncSession, spec: BenchmarkSpec, dates: list[date]
+    db: AsyncSession,
+    spec: BenchmarkSpec,
+    asset: Asset | None,
+    portfolio_points: Sequence[IndexPoint],
 ) -> BenchmarkSeries:
     """Seria benchmarku wyrównana do `dates` (daty snapshotów portfela).
 
@@ -990,11 +1056,20 @@ async def _benchmark_series(
     kończy się `unavailable_reason` po polsku, nie pustą serią bez wyjaśnienia
     — wykres bez linii i bez powodu wygląda jak awaria (CLAUDE.md #3.15).
     """
-    asset = await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
     if asset is None:
-        return _unavailable(
-            spec, "", f"Brak aktywa {spec.symbol} w słowniku — uruchom `make seed`."
+        # Dwa różne komunikaty do dwóch różnych odbiorców. Użytkownik dostaje
+        # zdanie, na które może zareagować (czyli: nic nie może zrobić, ale wie,
+        # że to nie jego wina), a instrukcja `make seed` idzie do logów, bo
+        # adresatem jest operator instancji. Pierwsza wersja wysyłała
+        # użytkownikowi polecenie powłoki, którego nie ma jak wykonać.
+        logger.error(
+            "benchmark.asset_missing",
+            symbol=spec.symbol,
+            benchmark=spec.key,
+            hint="Brak aktywa benchmarku w słowniku — uruchom `make seed`.",
         )
+        return _unavailable(spec, None, f"Porównanie z {spec.label} jest chwilowo niedostępne.")
+    dates = [p.date for p in portfolio_points]
     if not dates:
         return _unavailable(spec, asset.currency, "Portfel nie ma jeszcze historii wyceny.")
 
@@ -1022,6 +1097,10 @@ async def _benchmark_series(
             ),
         )
 
+    quantized = [
+        BenchmarkSeriesPoint(date=p.date, as_of=p.as_of, index=_quantize_index(p.index))
+        for p in points
+    ]
     return BenchmarkSeries(
         key=spec.key,
         symbol=spec.symbol,
@@ -1030,8 +1109,6 @@ async def _benchmark_series(
         approximate=spec.approximate,
         note=spec.note,
         unavailable_reason=None,
-        points=[
-            BenchmarkSeriesPoint(date=p.date, as_of=p.as_of, index=_quantize_index(p.index))
-            for p in points
-        ],
+        outperformance=_outperformance(portfolio_points, quantized),
+        points=quantized,
     )

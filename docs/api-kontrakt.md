@@ -87,10 +87,11 @@ Bez parametru `benchmark` w odpowiedzi jest `null`. Z parametrem dochodzi druga 
     "key": "WIG20",             // o co pytał użytkownik
     "symbol": "ETFBW20TR",      // czym to faktycznie policzono
     "label": "WIG20 (przez Beta ETF WIG20TR)",
-    "currency": "PLN",
+    "currency": "PLN",           // null, gdy serii nie da się policzyć
     "approximate": true,
     "note": "Liczone z ETF-a Beta WIG20TR, bo sam indeks WIG20 nie ma dostępnego źródła historii. …",
     "unavailable_reason": null, // niepuste ⇒ points puste
+    "outperformance": "6.0000", // portfel − benchmark w p.p.; null, gdy serii nie ma
     "points": [
       { "date": "2025-08-12", "as_of": "2025-08-12", "index": "100.0000" },
       // `as_of` wcześniejsze niż `date` = giełda była zamknięta, wartość niesiona z poprzedniej sesji
@@ -103,6 +104,8 @@ Bez parametru `benchmark` w odpowiedzi jest `null`. Z parametrem dochodzi druga 
 **Dziedzina `?benchmark=` jest zamknięta** (`WIG20`, `^GSPC`) — 422 na cokolwiek innego. Otwarta dziedzina byłaby obietnicą, że każde aktywo ze słownika ma historię nadającą się na benchmark; nie ma (samo `WIG20` w `prices` ma trzy notowania).
 
 **`key` ≠ `symbol` dla GPW.** Użytkownik prosi o WIG20, liczy to ETF `ETFBW20TR` — indeks WIG20 nie ma dziś darmowego źródła historii (decyzja 8 planu etapu 8: Stooq oddaje stronę anty-bot, yfinance jeden punkt). ETF śledzi WIG20 **Total Return**, dochodzi błąd odwzorowania i opłata ok. 0,5% rocznie, stąd `approximate: true` i `note` — UI ma to pokazać, nie ukryć (CLAUDE.md #3.15).
+
+**`outperformance` liczy backend, nie front.** Obie serie mają bazę 100, więc różnica ostatnich punktów **jest** różnicą stóp zwrotu w punktach procentowych. Liczona na `Decimal` po stronie API i oddana jako `string`, bo trafia do użytkownika (CLAUDE.md §8) — front ma ją sformatować, nie odtworzyć. `null`, gdy serii benchmarku nie ma albo ostatnie punkty obu serii nie są z tego samego dnia.
 
 **Benchmark przeliczany na PLN** kursem NBP z reguły `max(date) <= D` (decyzja 4 planu etapu 8). Kurs jest częścią realnego wyniku inwestora — porównanie portfela w PLN z indeksem w USD mieszałoby dwie różne miary. Brak kursu w dniu startu ⇒ `unavailable_reason`, nie cichy mnożnik 1.
 
@@ -350,7 +353,9 @@ performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}:{bench
 
 `GET /performance` (krok 40) używa **innego markera**: `valuations_marker` = `MAX(date)` i `COUNT(*)` w `portfolio_valuations` tego portfela (`"none"` przy braku historii). Sam `MAX(date)` by tu nie wystarczył — inaczej niż ceny, snapshoty przybywają też **wstecz** (`seed-history` z kroku zerowego etapu 8 dopisuje pełne lata historii, nie ruszając maksimum), a wtedy klucz oparty na samym maksimum dałby trafienie w cache ze zwrotem policzonym z krótszej serii.
 
-`benchmark_marker` (krok 42) to `MAX(prices.date)` aktywa benchmarku, **osobny** od `valuations_marker`: notowania benchmarku przychodzą z ingestii rynkowej, a snapshoty portfela z joba wyceny. Portfel bez ruchu i świeże notowanie `^GSPC` to sytuacja codzienna — na wspólnym markerze linia benchmarku stałaby do wygaśnięcia TTL.
+`benchmark_marker` (krok 42) jest **osobny** od `valuations_marker`: notowania benchmarku przychodzą z ingestii rynkowej, a snapshoty portfela z joba wyceny. Portfel bez ruchu i świeże notowanie `^GSPC` to sytuacja codzienna — na wspólnym markerze linia benchmarku stałaby do wygaśnięcia TTL.
+
+Marker składa się z **trzech** segmentów, bo każdy łapie inną zmianę: `MAX(prices.date)` (nowe notowanie), `COUNT(*)` notowań (historia dopisana **wstecz** przez `make backfill` — ponad tysiąc sesji `ETFBW20TR.WA` bez ruszania maksimum, dokładnie ten sam problem co przy `valuations_marker`) oraz `MAX(fx_rates.date)` waluty benchmarku, gdy nie jest nią PLN (NBP publikuje ok. 12:00, notowania `^GSPC` przychodzą wieczorem, więc świeże notowanie potrafi przez chwilę wisieć na wczorajszym kursie). Nadpisanie istniejącego wiersza przy niezmienionej ich liczbie marker świadomie pomija — na to jest TTL, ten sam kompromis co w kroku 31.
 
 Redis można wyczyścić w każdej chwili — awaria/brak Redisa nie zwraca błędu, endpoint liczy wynik na żywo (wolniej, nie: `500`).
 

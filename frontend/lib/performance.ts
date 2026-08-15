@@ -36,11 +36,18 @@ export type Benchmark = {
   key: string;
   symbol: string;
   label: string;
-  currency: string;
+  /** `null`, gdy serii nie da się policzyć — nie ma wtedy waluty do podania. */
+  currency: string | null;
   approximate: boolean;
   note: string | null;
   /** Niepuste ⇒ `points` puste. Tekst jest gotowy do wyświetlenia. */
   unavailable_reason: string | null;
+  /**
+   * Różnica portfel − benchmark na koniec okna, w punktach procentowych.
+   * Liczona przez backend na `Decimal` i podana jako string — wynik trafia
+   * do użytkownika, więc front go nie przelicza (CLAUDE.md §8).
+   */
+  outperformance: string | null;
   points: BenchmarkPoint[];
 };
 
@@ -101,15 +108,29 @@ export function alignBenchmark(
 }
 
 /**
- * Różnica portfel − benchmark na koniec okresu, w punktach procentowych.
- * `null`, gdy którejkolwiek serii brakuje — zero znaczyłoby „remis".
+ * Co widok ma powiedzieć o jakości serii benchmarku, zanim pokaże liczby.
+ *
+ * Wyciągnięte z komponentu do `lib/` **celowo**: `vitest.config.ts` trzyma
+ * testy na czystych funkcjach (render pokrywa Playwright), a to jest
+ * dokładnie ten przypadek, który tamten komentarz przewiduje — decyzja
+ * „czy oznaczyć dane jako przybliżone" jest logiką, nie układem pikseli,
+ * i realizuje CLAUDE.md #3.15. Bez tego jedyna rzecz, której ten ekran
+ * naprawdę musi dopilnować, nie miała testu.
+ *
+ * `null` znaczy „nic do zakomunikowania": seria jest pełna i dokładna.
  */
-export function outperformance(
-  points: PerformancePoint[],
-  benchmarkPoints: BenchmarkPoint[],
-): number | null {
-  const portfolio = points.at(-1);
-  const benchmark = benchmarkPoints.at(-1);
-  if (portfolio === undefined || benchmark === undefined) return null;
-  return Number(portfolio.index) - Number(benchmark.index);
+export type BenchmarkNotice =
+  | { kind: "unavailable"; reason: string }
+  | { kind: "approximate"; note: string | null };
+
+export function benchmarkNotice(benchmark: Benchmark | null): BenchmarkNotice | null {
+  if (benchmark === null) return null;
+  // Brak serii ma pierwszeństwo przed przybliżeniem: „nie ma danych" i „dane
+  // są przybliżone" to dwa różne komunikaty, a pokazanie obu naraz sugeruje,
+  // że jakaś linia jednak jest.
+  if (benchmark.unavailable_reason !== null) {
+    return { kind: "unavailable", reason: benchmark.unavailable_reason };
+  }
+  if (benchmark.approximate) return { kind: "approximate", note: benchmark.note };
+  return null;
 }

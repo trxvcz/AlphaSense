@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+
+# `date_`, bo pole `date: date` w klasach niżej PRZESŁANIA nazwę typu
+# w ciele klasy — kolejne adnotacje (`as_of`) widziałyby wtedy pole, nie typ.
 from datetime import date as date_
 from decimal import Decimal
 
@@ -147,16 +150,29 @@ class BenchmarkOut(BaseModel):
     `unavailable_reason` niepuste ⇒ `points` puste. Powód jest po polsku
     i wprost do wyświetlenia — wykres bez linii i bez wyjaśnienia wygląda
     jak awaria.
+
+    `outperformance` to różnica ostatnich punktów obu serii w punktach
+    procentowych (obie mają bazę 100, więc różnica jest wprost różnicą stóp
+    zwrotu). Liczona po stronie backendu i oddawana jako `string`, bo trafia
+    do użytkownika — front nie ma jej odtwarzać na `number` (CLAUDE.md §8).
+    `null`, gdy serii benchmarku nie ma albo ostatnie punkty nie są z tego
+    samego dnia.
     """
 
     key: str
     symbol: str
     label: str
-    currency: str
+    # `null`, gdy serii nie da się policzyć — pusty string udawałby kod waluty.
+    currency: str | None
     approximate: bool
     note: str | None
     unavailable_reason: str | None
+    outperformance: Decimal | None
     points: list[BenchmarkPointOut]
+
+    @field_serializer("outperformance")
+    def _ser_outperformance(self, v: Decimal | None) -> str | None:
+        return None if v is None else _ser_decimal(v)
 
 
 class PerformancePointOut(BaseModel):

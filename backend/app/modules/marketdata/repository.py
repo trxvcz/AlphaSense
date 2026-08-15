@@ -644,6 +644,42 @@ async def get_latest_price_date_for_assets(db: AsyncSession, asset_ids: list[UUI
     return result.scalar_one_or_none()
 
 
+async def price_marker_for_asset(db: AsyncSession, asset_id: UUID) -> tuple[date | None, int]:
+    """`MAX(prices.date)` **i** `COUNT(*)` dla jednego aktywa — segment klucza
+    cache serii benchmarku (krok 42).
+
+    **`MAX(date)` samo nie wystarczy**, dokładnie z tego powodu co przy
+    `portfolio.repository.valuations_marker`: notowania benchmarku przybywają
+    też **wstecz**. `make backfill` dopisuje ETFBW20TR.WA ponad tysiąc sesji
+    historii, nie ruszając maksimum — dzisiejszy wiersz zwykle już jest.
+    Marker oparty na samym maksimum dałby po takim przebiegu trafienie
+    w cache z odpowiedzią policzoną z krótszej serii, a w skrajnym przypadku
+    z `unavailable_reason` („brak notowań na dzień startu lub wcześniej")
+    wiszącym do wygaśnięcia sześciogodzinnego TTL, mimo że historia już jest.
+
+    Odróżnione od `get_latest_price_date_for_assets`, które pilnuje danych
+    portfela — tam wiersze przyrastają wyłącznie od najnowszej strony, więc
+    `MAX` wystarcza i dokładanie `COUNT(*)` po całym koszyku aktywów byłoby
+    kosztem bez pokrycia.
+    """
+    stmt = select(func.max(Price.date), func.count()).where(Price.asset_id == asset_id)
+    latest, count = (await db.execute(stmt)).one()
+    return latest, count
+
+
+async def get_latest_fx_rate_date(db: AsyncSession, currency: str) -> date | None:
+    """`MAX(fx_rates.date)` dla waluty — druga połowa markera benchmarku
+    notowanego poza PLN (krok 42).
+
+    Bez niej klucz cache nie widzi nowego kursu NBP przy niezmienionych
+    notowaniach, a to jest stan codzienny, nie skrajny: NBP publikuje tabelę
+    ok. 12:00, notowania `^GSPC` przychodzą z ingestii wieczorem. Ostatni
+    punkt serii siedziałby wtedy na wczorajszym kursie do wygaśnięcia TTL.
+    """
+    stmt = select(func.max(FxRate.date)).where(FxRate.currency == currency)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def get_latest_ingestion_runs(db: AsyncSession) -> dict[str, IngestionRun]:
     """Ostatni `IngestionRun` (po `started_at DESC`) per `market_code`,
     w jednym zapytaniu (`DISTINCT ON`, Postgres) zamiast N+1 — podstawa

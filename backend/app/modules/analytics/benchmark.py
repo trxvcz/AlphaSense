@@ -150,6 +150,14 @@ def benchmark_index(
     for position, target in enumerate(dates):
         valued = _value(position)
         if valued is None:
+            # Po udanym `_value(0)` ta gałąź jest nieosiągalna: `as_of_values`
+            # niesie ostatnią znaną wartość naprzód, więc skoro punkt startowy
+            # się udał, żaden późniejszy nie zwróci `None`. Zostaje jako
+            # zabezpieczenie na wypadek zmiany semantyki `as_of_values` —
+            # cichy `IndexError`/`None` w środku pętli byłby gorszy niż
+            # pominięty punkt. Testy luk w `benchmark_index` sprawdzają
+            # zachowanie tej funkcji jako czystej, nie kształt, który
+            # produkuje dzisiejszy backend.
             continue
         as_of, value_pln = valued
         points.append(

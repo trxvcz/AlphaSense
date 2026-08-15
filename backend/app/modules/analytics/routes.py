@@ -119,6 +119,7 @@ async def get_performance(
                 approximate=result.benchmark.approximate,
                 note=result.benchmark.note,
                 unavailable_reason=result.benchmark.unavailable_reason,
+                outperformance=result.benchmark.outperformance,
                 points=[
                     BenchmarkPointOut(date=p.date, as_of=p.as_of, index=p.index)
                     for p in result.benchmark.points

@@ -9,7 +9,8 @@
 import { describe, expect, it } from "vitest";
 import {
   alignBenchmark,
-  outperformance,
+  benchmarkNotice,
+  type Benchmark,
   type BenchmarkPoint,
   type PerformancePoint,
 } from "@/lib/performance";
@@ -20,6 +21,21 @@ function point(date: string, index: string): PerformancePoint {
 
 function benchmarkPoint(date: string, index: string): BenchmarkPoint {
   return { date, as_of: date, index };
+}
+
+function benchmark(overrides: Partial<Benchmark> = {}): Benchmark {
+  return {
+    key: "WIG20",
+    symbol: "ETFBW20TR",
+    label: "WIG20 (przez Beta ETF WIG20TR)",
+    currency: "PLN",
+    approximate: false,
+    note: null,
+    unavailable_reason: null,
+    outperformance: "6.0000",
+    points: [benchmarkPoint("2026-01-05", "104")],
+    ...overrides,
+  };
 }
 
 describe("alignBenchmark", () => {
@@ -53,23 +69,52 @@ describe("alignBenchmark", () => {
   });
 });
 
-describe("outperformance", () => {
-  it("liczy różnicę w punktach na koniec okresu", () => {
-    const points = [point("2026-01-02", "100"), point("2026-01-05", "110")];
-    const benchmark = [benchmarkPoint("2026-01-02", "100"), benchmarkPoint("2026-01-05", "104")];
+describe("benchmarkNotice", () => {
+  /**
+   * To jest jedyna rzecz, której ten ekran naprawdę musi dopilnować:
+   * przybliżenie ma być oznaczone jako przybliżenie (CLAUDE.md #3.15).
+   * WIG20 liczony z ETF-a `ETFBW20TR` NIE JEST indeksem WIG20 i widok nie
+   * może udawać, że jest.
+   */
+  it("oznacza serię przybliżoną razem z uzasadnieniem", () => {
+    const notice = benchmarkNotice(
+      benchmark({ approximate: true, note: "Liczone z ETF-a Beta WIG20TR." }),
+    );
 
-    expect(outperformance(points, benchmark)).toBe(6);
+    expect(notice).toEqual({ kind: "approximate", note: "Liczone z ETF-a Beta WIG20TR." });
   });
 
-  it("ujemna różnica, gdy portfel przegrał z rynkiem", () => {
-    const points = [point("2026-01-05", "95")];
-    const benchmark = [benchmarkPoint("2026-01-05", "110")];
+  it("brak serii ma pierwszeństwo przed przybliżeniem", () => {
+    // Oba komunikaty naraz sugerowałyby, że jakaś linia jednak jest.
+    const notice = benchmarkNotice(
+      benchmark({
+        approximate: true,
+        note: "Liczone z ETF-a Beta WIG20TR.",
+        unavailable_reason: "Brak notowań na dzień startu lub wcześniej.",
+        points: [],
+      }),
+    );
 
-    expect(outperformance(points, benchmark)).toBe(-15);
+    expect(notice).toEqual({
+      kind: "unavailable",
+      reason: "Brak notowań na dzień startu lub wcześniej.",
+    });
   });
 
-  it("brak którejkolwiek serii daje null, nie zero", () => {
-    expect(outperformance([], [benchmarkPoint("2026-01-05", "110")])).toBeNull();
-    expect(outperformance([point("2026-01-05", "100")], [])).toBeNull();
+  it("seria dokładna nie ma czego komunikować", () => {
+    expect(benchmarkNotice(benchmark())).toBeNull();
+  });
+
+  it("brak benchmarku to nie to samo co benchmark bez danych", () => {
+    // `null` = użytkownik nie wybrał porównania. Żadnego ostrzeżenia.
+    expect(benchmarkNotice(null)).toBeNull();
+  });
+
+  it("przybliżenie bez noty nadal jest oznaczone", () => {
+    // `note` jest opisem, nie warunkiem — brak opisu nie może uciszyć flagi.
+    expect(benchmarkNotice(benchmark({ approximate: true, note: null }))).toEqual({
+      kind: "approximate",
+      note: null,
+    });
   });
 });

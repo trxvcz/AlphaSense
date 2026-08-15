@@ -26,14 +26,14 @@ import type { ValuationRange } from "@/lib/dashboard";
 import {
   alignBenchmark,
   getPerformance,
-  outperformance,
+  benchmarkNotice,
   BENCHMARK_OPTIONS,
   type Benchmark,
   type BenchmarkKey,
   type PerformancePoint,
 } from "@/lib/performance";
 import { qk } from "@/lib/queryKeys";
-import { pct } from "@/lib/money";
+import { decimal, pct } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { useIsDarkTheme } from "@/lib/useIsDarkTheme";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -54,17 +54,15 @@ const RANGE_OPTIONS: { value: ValuationRange; label: string }[] = [
 function buildChartOption(
   points: PerformancePoint[],
   benchmark: Benchmark | null,
+  // Wyrównana seria przychodzi z zewnątrz, policzona RAZ — patrz `alignedBenchmark`
+  // w komponencie. Wcześniej liczyła ją i ta funkcja, i każdy wiersz tabeli.
+  benchmarkData: (number | null)[] | null,
   isDark: boolean,
 ) {
   const axisColor = isDark ? "#a1a1aa" : "#52525b";
   const splitLineColor = isDark ? "#3f3f46" : "#e4e4e7";
   const portfolioColor = isDark ? "#60a5fa" : "#2563eb";
   const benchmarkColor = isDark ? "#c084fc" : "#7c3aed";
-
-  const benchmarkData =
-    benchmark !== null && benchmark.points.length > 0
-      ? alignBenchmark(points, benchmark.points)
-      : null;
 
   return {
     backgroundColor: "transparent",
@@ -150,6 +148,17 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
   const data = performanceQuery.data;
   const points = useMemo(() => data?.points ?? [], [data]);
   const benchmarkData = data?.benchmark ?? null;
+  // Jedno wyrównanie na render, nie jedno na wiersz tabeli. Poprzednia wersja
+  // wołała `alignBenchmark` wewnątrz `points.map`, czyli budowała `Map` z całej
+  // serii benchmarku raz na wiersz — przy `range=max` (ok. 1300 snapshotów)
+  // dawało to ~1,7 mln operacji przy każdym otwarciu tabeli.
+  const alignedBenchmark = useMemo(
+    () =>
+      benchmarkData !== null && benchmarkData.points.length > 0
+        ? alignBenchmark(points, benchmarkData.points)
+        : null,
+    [points, benchmarkData],
+  );
 
   useEffect(() => {
     if (!containerRef.current || points.length === 0) return;
@@ -159,13 +168,15 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
       if (cancelled || !containerRef.current) return;
       const chart = chartInstanceRef.current ?? echarts.init(containerRef.current);
       chartInstanceRef.current = chart;
-      chart.setOption(buildChartOption(points, benchmarkData, isDark), { notMerge: true });
+      chart.setOption(buildChartOption(points, benchmarkData, alignedBenchmark, isDark), {
+        notMerge: true,
+      });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [points, benchmarkData, isDark]);
+  }, [points, benchmarkData, alignedBenchmark, isDark]);
 
   useEffect(() => {
     function handleResize() {
@@ -182,8 +193,11 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
     };
   }, []);
 
-  const diff =
-    benchmarkData !== null ? outperformance(points, benchmarkData.points) : null;
+  // Liczba przychodzi z backendu jako string policzony na `Decimal` — front
+  // jej nie odtwarza (CLAUDE.md §8), tylko rozdziela znak od wartości do
+  // wyświetlenia. `notice` niesie decyzję „czy oznaczyć dane jako przybliżone".
+  const diff = benchmarkData?.outperformance ?? null;
+  const notice = benchmarkNotice(benchmarkData);
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
@@ -267,8 +281,11 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
                   Względem benchmarku:{" "}
                 </dt>
                 <dd className="inline font-medium text-zinc-900 dark:text-zinc-50">
-                  {diff >= 0 ? "+" : "−"}
-                  {Math.abs(diff).toFixed(2)} pkt
+                  {/* „p.p.", nie „pkt": obie serie mają bazę 100, więc różnica
+                      jest w punktach PROCENTOWYCH. „pkt" sugerowałoby punkty
+                      indeksowe, czyli inną wielkość. */}
+                  {diff.startsWith("-") ? "−" : "+"}
+                  {decimal(diff.replace("-", ""))} p.p.
                 </dd>
               </div>
             )}
@@ -293,18 +310,18 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
             . Obie serie startują od 100 w dniu {data.first_date && formatDate(data.first_date)}.
           </p>
 
-          {benchmarkData !== null && benchmarkData.unavailable_reason !== null && (
+          {notice?.kind === "unavailable" && (
             <p
               role="status"
               className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200"
             >
-              Brak serii porównawczej: {benchmarkData.unavailable_reason}
+              Brak serii porównawczej: {notice.reason}
             </p>
           )}
 
-          {benchmarkData !== null && benchmarkData.approximate && benchmarkData.note !== null && (
+          {notice?.kind === "approximate" && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              <strong>Dane przybliżone.</strong> {benchmarkData.note}
+              <strong>Dane przybliżone.</strong> {notice.note}
             </p>
           )}
 
@@ -331,10 +348,7 @@ export function PerformanceChart({ portfolioId }: PerformanceChartProps) {
                 </thead>
                 <tbody>
                   {points.map((point, position) => {
-                    const benchmarkValue =
-                      benchmarkData !== null
-                        ? alignBenchmark(points, benchmarkData.points)[position]
-                        : null;
+                    const benchmarkValue = alignedBenchmark?.[position] ?? null;
                     return (
                       <tr key={point.date}>
                         <td className="py-1 pr-2">{formatDate(point.date)}</td>
