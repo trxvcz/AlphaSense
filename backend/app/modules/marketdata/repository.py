@@ -377,6 +377,17 @@ async def get_asset(db: AsyncSession, asset_id: UUID) -> Asset | None:
     return await db.get(Asset, asset_id)
 
 
+async def get_asset_by_symbol(db: AsyncSession, symbol: str) -> Asset | None:
+    """Lookup po `assets.symbol` (indeks `ix_assets_symbol`).
+
+    Konsument: `analytics.service._benchmark_series` (krok 42) — benchmark
+    jest w kontrakcie API identyfikowany symbolem, nie UUID-em, bo jego
+    identyfikator wpisuje się w URL (`?benchmark=^GSPC`) i musi być czytelny.
+    """
+    stmt = select(Asset).where(Asset.symbol == symbol).limit(1)
+    return (await db.execute(stmt)).scalars().first()
+
+
 async def get_latest_prices(
     db: AsyncSession, asset_id: UUID, *, limit: int, on_date: date | None = None
 ) -> list[Price]:
@@ -437,6 +448,69 @@ async def list_prices_in_range(
     stmt = stmt.order_by(Price.date.asc())
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_prices_with_carry(
+    db: AsyncSession, asset_id: UUID, *, start: date, end: date
+) -> list[Price]:
+    """Notowania `asset_id` w `[start, end]` **plus ostatnie sprzed `start`**,
+    rosnąco po dacie (plan krok 42, benchmark).
+
+    Ta dokładka to `max(date) <= D` z `get_rate_pln`/`get_latest_price`
+    przeniesione na całą serię naraz. Benchmark trzeba wyrównać do dat
+    snapshotów portfela, a te nie muszą pokrywać się z sesjami giełdowymi:
+    portfel ma snapshot z poniedziałku będącego świętem na GPW, benchmark
+    ostatnie notowanie z piątku. Bez wiersza sprzed `start` pierwszy punkt
+    porównania wypadałby zawsze, gdy okno zaczyna się w dniu bez sesji —
+    a to jest dzień, w którym normalizujemy obie serie do 100.
+
+    Jedno zapytanie zamiast N+1 po dacie: przy pięcioletnim `range=max`
+    (1300 snapshotów) pętla z `get_latest_price` per dzień dałaby 1300 zapytań
+    na jedno żądanie HTTP. Wyrównanie robi `analytics.benchmark.as_of_values`
+    na już pobranej liście.
+    """
+    carry = (
+        select(func.max(Price.date))
+        .where(Price.asset_id == asset_id, Price.date < start)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(Price)
+        .where(
+            Price.asset_id == asset_id,
+            Price.date <= end,
+            Price.date >= func.coalesce(carry, start),
+        )
+        .order_by(Price.date.asc())
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_fx_rates_with_carry(
+    db: AsyncSession, currency: str, *, start: date, end: date
+) -> list[FxRate]:
+    """Kursy `currency` w `[start, end]` plus ostatni sprzed `start`, rosnąco.
+
+    Odpowiednik `list_prices_with_carry` dla tabeli `fx_rates` — benchmark
+    w walucie obcej (`^GSPC` w USD) musi zostać przeliczony na PLN kursem NBP
+    (decyzja 4 planu etapu 8, CLAUDE.md #3.5), a NBP nie publikuje tabel
+    w weekendy i święta.
+    """
+    carry = (
+        select(func.max(FxRate.date))
+        .where(FxRate.currency == currency.upper(), FxRate.date < start)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(FxRate)
+        .where(
+            FxRate.currency == currency.upper(),
+            FxRate.date <= end,
+            FxRate.date >= func.coalesce(carry, start),
+        )
+        .order_by(FxRate.date.asc())
+    )
+    return list((await db.execute(stmt)).scalars().all())
 
 
 async def count_prices_in_range(db: AsyncSession, asset_id: UUID, *, start: date, end: date) -> int:

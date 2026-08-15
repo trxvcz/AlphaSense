@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from datetime import date as date_
 from decimal import Decimal
 
 from pydantic import BaseModel, field_serializer
@@ -120,6 +121,44 @@ class MarketRankingItemOut(BaseModel):
         return _ser_decimal(v)
 
 
+class BenchmarkPointOut(BaseModel):
+    """Punkt serii benchmarku wyrównany do daty snapshotu portfela.
+
+    `as_of` bywa wcześniejsze niż `date` (weekend, święto giełdowe) — bez
+    tego „benchmark stoi w miejscu" wygląda tak samo jak „giełda była
+    zamknięta" (CLAUDE.md #3.15)."""
+
+    date: date
+    as_of: date_
+    index: Decimal
+
+    @field_serializer("index")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+
+class BenchmarkOut(BaseModel):
+    """Seria porównawcza w `GET /performance?benchmark=` (krok 42).
+
+    `approximate=true` + `note` dla WIG20: liczone z ETF-a `ETFBW20TR`, bo
+    sam indeks nie ma dostępnego źródła historii (decyzja 8 planu etapu 8).
+    UI ma to pokazać, nie ukryć.
+
+    `unavailable_reason` niepuste ⇒ `points` puste. Powód jest po polsku
+    i wprost do wyświetlenia — wykres bez linii i bez wyjaśnienia wygląda
+    jak awaria.
+    """
+
+    key: str
+    symbol: str
+    label: str
+    currency: str
+    approximate: bool
+    note: str | None
+    unavailable_reason: str | None
+    points: list[BenchmarkPointOut]
+
+
 class PerformancePointOut(BaseModel):
     """Punkt serii wyników (`GET /performance`, plan krok 40).
 
@@ -161,6 +200,7 @@ class PerformanceOut(BaseModel):
     skipped_composition_change: int
     skipped_zero_base: int
     points: list[PerformancePointOut]
+    benchmark: BenchmarkOut | None
 
     @field_serializer("period_return")
     def _ser_optional(self, v: Decimal | None) -> str | None:

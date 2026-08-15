@@ -117,6 +117,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from datetime import date as date_
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
@@ -124,6 +125,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_key, get_cached_json, set_cached_json
+from app.modules.analytics.benchmark import Quote, benchmark_index
 from app.modules.analytics.returns import ValuationPoint, chain_index, period_return
 from app.modules.marketdata import repository as marketdata_repository
 from app.modules.marketdata.models import Asset, Price
@@ -720,6 +722,7 @@ class Performance:
     skipped_composition_change: int
     skipped_zero_base: int
     points: list[PerformancePoint]
+    benchmark: BenchmarkSeries | None
 
 
 def _performance_to_json(result: Performance) -> str:
@@ -741,6 +744,7 @@ def _performance_to_json(result: Performance) -> str:
                 }
                 for p in result.points
             ],
+            "benchmark": _benchmark_to_json(result.benchmark),
         }
     )
 
@@ -764,10 +768,13 @@ def _performance_from_json(raw: str) -> Performance:
             )
             for p in data["points"]
         ],
+        benchmark=_benchmark_from_json(data["benchmark"]),
     )
 
 
-async def performance(db: AsyncSession, portfolio: Portfolio, *, range_: str) -> Performance:
+async def performance(
+    db: AsyncSession, portfolio: Portfolio, *, range_: str, benchmark: str | None = None
+) -> Performance:
     """`GET /portfolios/{portfolio_id}/performance?range=` — orkiestracja I/O
     wokół czystego `analytics.returns` (plan krok 40, ADR-101).
 
@@ -782,12 +789,19 @@ async def performance(db: AsyncSession, portfolio: Portfolio, *, range_: str) ->
     założony wczoraj nie ma zwrotu równego zeru — on go po prostu nie ma,
     i UI musi móc te przypadki rozróżnić (CLAUDE.md #3.15).
     """
+    spec = BENCHMARKS[benchmark] if benchmark is not None else None
     key = cache_key(
         "performance",
         portfolio.id,
         portfolio.holdings_version,
         await portfolio_repository.valuations_marker(db, portfolio.id),
         range_,
+        # Benchmark ma WŁASNY segment świeżości: jego notowania przychodzą
+        # z ingestii rynkowej, nie ze snapshotów portfela, więc
+        # `valuations_marker` nie drgnie, gdy dojdzie nowe notowanie
+        # `^GSPC`. Bez tego wykres z benchmarkiem zamarzałby na TTL.
+        spec.key if spec is not None else "none",
+        await _benchmark_marker(db, spec),
     )
     cached = await get_cached_json(key)
     if cached is not None:
@@ -821,7 +835,203 @@ async def performance(db: AsyncSession, portfolio: Portfolio, *, range_: str) ->
             )
             for p in index
         ],
+        benchmark=(
+            await _benchmark_series(db, spec, [p.date for p in points])
+            if spec is not None
+            else None
+        ),
     )
 
     await set_cached_json(key, _performance_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
     return result
+
+
+# --- benchmark (plan krok 42, etap 8) --------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkSpec:
+    """Definicja jednego benchmarku: co użytkownik wybiera (`key`) vs czym to
+    jest faktycznie liczone (`symbol`).
+
+    Rozdzielone, bo dla GPW to NIE jest to samo. WIG20 nie ma dziś żadnego
+    darmowego źródła historii (Stooq oddaje stronę anty-bot, yfinance jeden
+    punkt — diagnoza w kroku zerowym etapu 8), więc decyzją 8 planu
+    benchmarkiem GPW jest ETF `ETFBW20TR`. Użytkownik nadal wybiera „WIG20",
+    bo o to pyta, ale odpowiedź musi powiedzieć, czym to policzono
+    (CLAUDE.md #3.15 — przybliżenia oznaczamy).
+    """
+
+    key: str
+    symbol: str
+    label: str
+    approximate: bool
+    note: str | None
+
+
+BENCHMARKS: dict[str, BenchmarkSpec] = {
+    "WIG20": BenchmarkSpec(
+        key="WIG20",
+        symbol="ETFBW20TR",
+        label="WIG20 (przez Beta ETF WIG20TR)",
+        approximate=True,
+        note=(
+            "Liczone z ETF-a Beta WIG20TR, bo sam indeks WIG20 nie ma dostępnego źródła "
+            "historii. ETF śledzi WIG20 Total Return (z dywidendami), dochodzi błąd "
+            "odwzorowania i opłata za zarządzanie ok. 0,5% rocznie."
+        ),
+    ),
+    "^GSPC": BenchmarkSpec(
+        key="^GSPC", symbol="^GSPC", label="S&P 500", approximate=False, note=None
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkSeriesPoint:
+    date: date
+    as_of: date_
+    index: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkSeries:
+    """Seria benchmarku obok serii portfela — albo powód, dla którego jej nie
+    ma. `unavailable_reason` niepuste ⇒ `points` puste."""
+
+    key: str
+    symbol: str
+    label: str
+    currency: str
+    approximate: bool
+    note: str | None
+    unavailable_reason: str | None
+    points: list[BenchmarkSeriesPoint]
+
+
+def _benchmark_to_json(series: BenchmarkSeries | None) -> Any:
+    if series is None:
+        return None
+    return {
+        "key": series.key,
+        "symbol": series.symbol,
+        "label": series.label,
+        "currency": series.currency,
+        "approximate": series.approximate,
+        "note": series.note,
+        "unavailable_reason": series.unavailable_reason,
+        "points": [
+            {"date": p.date.isoformat(), "as_of": p.as_of.isoformat(), "index": str(p.index)}
+            for p in series.points
+        ],
+    }
+
+
+def _benchmark_from_json(raw: Any) -> BenchmarkSeries | None:
+    if raw is None:
+        return None
+    return BenchmarkSeries(
+        key=raw["key"],
+        symbol=raw["symbol"],
+        label=raw["label"],
+        currency=raw["currency"],
+        approximate=raw["approximate"],
+        note=raw["note"],
+        unavailable_reason=raw["unavailable_reason"],
+        points=[
+            BenchmarkSeriesPoint(
+                date=date.fromisoformat(p["date"]),
+                as_of=date.fromisoformat(p["as_of"]),
+                index=Decimal(p["index"]),
+            )
+            for p in raw["points"]
+        ],
+    )
+
+
+async def _benchmark_marker(db: AsyncSession, spec: BenchmarkSpec | None) -> str:
+    """Segment świeżości klucza cache dla serii benchmarku — `MAX(prices.date)`
+    aktywa benchmarku (`"none"` bez benchmarku albo bez notowań).
+
+    Osobny od `valuations_marker`, bo to dwa niezależne źródła: snapshoty
+    portfela przyrastają z joba wyceny, notowania benchmarku z ingestii
+    rynkowej. Portfel bez ruchu i świeże notowanie `^GSPC` to sytuacja
+    codzienna — na wspólnym markerze wykres stałby do wygaśnięcia TTL.
+    """
+    if spec is None:
+        return _EOD_MARKER_NONE
+    asset = await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
+    if asset is None:
+        return _EOD_MARKER_NONE
+    latest = await marketdata_repository.get_latest_price_date_for_assets(db, [asset.id])
+    return latest.isoformat() if latest is not None else _EOD_MARKER_NONE
+
+
+def _unavailable(spec: BenchmarkSpec, currency: str, reason: str) -> BenchmarkSeries:
+    return BenchmarkSeries(
+        key=spec.key,
+        symbol=spec.symbol,
+        label=spec.label,
+        currency=currency,
+        approximate=spec.approximate,
+        note=spec.note,
+        unavailable_reason=reason,
+        points=[],
+    )
+
+
+async def _benchmark_series(
+    db: AsyncSession, spec: BenchmarkSpec, dates: list[date]
+) -> BenchmarkSeries:
+    """Seria benchmarku wyrównana do `dates` (daty snapshotów portfela).
+
+    Dwa zapytania niezależnie od długości okna (`list_*_with_carry`), całe
+    wyrównanie robi czysty `analytics.benchmark`. Każda ścieżka „nie da się"
+    kończy się `unavailable_reason` po polsku, nie pustą serią bez wyjaśnienia
+    — wykres bez linii i bez powodu wygląda jak awaria (CLAUDE.md #3.15).
+    """
+    asset = await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
+    if asset is None:
+        return _unavailable(
+            spec, "", f"Brak aktywa {spec.symbol} w słowniku — uruchom `make seed`."
+        )
+    if not dates:
+        return _unavailable(spec, asset.currency, "Portfel nie ma jeszcze historii wyceny.")
+
+    start, end = dates[0], dates[-1]
+    prices = await marketdata_repository.list_prices_with_carry(db, asset.id, start=start, end=end)
+    quotes = [Quote(date=p.date, value=p.close_adj) for p in prices]
+
+    fx_quotes: list[Quote] | None = None
+    if asset.currency != "PLN":
+        # Decyzja 4 planu etapu 8 — benchmark przeliczany na PLN kursem NBP,
+        # tak samo jak wycena portfela (CLAUDE.md #3.5).
+        rates = await marketdata_repository.list_fx_rates_with_carry(
+            db, asset.currency, start=start, end=end
+        )
+        fx_quotes = [Quote(date=r.date, value=r.rate_pln) for r in rates]
+
+    points = benchmark_index(dates, quotes, fx_quotes)
+    if not points:
+        return _unavailable(
+            spec,
+            asset.currency,
+            (
+                f"Brak notowań {spec.symbol} na dzień {start.isoformat()} lub wcześniej — "
+                "nie ma wspólnego punktu odniesienia dla obu serii."
+            ),
+        )
+
+    return BenchmarkSeries(
+        key=spec.key,
+        symbol=spec.symbol,
+        label=spec.label,
+        currency=asset.currency,
+        approximate=spec.approximate,
+        note=spec.note,
+        unavailable_reason=None,
+        points=[
+            BenchmarkSeriesPoint(date=p.date, as_of=p.as_of, index=_quantize_index(p.index))
+            for p in points
+        ],
+    )

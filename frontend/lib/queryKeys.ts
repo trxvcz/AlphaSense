@@ -20,6 +20,11 @@ export const qk = {
   allocation: (portfolioId: string, by: AllocationDimension) =>
     ["allocation", portfolioId, by] as const,
   concentration: (portfolioId: string) => ["concentration", portfolioId] as const,
+  // `range` i `benchmark` są CZĘŚCIĄ klucza: obie zawężają/rozszerzają zasób
+  // po stronie API (inne okno, druga seria), więc odpowiedzi nie są
+  // wymienne. Ta sama zasada co przy `news` niżej.
+  performance: (portfolioId: string, range: string, benchmark: string | null) =>
+    ["performance", portfolioId, range, benchmark ?? "none"] as const,
   markets: (portfolioId: string) => ["markets", portfolioId] as const,
   // `withSentimentOnly` jest CZĘŚCIĄ klucza, nie parametrem odczytu: filtr
   // zawęża zbiór po stronie API, więc odpowiedzi z `true` i `false` to dwa

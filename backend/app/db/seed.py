@@ -281,6 +281,16 @@ SOURCE_MAPS: tuple[SourceMapSeed, ...] = (
     SourceMapSeed("AAPL", "US", "finnhub", "AAPL", 2),
     SourceMapSeed("MSFT", "US", "yfinance", "MSFT", 1),
     SourceMapSeed("MSFT", "US", "finnhub", "MSFT", 2),
+    # `alphavantage` dopisane przy kroku 46 (newsy z sentymentem). Te wiersze
+    # NIE biorą udziału w łańcuchu cenowym: `ingest_market` idzie od listy
+    # obiektów-dostawców do mapowania (`get_provider_symbol`), a dostawcy
+    # OHLCV o nazwie `alphavantage` nie ma — brak mapowania pomija dostawcę,
+    # nadmiarowe mapowanie nie tworzy dostawcy. `priority` jest tu więc
+    # wypełnieniem kolumny, nie miejscem w kolejce fallbacku. Job newsowy
+    # czyta te wiersze przez `news/repository.list_provider_symbols`,
+    # dokładnie tak samo jak `finnhub` wyżej.
+    SourceMapSeed("AAPL", "US", "alphavantage", "AAPL", 3),
+    SourceMapSeed("MSFT", "US", "alphavantage", "MSFT", 3),
     # inne indeksy zagraniczne (tylko yfinance — jeden dostawca w łańcuchu
     # dla tych rynków, `finnhub` w łańcuchu wyłącznie dla akcji AAPL/MSFT)
     SourceMapSeed("^GDAXI", "XETRA", "yfinance", "^GDAXI", 1),

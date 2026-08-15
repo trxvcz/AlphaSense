@@ -24,6 +24,8 @@ from app.modules.analytics import service
 from app.modules.analytics.schemas import (
     AllocationBucketOut,
     AllocationOut,
+    BenchmarkOut,
+    BenchmarkPointOut,
     ConcentrationOut,
     IndexChangeOut,
     MarketIndexOut,
@@ -35,6 +37,24 @@ from app.modules.marketdata.schemas import PricePointOut
 from app.modules.portfolio.routes import ValuationRangeParam
 
 router = APIRouter(tags=["analytics"])
+
+
+class BenchmarkParam(StrEnum):
+    """`?benchmark=` w `GET /performance` (krok 42).
+
+    Wartości są KLUCZAMI z `service.BENCHMARKS`, nie symbolami aktywów:
+    użytkownik wybiera „WIG20", a liczone jest to z ETF-a `ETFBW20TR`
+    (decyzja 8 planu etapu 8 — WIG20 nie ma dostępnego źródła historii).
+    Odpowiedź niesie `symbol`, `approximate` i `note`, więc podmiana jest
+    jawna, nie ukryta (CLAUDE.md #3.15).
+
+    Zamknięty enum, nie dowolny symbol: `?benchmark=` z otwartą dziedziną
+    byłby obietnicą, że każde aktywo ze słownika ma historię nadającą się
+    na benchmark, a nie ma (`WIG20` w bazie dev ma trzy notowania).
+    """
+
+    WIG20 = "WIG20"
+    SP500 = "^GSPC"
 
 
 class AllocationDimensionParam(StrEnum):
@@ -55,9 +75,13 @@ async def get_performance(
     portfolio: PortfolioDep,
     db: DbSession,
     range_: Annotated[ValuationRangeParam, Query(alias="range")] = ValuationRangeParam.MAX,
+    benchmark: Annotated[BenchmarkParam | None, Query()] = None,
 ) -> PerformanceOut:
     """Zwrot za okres i seria indeksu łańcuchowego ze snapshotów (krok 40,
     ADR-101). Dni zmiany składu zrywają ogniwo — patrz `analytics.returns`.
+
+    `benchmark` (krok 42) dokłada drugą serię znormalizowaną do 100 w tym
+    samym dniu co portfel, przeliczoną na PLN kursem NBP (decyzja 4 planu).
 
     `range` reużywa `ValuationRangeParam` z `portfolio.routes` zamiast
     definiować drugi enum o tych samych wartościach: obie trasy schodzą do
@@ -66,7 +90,12 @@ async def get_performance(
     tworzy cyklu (`portfolio.routes` nie zna `analytics`) i niczego nie
     rejestruje — routery wpina jawnie `app/main.py`.
     """
-    result = await service.performance(db, portfolio, range_=range_.value)
+    result = await service.performance(
+        db,
+        portfolio,
+        range_=range_.value,
+        benchmark=None if benchmark is None else benchmark.value,
+    )
     return PerformanceOut(
         range=result.range,
         period_return=result.period_return,
@@ -79,6 +108,23 @@ async def get_performance(
             PerformancePointOut(date=p.date, value_pln=p.value_pln, ret=p.ret, index=p.index)
             for p in result.points
         ],
+        benchmark=(
+            None
+            if result.benchmark is None
+            else BenchmarkOut(
+                key=result.benchmark.key,
+                symbol=result.benchmark.symbol,
+                label=result.benchmark.label,
+                currency=result.benchmark.currency,
+                approximate=result.benchmark.approximate,
+                note=result.benchmark.note,
+                unavailable_reason=result.benchmark.unavailable_reason,
+                points=[
+                    BenchmarkPointOut(date=p.date, as_of=p.as_of, index=p.index)
+                    for p in result.benchmark.points
+                ],
+            )
+        ),
     )
 
 

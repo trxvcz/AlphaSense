@@ -45,10 +45,8 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| GET | `/portfolios/{portfolio_id}/performance?range=1M\|3M\|1Y\|YTD\|max` | zwrot za okres + seria indeksu łańcuchowego (krok 40, cache Redis) |
+| GET | `/portfolios/{portfolio_id}/performance?range=1M\|3M\|1Y\|YTD\|max&benchmark=WIG20\|^GSPC` | zwrot za okres + seria indeksu łańcuchowego + opcjonalna seria porównawcza (kroki 40 i 42, cache Redis) |
 | GET | `/portfolios/{portfolio_id}/risk?range=&benchmark=` | zmienność, Sharpe, drawdown, beta (krok 41 — **jeszcze nie ma**) |
-
-`?benchmark=` w `/performance` dochodzi w kroku 42, razem z drugą serią znormalizowaną do 100.
 
 ```jsonc
 // GET /portfolios/{id}/performance?range=1M  (etap 8, krok 40)
@@ -75,7 +73,40 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 **Przerwa w serii łączy łańcuch.** Weekend, święto i dzień bez przebiegu workera wyglądają w tabeli tak samo — jako brak wiersza. Zrywanie przy każdej przerwie zaniżałoby zwrot bez ostrzeżenia, dlatego przerwa łączy, a `links` mówi, ile ogniw faktycznie weszło do iloczynu: „zwrot za 1Y z 40 ogniw" ma wyglądać inaczej niż ten sam zwrot z 250.
 
-**`index` (baza 100 w pierwszym punkcie) to seria dla wykresu, nie `value_pln`.** Ta sama seria jest podstawą drawdownu w kroku 41 i porównania z benchmarkiem w kroku 42.
+**`index` (baza 100 w pierwszym punkcie) to seria dla wykresu, nie `value_pln`.** Ta sama seria jest podstawą drawdownu w kroku 41 i porównania z benchmarkiem.
+
+### `?benchmark=` (krok 42)
+
+Bez parametru `benchmark` w odpowiedzi jest `null`. Z parametrem dochodzi druga seria, znormalizowana do 100 **w tym samym dniu co portfel** (pierwsza data okna), przeliczona na PLN kursem NBP.
+
+```jsonc
+// GET /portfolios/{id}/performance?range=1Y&benchmark=WIG20
+{
+  // … pola jak wyżej …
+  "benchmark": {
+    "key": "WIG20",             // o co pytał użytkownik
+    "symbol": "ETFBW20TR",      // czym to faktycznie policzono
+    "label": "WIG20 (przez Beta ETF WIG20TR)",
+    "currency": "PLN",
+    "approximate": true,
+    "note": "Liczone z ETF-a Beta WIG20TR, bo sam indeks WIG20 nie ma dostępnego źródła historii. …",
+    "unavailable_reason": null, // niepuste ⇒ points puste
+    "points": [
+      { "date": "2025-08-12", "as_of": "2025-08-12", "index": "100.0000" },
+      // `as_of` wcześniejsze niż `date` = giełda była zamknięta, wartość niesiona z poprzedniej sesji
+      { "date": "2025-08-15", "as_of": "2025-08-14", "index": "101.2300" }
+    ]
+  }
+}
+```
+
+**Dziedzina `?benchmark=` jest zamknięta** (`WIG20`, `^GSPC`) — 422 na cokolwiek innego. Otwarta dziedzina byłaby obietnicą, że każde aktywo ze słownika ma historię nadającą się na benchmark; nie ma (samo `WIG20` w `prices` ma trzy notowania).
+
+**`key` ≠ `symbol` dla GPW.** Użytkownik prosi o WIG20, liczy to ETF `ETFBW20TR` — indeks WIG20 nie ma dziś darmowego źródła historii (decyzja 8 planu etapu 8: Stooq oddaje stronę anty-bot, yfinance jeden punkt). ETF śledzi WIG20 **Total Return**, dochodzi błąd odwzorowania i opłata ok. 0,5% rocznie, stąd `approximate: true` i `note` — UI ma to pokazać, nie ukryć (CLAUDE.md #3.15).
+
+**Benchmark przeliczany na PLN** kursem NBP z reguły `max(date) <= D` (decyzja 4 planu etapu 8). Kurs jest częścią realnego wyniku inwestora — porównanie portfela w PLN z indeksem w USD mieszałoby dwie różne miary. Brak kursu w dniu startu ⇒ `unavailable_reason`, nie cichy mnożnik 1.
+
+**Wyrównanie kalendarzy.** Snapshoty portfela i sesje giełdy nie leżą na tych samych datach. Dla każdej daty portfela benchmark bierze ostatnie notowanie nie późniejsze niż ona (`as_of`) — nie interpoluje i nie przesuwa dat portfela. Brak notowania w dniu startu **lub wcześniej** ⇒ `unavailable_reason`: bez wspólnego punktu odniesienia obie linie startowałyby w różnych miejscach osi X.
 
 ## Newsy (Faza 3)
 
@@ -312,12 +343,14 @@ Lista `assets` jest **zawężona do aktywów pytającego portfela**. To wymóg i
 allocation:{portfolio_id}:{by}:{holdings_version}:{eod_marker}
 concentration:{portfolio_id}:{holdings_version}:{eod_marker}
 markets:{portfolio_id}:{holdings_version}:{eod_marker}
-performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}
+performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}:{benchmark}:{benchmark_marker}
 ```
 
 `holdings_version` to znacznik ostatniej zmiany składu portfela (`Portfolio.holdings_version`, bumpowany przy każdym CRUD `holdings`). `eod_marker` to `MAX(prices.date)` wśród aktywów **faktycznie trzymanych** w tym portfelu (`"none"`, jeśli portfel jest pusty albo żadne z jego aktywów nie ma jeszcze notowania) — zmienia się dopiero, gdy dla tego portfela realnie przyjdą nowe dane EOD, nie o północy jak `today()`. TTL: 6 godzin (Redis nie puchnie starymi kluczami; dane EOD i tak nie zmieniają się śróddziennie).
 
 `GET /performance` (krok 40) używa **innego markera**: `valuations_marker` = `MAX(date)` i `COUNT(*)` w `portfolio_valuations` tego portfela (`"none"` przy braku historii). Sam `MAX(date)` by tu nie wystarczył — inaczej niż ceny, snapshoty przybywają też **wstecz** (`seed-history` z kroku zerowego etapu 8 dopisuje pełne lata historii, nie ruszając maksimum), a wtedy klucz oparty na samym maksimum dałby trafienie w cache ze zwrotem policzonym z krótszej serii.
+
+`benchmark_marker` (krok 42) to `MAX(prices.date)` aktywa benchmarku, **osobny** od `valuations_marker`: notowania benchmarku przychodzą z ingestii rynkowej, a snapshoty portfela z joba wyceny. Portfel bez ruchu i świeże notowanie `^GSPC` to sytuacja codzienna — na wspólnym markerze linia benchmarku stałaby do wygaśnięcia TTL.
 
 Redis można wyczyścić w każdej chwili — awaria/brak Redisa nie zwraca błędu, endpoint liczy wynik na żywo (wolniej, nie: `500`).
 
