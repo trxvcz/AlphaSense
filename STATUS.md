@@ -3,14 +3,20 @@
 > **Claude Code: czytaj ten plik na starcie każdej sesji i aktualizuj na końcu każdego zadania.**
 > Jedno źródło prawdy o postępie. Numery kroków = `docs/plan-dzialania-portfel-v2.md`.
 
-**Aktualny etap:** 7 — Wdrożenie produkcyjne **ZAMKNIĘTY 2026-08-10. FAZA 1 ZAKOŃCZONA.**
+**Aktualny etap:** 8 i 9 prowadzone **równolegle** — Faza 1 (etapy 0–7) zamknięta 2026-08-10.
 `https://alphasense.cedron.net.pl` działa na produkcyjnym certyfikacie Let's Encrypt, `/api/health`
 zwraca `ok` (db i redis `up`, wersja `fd4946f`), a smoke test Fazy 1 przechodzi na żywej produkcji
 w obu projektach (375 px i desktop) z niezerową wyceną portfela. Wdrożenie idzie z CI po pushu na `main`.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
-**Następny ruch:** etap 8 (metryki i ryzyko, Faza 2) — plan uzgodniony 2026-08-06, sekcja
-„Plan etapu 8" niżej, warunek startu (domknięty etap 7) właśnie spełniony.
-**Ostatnia aktualizacja:** 2026-08-10
+**Zrobione i zacommitowane 2026-08-15:** krok 40 (`25d87ad`), krok 46 (`aa97b8a`), krok 42 (`6db8138`).
+**Następny ruch:** naprawa **dwóch blokujących z code-review kroku 46** (XSS na `href` newsa,
+gubiony sentyment przy dedupe) — **przed pushem na `main`**, bo push wyzwala wdrożenie.
+Potem etap 9, **krok 47** (kalendarz dywidend); kolejność `47 → 48 → 49 → 50`,
+tryb „krok po kroku" z code-review po każdym.
+**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 41, 43, 44, 45
+nie zaczęte. Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
+w sekcji „Plan etapu 9", decyzja 1.
+**Ostatnia aktualizacja:** 2026-08-15
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -25,8 +31,8 @@ Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
-| 8 | Metryki i ryzyko (Faza 2) | ⚪ zaplanowany 2026-08-06, start po etapie 7 |
-| 9 | Otoczka (Faza 3) | ⚪ |
+| 8 | Metryki i ryzyko (Faza 2) | 🟡 krok zerowy domknięty, 40 i 42 zrobione; 41, 43, 44, 45 nie zaczęte |
+| 9 | Otoczka (Faza 3) | 🟡 w realizacji — krok 46 zrobiony, dwa blokujące z recenzji do naprawy; następny 47 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
@@ -72,13 +78,13 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 37 Sentry + /health + alerty
 [x] 38 Backup pg_dump (skrypty + cron + test odtworzenia; bucket do założenia po Twojej stronie)
 [x] 39 Smoke test 375px + desktop (`make smoke`; przeszedł na produkcji 2026-08-10, 2 passed)  ← KONIEC FAZY 1
-[ ] 40 Zwroty dzienne (bez dni composition_change)
+[x] 40 Zwroty dzienne (bez dni composition_change) — `25d87ad`, 2026-08-12
 [ ] 41 Ryzyko: zmienność, Sharpe, drawdown, beta
-[ ] 42 Benchmark (WIG20, S&P 500)
+[x] 42 Benchmark (WIG20 przez ETFBW20TR, ^GSPC) — `6db8138`, 2026-08-15
 [ ] 43 Watchlisty i tagi
 [ ] 44 RLS w Postgres (domknięcie ADR-002)
 [ ] 45 Wykresy świecowe
-[ ] 46 Newsy (RSS + Finnhub)
+[x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a`, 2026-08-15; 2 blokujące z recenzji otwarte
 [ ] 47 Kalendarz dywidend
 [ ] 48 Import CSV listy pozycji (opcjonalnie)
 [ ] 49 PWA: Serwist, manifest, IndexedDB
@@ -882,6 +888,581 @@ miesięcy widzisz zwrot za okres liczony z pominięciem dni zmiany składu, zmie
 max drawdown i betę (albo jawny komunikat o zbyt krótkiej próbie), wykres underwater, heatmapę
 miesięczną oraz przebieg portfela na tle WIG20 lub S&P 500 znormalizowany do 100 (obie serie
 w PLN). `make check` zielony, `docker compose up` wstaje.
+
+## Plan etapu 9 — otoczka (uzgodniony 2026-08-10, przed rozpoczęciem)
+
+Etap zaplanowany na sesji 2026-08-10 (`/etap 9`). Kroki 46-50, Faza 3.
+
+**Etap 8 świadomie zostaje niedomknięty.** Krok zerowy ma kod bez testów, kroki 40-45 nie są
+zaczęte. Użytkownik zdecydował o starcie etapu 9 mimo tego (decyzja 1 poniżej) — to odstępstwo
+od CLAUDE.md §5, zapisane tu jawnie, żeby nie wyglądało na przeoczenie.
+
+**Decyzje użytkownika podjęte przy planowaniu:**
+
+1. **Etap 9 teraz, etap 8 później.** Konsekwencja przyjęta świadomie: krok 46 w planie mówi
+   „tagowanie po tickerach z portfela **i watchlist**", a watchlisty to krok 43, którego nie ma.
+   Newsy będą wiązane wyłącznie z tickerami z portfela. `news_assets` projektowane tak, żeby
+   dołożenie watchlist było zmianą w jednym zapytaniu, nie migracją.
+2. **Krok 48 (import CSV) wchodzi do zakresu, z ceną nabycia jako notatką.** Kolumna
+   `holdings.acquisition_price_note NUMERIC(20,8) NULL` — wyświetlana, **nigdy nie wchodząca
+   do żadnego obliczenia**. Napięcie z §12 („nie dodawaj pól transakcyjnych na zapas") nazwane
+   przy podejmowaniu decyzji: liczba bez waluty i daty nabycia nie policzy P/L, a wygląda,
+   jakby miała. Ograniczenie do opisania w UI i w `docs/model-danych.md`.
+3. **Push (krok 50) wyzwalają trzy zdarzenia:** dane nieświeże, duża zmiana wartości portfela,
+   zbliżająca się ex-data dywidendy.
+4. **Zależności zewnętrzne zatwierdzone w komplecie (§10):** `feedparser`, `pywebpush` (backend),
+   `@serwist/next`, `idb-keyval`, `next-intl` (frontend). i18n z kroku 50 zostaje w zakresie.
+5. **Tryb pracy: krok po kroku** — code-review po każdym z pięciu kroków, nie partiami.
+
+**Kolejność wymuszona zależnościami: 46 → 47 → 48 → 49 → 50.**
+47 przed 50 (push o ex-dacie potrzebuje kalendarza dywidend), 49 przed 50 (Web Push wymaga
+zarejestrowanego service workera).
+
+**Uwaga do kroku 50 — próg zmiany wartości wchodzi w logikę kroku 40.** Surowa różnica
+`value_pln` d/d skłamie: dokupienie pozycji wygląda jak kilkudziesięcioprocentowy zysk dzienny
+(ADR-101 — dokładnie ten problem, dla którego istnieje krok 40). Implementacja: delta d/d
+**z pominięciem dni `composition_change=true`**, wydzielona tak, żeby krok 40 ją wchłonął,
+a nie zduplikował. Próg konfigurowalny, domyślnie ±3%.
+
+**Uwaga do kroku 46 — sentyment nie ma darmowego źródła dla polskich newsów.** RSS Bankiera,
+Money i StockWatch sentymentu nie niesie; Finnhub `/news-sentiment` pokrywa spółki US i jest
+płatny na wielu planach; Alpha Vantage `NEWS_SENTIMENT` to 25 zapytań/dobę i też głównie US.
+Przyjęte rozwiązanie: sentyment wyłącznie tam, gdzie dostawca go daje, reszta `null`
+**jawnie oznaczona** (zasada #15). Klasyfikator AI jest poza v2 (§13, Etap 19 planu v3).
+
+**Stan wyjściowy (zweryfikowany 2026-08-10):** `backend/app/modules/news/routes.py` to pusty
+router z komentarzem „Faza 3", bez endpointów. Tabele `news`, `news_assets`, `dividend_events`
+figurują w `docs/model-danych.md:30-31` jako „Faza 3" **bez zdefiniowanych kolumn** — schemat
+do zaprojektowania. `FinnhubProvider` ma zahardkodowany URL świec (`finnhub.py:44`) i umie
+wyłącznie `get_ohlcv`/`get_fx`/`get_metadata` — newsy i dywidendy wymagają rozdzielenia
+bazowego URL, nie samego dopisania metody. `frontend/public/` jest **pusty i nietrackowany**
+(`frontend/Dockerfile` ma obejście `RUN mkdir -p public` z kroku 36 — krok 49 je znosi).
+Kluczy VAPID nie ma w `.env.example`.
+
+**Kryterium ukończenia etapu 9:** na telefonie, na `https://alphasense.cedron.net.pl` aplikacja
+instaluje się na ekranie głównym i **otwiera się bez sieci**, z banerem „dane z {data}". Feed
+pokazuje newsy powiązane z tickerami z portfela, z jawnie oznaczonym lub jawnie brakującym
+sentymentem. Kalendarz pokazuje najbliższe ex-daty dla pozycji zagranicznych i wprost mówi,
+że GPW nie jest pokryta. Zgoda na powiadomienia kończy się realnie dostarczonym pushem.
+`make check` zielony, migracje w tych samych commitach co modele, każdy nowy endpoint
+z testem izolacji dwóch użytkowników.
+
+**Ryzyka do pilnowania przy realizacji:**
+- Service worker na produkcji cache'uje agresywnie — błędny SW potrafi zablokować użytkownikom
+  aktualizację aplikacji. Potrzebna strategia wersjonowania i ścieżka wyjścia.
+- Kalendarz dywidend będzie miał widoczną dziurę dokładnie na GPW — rynku z największą liczbą
+  pozycji. Oznaczenie braku pokrycia jest częścią zakresu, nie dodatkiem.
+- Deduplikacja newsów: ta sama depesza z kilku feedów. `url UNIQUE` nie wystarczy, stąd
+  `content_hash`.
+- Pełzanie zakresu ku transakcjom przez `acquisition_price_note` (decyzja 2) — `/kontrola-zakresu`
+  po kroku 48.
+
+### Krok zerowy — `prices.source` (migracja `926b382d1715`, 2026-08-10)
+
+Odpowiedź na **blokujące znalezisko #1 z code-review kroku zerowego**: łańcuch fallbacku
+rozstrzyga się per zapytanie, a konwencje `close_adj` są niekompatybilne — yfinance oddaje
+cenę skorygowaną o dywidendy i splity, Stooq/Finnhub/Binance wpisują `close_adj := close`.
+Jedna seria potrafi więc wymieszać obie konwencje i wyprodukować na styku skok rzędu
+kilkunastu procent, **niewidoczny w surowym `close`** — czyli heurystyka splitu z kroku 28
+(`detect_price_jump`) go nie złapie, a kroki 40-42 policzyłyby go jako realny zwrot,
+zmienność i drawdown. Zmierzone na żywym yfinance: `PKN.WA` ma różnicę `close` vs `Adj Close`
+w 1212 z 1250 sesji, do 25,62 PLN.
+
+Kolumna `prices.source` (VARCHAR, nullable) zapisuje dostawcę **tego** wiersza.
+`upsert_prices(..., source=)` ustawia ją także w gałęzi `ON CONFLICT DO UPDATE` — inaczej
+seria po przełączeniu dostawcy twierdziłaby, że pochodzi z yfinance, niosąc wartości w
+konwencji Stooqa, i kolumna maskowałaby dokładnie to, co ma wykrywać. Wypełnia ją
+`_ingest_asset_ohlcv`, jedyne miejsce znające zwycięzcę łańcucha; korzysta z tego także
+`backfill_prices`, bo idzie tą samą ścieżką.
+
+**Istniejące wiersze zostają z `NULL` i nie są zgadywane wstecz.** Priorytety dostawców
+zmieniały się w czasie (Stooq bywał niedostępny i backfill schodził na yfinance), więc
+wpisanie „prawdopodobnego" dostawcy zamieniłoby brak wiedzy w fałszywą pewność — na kolumnie,
+której jedynym zadaniem jest tę pewność dawać. Praktyczna konsekwencja: **serie zaciągnięte
+przed tą migracją (`^GSPC` 1254, `ETFBW20TR` 1250, `CDR` 248) mają nieznane źródło i przed
+krokiem 40 wymagają kontroli spójności** — aktywo, dla którego jednocześnie
+`count(*) FILTER (WHERE close_adj = close) > 0` i `count(*) FILTER (WHERE close_adj <> close) > 0`,
+jest wymieszane i trzeba je zaciągnąć od nowa.
+
+Weryfikacja: `upgrade` → `downgrade -1` → `upgrade` na jednorazowej bazie `migtest` (nie na
+dev — patrz niżej), kolumna pojawia się i znika; `273 passed` w backendzie, `mypy` czysty
+(69 plików), `ruff` czysty na plikach tej zmiany. Dwa nowe testy w
+`tests/integration/test_marketdata_repository.py`: zapis `source` + domyślny `NULL` oraz
+nadpisanie `source` przy `ON CONFLICT`.
+
+**Reszta blokujących z code-review kroku zerowego NIE jest naprawiona** — licznik nadal mierzy
+stan bazy zamiast delty, `seed-history` nadal nie broni się przed dniami bez cen, testów
+`_date_chunks`/`backfill_prices`/guardu `ENV` nadal nie ma. Sama kolumna daje wykrywalność,
+nie naprawia serii już zapisanych.
+
+**Uwaga operacyjna:** ta zmiana powstawała równolegle z pracą nad etapem 9 w tym samym drzewie
+roboczym. Migracja newsów `6812ced23486` chainuje się na `926b382d1715` i obie były już
+zaaplikowane na bazie dev, gdy ta praca się kończyła — stąd round-trip testowany na osobnej
+bazie, żeby nie zdejmować cudzych tabel. Zmiany nie zostały zacommitowane: drzewo zawiera
+przemieszany dorobek dwóch sesji i rozdzielenie go na commity jest decyzją użytkownika.
+
+## Krok 46 — newsy (ZROBIONY 2026-08-11: backend, Finnhub, Alpha Vantage, frontend)
+
+**Co powstało:** `news`/`news_assets` + migracja `20260810_news_i_news_assets.py` (round-trip
+`upgrade → downgrade → upgrade` przetestowany, oba indeksy realnie `DESC` — sprawdzone
+w `pg_indexes`) · `modules/news/` (`models`, `matching`, `repository`, `service`, `schemas`,
+`routes`) · `modules/news/providers/` (`base` z `NewsProvider`/`GuardedNews`, `rss`) ·
+`worker/jobs/ingest_news.py` + rejestracja w `scheduler.py` (interwał 30 min) ·
+`tests/unit/test_news_matching.py` (22 testy) · `feedparser==6.0.11` · wpis w `api-kontrakt.md`
+i `model-danych.md`.
+
+**Osobny protokół `NewsProvider`, nie rozszerzenie `DataProvider`.** Tamten opisuje trzy
+operacje per symbol (OHLCV/FX/metadane); feed RSS nie przyjmuje symbolu i oddaje strumień
+wszystkiego. Dopisanie tam `get_news` zmusiłoby NBP, Stooq i Binance do implementowania metody,
+której nigdy nie wywołają. `GuardedNews` reużywa **te same** klasy `RateLimiter`
+i `CircuitBreaker` — powielona jest wyłącznie pętla delegująca (§4.3: bez refaktoru cudzego
+modułu przy okazji).
+
+**`GET /portfolios/{id}/news` — nie ma trasy „wszystkie newsy".** Powód produktowy (§1: ekran
+odpowiada na „co z moimi pozycjami", nie „co w gospodarce"), efekt uboczny bezpieczeństwowy:
+każda trasa newsowa przechodzi przez `get_owned_portfolio`. Parametryzowany test izolacji
+**sam wykrył nową trasę** i przeszedł (`['GET']:/api/portfolios/{portfolio_id}/news`) — dokładnie
+to, co obiecuje §3.10.
+
+### Trzy błędy, które wyszły dopiero na żywych feedach
+
+Żaden nie wyszedłby z testów jednostkowych ani z przeglądu kodu — wszystkie trzy to dopasowania,
+które wyglądały na działające, dopóki nie zobaczyło się, co realnie tagują.
+
+1. **`Złoto` → token `oto`.** `ł` nie jest literą bazową z diakrytykiem, więc `NFKD` jej nie
+   rozkłada, a `_tokenize` traktuje nierozpoznany znak jak separator: „złoto" rozpadało się na
+   „z" + „oto". `oto` jest pospolitym polskim słowem, więc XAU tagowało się do „**Oto** gdzie
+   szukać okazji". Naprawione jawną podmianą (`_NON_DECOMPOSABLE`) **przed** NFKD.
+2. **`NASDAQ 100` → token `100`.** Pasował do każdej setki w tekście — indeksy lądowały przy
+   wiadomości o oprocentowaniu konta i o tabletce na odchudzanie. Tokeny czysto liczbowe odrzucone.
+3. **`CD Projekt` → token `projekt`.** Nazwa spółki będąca pospolitym rzeczownikiem; CDR tagowało
+   się do „jest **projekt** ustawy o refundacji pomp insulinowych". Naprawione wymogiem **wielkiej
+   litery** dla tokenów nazwy — w polszczyźnie nazwa własna jest kapitalizowana, rzeczownik
+   pospolity w środku zdania nie. Pozostaje znana, świadomie przyjęta dziura: pierwszy wyraz
+   nagłówka jest kapitalizowany zawsze.
+
+Każdy z trzech ma test regresyjny. Po naprawach: 74 pobrane pozycje → 3 zapisane, 5 powiązań,
+**zero fałszywych trafień** (przed naprawami 8 powiązań, z czego 5 błędnych). Kierunek pomyłki
+jest świadomie zaniżający: news bez tagu nie pojawi się w feedzie, zamiast pojawić się przy złej
+spółce.
+
+### Znaleziska po stronie źródeł
+
+- **money.pl** oddaje `301` z `/rss/all.xml` na `/rss/rss.xml`, a `httpx` **domyślnie nie podąża
+  za przekierowaniami** — poprawny feed wyglądał jak padnięty. Stąd `build_rss_client()`
+  z `follow_redirects=True`.
+- **StockWatch** odrzuca żądanie bez `User-Agent` (403), a jego `/feed/` w ogóle nie jest feedem
+  — oddaje stronę HTML (wykryte przez kontrolę `bozo`, ta sama klasa co HTML ze Stooqa
+  w etapie 8). Działający adres to `https://www.stockwatch.pl/wiadomosci/feed/`.
+- Przedstawiamy się własnym `User-Agent` z adresem aplikacji, **nie** podszywamy się pod
+  przeglądarkę — wydawca ma móc nas zablokować celowo, jeśli sobie tego życzy.
+
+### Domknięcie kroku 46 — front, Finnhub i sentyment (2026-08-11)
+
+**Finnhub daje pewność powiązania, nie sentyment.** Sprawdzone realnym kluczem:
+`/news-sentiment` → `403 {"error":"You don't have access to this resource."}` na darmowym
+planie, `/company-news` działa. Wartością Finnhuba jest więc to, że **źródło samo wskazuje
+spółkę** — stąd kolumna `news_assets.match_confidence` (`source` vs `heuristic`) i migracja
+`20260810_news_assets_match_confidence.py`. Osobny `FinnhubNewsProvider`, nie metoda
+w `marketdata/providers/finnhub.py`: tamten implementuje `DataProvider` i ma zaszyty URL świec,
+więc dopisanie tam newsów byłoby refaktorem cudzego obszaru przy okazji (§4.3).
+
+**Sentyment: Alpha Vantage `NEWS_SENTIMENT`** (działa na darmowym planie — sprawdzone).
+Nowy `AlphaVantageNewsProvider` + `BatchNewsProvider` (jedno zapytanie na wiele tickerów)
++ **osobny job** `ingest_news_sentiment` co 120 min. Osobny, bo `ingest_news` chodzi co 30 min
+= 48 przebiegów, a darmowy plan AV to **25 zapytań na dobę** — wspólny harmonogram wyczerpałby
+budżet przed południem i dostawca zacząłby zwracać komunikat o limicie, czyli otwierałby
+bezpiecznik bez powodu. `?with_sentiment_only=true` przestał być filtrem, który zawsze zwraca
+pustą listę.
+
+**Próg trafności 0,9 dla Alpha Vantage — znalezione dopiero na żywych danych.**
+`ticker_sentiment` wymienia każdą wspomnianą spółkę i przy zapytaniu o konkretne tickery
+**zawyża im trafność**: artykuł „Apple Downgraded as Soaring Memory Costs Test iPhone Pricing
+Power" dostał MSFT z wynikiem 0,61. Pierwszy przebieg dał **100 powiązań z 50 artykułów**
+(każdy artykuł do obu spółek), choć tylko 6 z nich w ogóle wspominało Apple lub Microsoft
+w tytule. Zmierzone progi: 0,5 → 100 powiązań, 0,7 → 24, **0,9 → dokładnie te 6**. To nie było
+strojenie pod estetykę feedu: te powiązania zapisujemy jako `source`, czyli UI pokaże je jako
+fakt, a „wspomniano nazwę spółki" nie jest faktem „ten news dotyczy Twojej pozycji" (#3.15).
+
+**`overall_sentiment_score`, nie `ticker_sentiment_score`.** `news.sentiment` jest kolumną
+newsu, nie pary news–aktywo, więc ocena per spółka zależałaby od tego, o który symbol
+zapytaliśmy pierwsi (`ON CONFLICT DO NOTHING`) — cichy niedeterminizm. Ocena per spółka
+wymaga kolumny w `news_assets` i jest świadomie poza zakresem tego kroku.
+
+**Finnhub: okno 2 dni zamiast 7 w jobie cyklicznym.** Pierwszy przebieg dał 248 pozycji na
+symbol; przy jobie co 30 min siedmiodniowe okno to pobieranie w kółko tego samego.
+
+**Frontend** (`app/newsy/` + `app/portfolios/[id]/newsy/`, `components/news/NewsFeedPanel.tsx`,
+`lib/news.ts`): feed z filtrem sentymentu, znacznikami aktywów i notą o pozycjach bez newsów.
+`match_confidence` dojeżdża do UI **per aktywo** (`assets[]` w odpowiedzi, zawężone do aktywów
+pytającego portfela — wiersz `news` jest współdzielony, więc nieprzefiltrowana lista zdradzałaby
+cudze pozycje). Powiązanie zgadnięte ma przerywaną obwódkę i znak „?", nie sam kolor; brak oceny
+sentymentu napisany wprost („brak oceny wydźwięku"), bo puste miejsce wygląda jak ładowanie.
+Piąta pozycja nawigacji zmierzona zrzutem Playwrighta na 375 px — najdłuższa etykieta
+(„Struktura") dostaje 55 px i **nie jest przycięta**; szósta wymagałaby przebudowy paska.
+
+**Testy:** `tests/integration/test_news.py` (8, w tym dwóch użytkowników widzących **ten sam
+wiersz `news` z różnymi listami `assets`**) · `tests/unit/test_alphavantage_news_provider.py`
+(15) · `frontend/lib/news.test.ts` (14). Backend **332 passed**, ruff + mypy czyste,
+frontend lint + tsc + vitest + build zielone.
+
+### Code-review kroku 46 (2026-08-11) — znaleziska naprawione
+
+Dwa **blokujące**, oba realne:
+
+1. **`with_sentiment_only` filtrował PO `LIMIT`.** Zapytanie brało 50 najnowszych newsów, dopiero
+   potem odsiewało te bez oceny — więc portfel z przewagą GPW (same polskie feedy wśród
+   najnowszych) dostawał pustkę, choć ocenione newsy o spółkach zagranicznych leżały dzień
+   głębiej. UI mówił wtedy „żaden news o Twoich pozycjach nie ma oceny wydźwięku" — zdanie
+   **fałszywe**, którego użytkownik nie miał jak rozpoznać (#3.15). Zawężenie przeniesione do
+   zapytania; `limit` znowu znaczy „tyle pozycji". Test regresyjny: 5 świeżych bez oceny,
+   2 starsze z oceną, `limit=3` — stary kod zwracał 0 pozycji.
+2. **Niezmiennik „`source` nigdy nie schodzi do `heuristic`" nie miał testu.** Usunięcie klauzuli
+   `where` z `link_news_to_assets` przechodziło całą suitę, a w produkcji przy najbliższym
+   przebiegu RSS przeetykietowałoby każde powiązanie od dostawcy jako zgadywankę. Dwa testy
+   integracyjne na oba kierunki.
+
+Do poprawy, naprawione:
+
+- **`_store` gubił powiązanie przy konflikcie na `content_hash`** — czyli dokładnie w scenariuszu
+  „ta sama depesza pod innym adresem", dla którego ta ścieżka powstała. Dopisane
+  `get_news_id_by_content_hash`.
+- **Tickery z `^` nie dopasowywały się NIGDY.** `\b` przed `^` nie jest granicą słowa, więc nawet
+  dosłowne „^NDX" wracało z `findall` jako `NDX` i porównanie z `^NDX` dawało `False`. Indeksy
+  zagraniczne rozpoznawały się wyłącznie po członie nazwy. Stary test tego nie łapał, bo
+  „FTSE 100" trafiał tokenem nazwy, nie tickerem.
+- **SQL w warstwie serwisu** przeniesiony do repozytorium (§8), lokalny import usunięty.
+- **Brak nowych zmiennych w `.env.example` i `.env.prod.example`** (#3.9) — dopisane
+  `NEWS_RSS_FEEDS`, `NEWS_MAX_AGE_DAYS`, `RATE_LIMIT_RSS`, `RATE_LIMIT_ALPHAVANTAGE`.
+- Kolizja `provider_symbol` w Alpha Vantage (dwa aktywa, ten sam ticker) cicho gubiła jedno
+  aktywo w sposób zależny od kolejności wierszy — teraz `logger.warning`.
+- `counters.linked` → `upserted`: `RETURNING` po `DO UPDATE` liczy też podniesienia pewności,
+  więc nie była to liczba NOWYCH powiązań.
+- `isinstance(ts, (int, float))` przepuszczał `bool` (Finnhub); duplikacja `title` + `sr-only`
+  na znaczniku aktywa; komentarz uzasadniający `Number()` w `sentimentTone`.
+
+Świadomie **nie** naprawione (uzasadnienie, nie przeoczenie): jedna transakcja na cały przebieg
+joba oraz `ix_news_published_at_desc` bez dzisiejszego konsumenta — jedno i drugie to zmiany
+projektowe wykraczające poza krok 46.
+
+### Znane ograniczenie dopasowania — zmierzone, wymaga decyzji
+
+Po naprawach żywy przebieg dał **5 powiązań heurystycznych, z czego 2 błędne** (obie do `CDR`):
+depesza o fotoradarach i o dofinansowaniu Ryvu Therapeutics. Przyczyna to udokumentowana wcześniej
+dziura „pierwszy wyraz zdania jest kapitalizowany zawsze" — obie depesze mają w skrócie zdanie
+zaczynające się od „Projekt".
+
+Sedno problemu jest węższe: `CD Projekt SA` po odfiltrowaniu tokenów krótszych niż 3 znaki (`CD`)
+i stopwordów (`SA`) zostaje z **jednym** tokenem `projekt`, będącym pospolitym polskim
+rzeczownikiem. Dwuwyrazowa nazwa własna zamienia się w słowo generyczne.
+
+Propozycja do rozstrzygnięcia (nie wdrożona — zmienia semantykę dopasowania, więc poza kroku 46):
+zachować krótkie tokeny dla nazw wielowyrazowych i wymagać **kompletu** tokenów. `CD Projekt`
+wymagałoby wtedy `CD` **i** `Projekt`, co odcina oba fałszywe trafienia bez ruszania nazw
+jednowyrazowych (`Orlen`). Do czasu decyzji te powiązania są w UI jawnie oznaczone jako
+przybliżenie (przerywana obwódka + „?"), więc nie są przedstawiane jako fakt.
+
+### Zostaje po kroku 46
+
+- **Tagowanie po watchlistach** — czeka na krok 43 (decyzja 1 planu etapu 9).
+- **Sentyment per spółka** (`news_assets.sentiment`) — dziś ocena dotyczy całego artykułu.
+- **Pokrycie sentymentu tylko dla US** — mapowań `alphavantage` jest dwa (AAPL, MSFT);
+  polskie spółki nie mają i nie będą miały darmowego źródła oceny.
+
+### Krok zerowy — pozostałe blokujące z code-review naprawione (2026-08-10)
+
+Cztery blokujące znaleziska z recenzji kroku zerowego domknięte. Kolumna `prices.source`
+(sekcja wyżej) była pierwszym; tutaj reszta.
+
+**#1 dokończone — przypięcie dostawcy i wykrywanie wymieszanej konwencji.** Sama kolumna
+dawała wykrywalność, nie zapobieganie. Doszło `backfill-prices --provider yfinance`
+(`make backfill provider=yfinance`), które przypina wszystkie okna do jednego dostawcy —
+bez tego łańcuch rozstrzyga się per okno i potrafi zejść w połowie pięcioletniego backfillu
+na innego dostawcę. Doszło też `price_series_diagnostics` w repozytorium: liczy wiersze
+skorygowane (`close_adj <> close`) i nieskorygowane osobno, zbiera źródła, a `mixed_convention`
+zapala się, gdy jedno i drugie jest niezerowe. Backfill kończy się wtedy **kodem 1** i wypisuje,
+które serie zaciągnąć od nowa. Wiersze z `close IS NULL` (NBP, złoto) nie wpadają do żadnego
+licznika — nie da się o nich powiedzieć, czy są skorygowane, a wrzucenie ich do
+„nieskorygowanych" fałszowałoby obraz aktywów bez OHLC.
+
+**#2 — licznik mierzy deltę, nie stan bazy.** `backfill_prices` zwraca teraz listę
+`BackfillTarget` zamiast `dict[str, int]`: `rows_before`, `rows_after`, `windows_failed`,
+`windows_total`, `unavailable`, `diagnostics`. Raportowaną liczbą jest `rows_added`.
+Poprzednia wersja liczyła stan bazy, więc aktywo z 12 wierszami sprzed przebiegu pokazywało
+„12 notowań" także wtedy, gdy każde okno padło. **Cele z zerem wierszy nie znikają już
+z raportu** (`if rows:` usunięte) — przy dwudziestu aktywach raport z siedemnastoma pozycjami
+nie mówi, których trzech brakuje. `_run_backfill` zwraca 1, gdy **żaden** cel nie ma wierszy
+w bazie (nie „gdy nic nie przybyło" — powtórzony backfill na komplecie danych daje zerową
+deltę i jest sukcesem) oraz gdy wykryto wymieszaną konwencję.
+
+**#3 — `seed-history` broni dolnej granicy zakresu.** Nowe `held_asset_price_coverage`
+(`portfolio/repository.py`) liczy **maksimum z najwcześniejszych dat notowań per trzymane
+aktywo** — dopiero od tego dnia każda pozycja ma cenę. Start przed tym dniem albo aktywo bez
+ani jednej ceny → odmowa z kodem 2 i konkretną datą do podstawienia. Powód: silnik wyceny
+pomija pozycję bez ceny zamiast liczyć ją jako zero, więc wcześniejsze dni dają wyceny
+cząstkowe, nieodróżnialne potem od pełnych — seria zaczynałaby się blisko zera i skakała
+w miarę „pojawiania się" pozycji, dając krokowi 40 absurdalny zwrot, a krokowi 41 drawdown
+100%. `--allow-incomplete` dopuszcza to świadomie i dopisuje ostrzeżenie do wyniku.
+
+**#4 — testy.** 39 nowych: `tests/unit/test_backfill_chunks.py` (7 — granice okien NBP,
+komplet pokrycia, zakres odwrócony), `tests/integration/test_backfill_prices.py` (8 — delta
+licznika na aktywie z historią, cele bez danych w raporcie, porażka jednego celu nie zabija
+reszty, `unavailable` vs pustka, przypięcie dostawcy, wykrycie wymieszanej konwencji),
+`test_cli_seed_history.py` (8 — guardy `ENV`/zakresu/pokrycia sprawdzane **na wywołaniu
+`snapshot_portfolios`**, nie na kodzie wyjścia), `test_portfolio_repository_coverage.py` (4 —
+`first_full_date` jako maksimum z minimów), `test_seed_reference.py` (2 — idempotencja
+i regresja `GPW → WIG20`), plus 5 w `test_marketdata_repository.py` (granice `count_*_in_range`,
+diagnostyka konwencji).
+
+**Przy okazji, bo w tych samych funkcjach:** `date.today()` → `portfolio_service.today()`
+w CLI (konwencja repo — `date.today()` zależy od strefy serwera), guard `start > end`
+w `seed-history`, `to=` i `provider=` faktycznie przekazywane przez `Makefile` (`to=` było
+cicho ignorowane), przerwanie pętli okien po `ProviderUnavailableError` (presja na
+`CircuitBreaker` spada z 5N do N prób).
+
+**NIE naprawione** (świadomie, poza zakresem „blokujących"): fail-open blokady `ENV`, gdy
+zmienna nie jest ustawiona (#5); nadpisywanie istniejących snapshotów przez `seed-history`
+razem z flagami `composition_change` (#6); drobiazgi #11-#17 z recenzji.
+
+**Weryfikacja (powtórzona 2026-08-11):** `ruff`, `ruff format` i `mypy --strict` czyste **dla
+plików etapu 8** — błędy, które zgłaszają, siedzą wyłącznie w module `news` pisanym równolegle
+w innej sesji (`app/modules/news/*`, `worker/jobs/ingest_news.py`), więc `make check` jako
+całość jest czerwony nie z powodu tych zmian. Backend: **312 testów zielonych** w obu
+kolejnościach (`-p no:randomly` i z domyślną randomizacją), `test_analytics.py` uruchomiony
+sam też przechodzi. Wcześniejszy przebieg z 8 błędami w `test_analytics.py` **nie jest
+odtwarzalny** — padał na `db.refresh(user)` przy rejestracji, w kodzie nietkniętym tymi
+zmianami, w czasie gdy druga sesja pisała do tej samej bazy dev i puszczała migracje.
+Nie mam dowodu na przyczynę i nie przypisuję jej tym zmianom. Uwaga:
+`test_rate_limit.py::test_default_limit_is_per_path` padł **raz** na jednym z przebiegów
+i przeszedł zarówno osobno, jak i w dwóch kolejnych pełnych suitach — to **istniejąca
+wcześniej niestabilność**, nie skutek tych zmian. Przyczyna jest w `core/rate_limit.py:124`: okno limitera to
+`int(time.time()) // 60`, więc pętla żądań rozłożona na granicy minuty zeruje licznik i
+oczekiwane 429 nie przychodzi. Ryzyko rośnie wraz z czasem trwania suity, a ta urosła o 39
+testów. Właściwą naprawą jest zamrożenie zegara w tym teście (jest już `tests/unit/_fake_clock.py`),
+nie retry.
+
+### Krok zerowy — DOMKNIĘTY DANYMI (2026-08-12)
+
+Narzędzia z sekcji wyżej puszczone na żywej bazie dev. **Etap 8 ma wreszcie szereg czasowy.**
+
+**Stan końcowy:** `portfolio_valuations` **1305 wierszy** (2021-08-12 .. 2026-08-12, jeden
+portfel demo, 522 dni weekendowych pominięte), `AAPL`/`MSFT` po 1254 notowania, `CDR`/`PKN`
+po 1249, `bitcoin` 1827 (24/7), kursy NBP `USD`/`EUR`/`CHF`/`GBP`/`HKD`/`JPY` po 1260.
+Benchmarki z poprzedniej sesji bez zmian (`^GSPC` 1254, `ETFBW20TR` 1250). Próg 30 obserwacji
+z kroku 41 przekroczony ~40-krotnie.
+
+**Backfill musiał pójść w dwóch przebiegach, nie jednym.** `--provider yfinance` filtruje
+łańcuch per rynek, więc rynek `FX` (łańcuch: sam NBP) zostałby pominięty z ostrzeżeniem
+`provider_not_in_chain` — a bez kursów USD/PLN wycena `AAPL`/`MSFT`/`bitcoin` nie ma z czego
+powstać. Kolejność: `--symbol … --provider yfinance` dla aktywów, potem `--market FX` bez
+przypięcia. Warte dopisania do `Makefile` przy okazji kroku 40.
+
+**`_clean_auth_tables` z `tests/conftest.py` kasuje dane dev.** `TRUNCATE users CASCADE`
+przed każdym testem zabiera portfele, pozycje i `portfolio_valuations` — baza dev i testowa
+to nadal ta sama baza (dług z etapu 2, udokumentowany w docstringu `conftest.py`). Praktyczny
+wniosek na czas etapu 8: **`make seed` + `seed-history` po każdym pełnym przebiegu testów**,
+inaczej dashboard i metryki liczą na pustce. Ceny i kursy przeżywają (nie są zasobem
+użytkownika), więc powtórka jest szybka i bez ruchu sieciowego.
+
+**Przy okazji: sprzątnięte wycieki fixture'ów w bazie dev** — 6 aktywów `COV*`
+(`test_portfolio_repository_coverage.py`) z 6 cenami i 1 aktywo `ANL*` w walucie `XTS`
+(`test_analytics.py`). To ostatnie przeciekało do produkcyjnej ścieżki: `list_fx_currencies`
+liczy waluty z `assets.currency`, więc `XTS` pojawiło się jako **cel backfillu kursów NBP**
+(„brak danych"). Wyciek fixture'a nie kończy się na śmieciach w słowniku.
+
+**Weryfikacja semantyki na żywych danych:** powtórzony backfill dał `+0 nowych, 1254 w bazie`
+i **kod 0** — dokładnie to, o co chodziło w poprawce #2 (zerowa delta na komplecie danych jest
+sukcesem). Guard pokrycia z #3 nie odmówił, bo po backfillu wszystkie pięć pozycji zaczyna się
+2021-08-12. Skoki d/d w serii wycen (`-13,7%` 2022-06-13, `-10,1%` 2024-08-05, `+11,1%`
+2024-11-11) odpowiadają realnym epizodom rynkowym przy portfelu z bitcoinem, a nie wycenom
+cząstkowym; `get_latest_prices(on_date=…)` filtruje `date <= on_date`, więc święta GPW niosą
+ostatni kurs, zamiast wycinać pozycję z wyceny. `composition_change` wyszło `false` **we
+wszystkich 1305 dniach** — dokładnie jak przewidywał plan, więc zrywania ogniwa w kroku 40
+ta historia nie przećwiczy i muszą to zrobić testy jednostkowe.
+
+### Blokada `mixed_convention` była fałszywym alarmem — naprawione 2026-08-12
+
+Pierwszy realny backfill zapalił BLOKADĘ na **wszystkich czterech** akcjach, mimo że każda
+seria pochodziła w 100% z yfinance: `AAPL 1252/2`, `MSFT 1198/56`, `PKN 1210/39`,
+`CDR 969/280` (skorygowanych/nieskorygowanych).
+
+**Przyczyna:** kryterium `adjusted_rows > 0 and unadjusted_rows > 0` nie mierzy konwencji.
+Współczynnik korekty jest z definicji równy 1 dla ogona serii — po ostatniej dywidendzie albo
+splicie nie ma czego korygować — więc **każda** czysta seria yfinance kończy się wierszami
+`close_adj == close`. Liczba „nieskorygowanych" to po prostu liczba sesji od ostatniej
+dywidendy (AAPL 2 dni, CDR 280). Blokada zapalałaby się zawsze i po tygodniu zostałaby
+wyłączona jako hałas — czyli mechanizm z blokującego #1 przestałby chronić przed czymkolwiek.
+
+**Naprawa:** kryterium blokady to `mixed_sources` — liczba różnych wartości `prices.source`
+w serii. Po to ta kolumna powstała (migracja `926b382d1715`). `mixed_convention` usunięte,
+`adjusted_rows`/`unadjusted_rows` zostają jako informacja diagnostyczna („czy ta seria
+w ogóle jest korygowana"). `NULL` liczy się jako osobna wartość: wiersze sprzed migracji mają
+nieznane pochodzenie i seria pół-NULL/pół-yfinance jest genuinely podejrzana. Dwóch dostawców
+o tej samej konwencji zapali się niepotrzebnie — fałszywy alarm w bezpieczną stronę, a naprawa
+jest ta sama i tania.
+
+**Dlaczego nie złapały tego testy:** oba istniejące używały serii dwuwierszowej, w której
+wiersz nieskorygowany był *jednocześnie* od innego dostawcy — więc obie flagi zapalały się
+razem i nie dało się odróżnić, która działa. Doszły dwa testy rozdzielające te przypadki:
+`test_single_provider_series_is_not_mixed_despite_both_conventions` (regresja wprost na tym
+układzie) i `test_rows_without_source_count_as_own_provenance`.
+
+## Krok 40 — zwroty dzienne ze snapshotów (ZROBIONY 2026-08-12)
+
+`GET /portfolios/{id}/performance?range=1M|3M|1Y|YTD|max`. Warstwa czysta:
+`app/modules/analytics/returns.py` (`daily_returns`, `chain_link`, `chain_index`,
+`period_return` — zero I/O, zero Pydantic, wszystko na `Decimal`), orkiestracja w
+`analytics/service.performance`, schematy i trasa dołożone do istniejących plików modułu.
+
+**Zwrot jest łańcuchowy, nie ilorazem krańców.** Snapshoty nie znają przepływów (ADR-101),
+więc `V_koniec / V_start - 1` policzyłoby dopłatę jako zysk. Ogniwo `t-1 → t` w dniu
+`composition_change=true` wypada, ale `V_t` zostaje bazą ogniwa następnego — skasowanie
+obu dni (częsty odruch) wycięłoby prawdziwy zwrot dnia po dopłacie.
+
+**Trzy rozstrzygnięcia, których plan zostawiał otwartymi:**
+
+1. **Przerwa w serii łączy** (decyzja 6 planu potwierdzona w kodzie), a odpowiedź niesie
+   `links` — liczbę ogniw, które faktycznie weszły do iloczynu. Bez tego „zwrot za 1Y"
+   policzony z 40 ogniw wygląda identycznie jak ten z 250.
+2. **`ret=null` ≠ `ret="0"`.** `null` znaczy „nie znamy" (pierwszy punkt, zerwane ogniwo),
+   zero znaczy „portfel nic nie zarobił". Tak samo `period_return=null` dla portfela bez
+   historii. CLAUDE.md #3.15 — dane niepełne muszą być oznaczone, nie dopchnięte zerem.
+3. **Pominięcia rozdzielone po powodzie:** `skipped_composition_change` (zadziałał ADR-101,
+   stan normalny) i `skipped_zero_base` (zwrot z zerowej bazy — sygnał, że dane wyglądają
+   źle). Jeden wspólny licznik zlewałby rzecz zamierzoną z podejrzaną.
+
+**`index` (baza 100) jest w odpowiedzi od razu, nie dopiero w kroku 42.** Krok 41 wymaga
+drawdownu liczonego na indeksie łańcuchowym, a nie na `value_pln` (inaczej wpłata wygląda
+jak wyjście z obsunięcia), a krok 42 — obu serii znormalizowanych do 100. Liczenie tego
+teraz kosztowało jedną funkcję i pilnuje, żeby wykres i zwrot pod nim wychodziły z tych
+samych ogniw (jest na to test).
+
+**Cache ma INNY marker niż reszta modułu.** `valuations_marker` = `MAX(date)` **i**
+`COUNT(*)` z `portfolio_valuations` (`portfolio/repository.py`), nie `_eod_marker`. Powód
+jest wprost z kroku zerowego: snapshoty przybywają też **wstecz** — `seed-history` dopisuje
+lata historii, nie ruszając maksimum. Klucz na samym `MAX` dałby po takim przebiegu
+trafienie w cache ze zwrotem policzonym z krótszej serii, czyli błędną liczbę podaną z
+pełnym przekonaniem aż do wygaśnięcia TTL. Jest na to test regresyjny.
+
+**Zakres `range` reużywa `ValuationRangeParam` z `portfolio/routes.py`** zamiast drugiego
+enuma o tych samych wartościach — obie trasy schodzą do tego samego `_range_start`, więc
+rozjazd list dałby „422 na `1M`, które gdzie indziej działa".
+
+**Testy:** 18 jednostkowych (`tests/unit/test_returns.py`, na znanych liczbach, bez bazy —
+w tym przykład ze skilla: 1000 → dopisana pozycja 500 → 1500, zwrot za ten dzień NIE
+ISTNIEJE) + 11 integracyjnych (`tests/integration/test_performance.py` — autoryzacja,
+`range`, serializacja do stringów, awaria Redisa, unieważnienie cache przy historii
+dopisanej wstecz). Harness izolacji z CLAUDE.md #10 złapał nową trasę automatycznie
+(`test_user_b_cannot_touch_user_a_resources[['GET']:/api/portfolios/{portfolio_id}/performance]`).
+
+**Weryfikacja:** `ruff`, `ruff format --check`, `mypy` czyste na całym backendzie,
+**375 testów zielonych**. Próba na realnych danych dev (1305 snapshotów, portfel demo):
+
+```
+1M   +4,00%    22 ogniwa   2026-07-13..2026-08-12   indeks 104,0032
+1Y  -29,03%   261 ogniw    2025-08-12..2026-08-12   indeks  70,9688
+max +57,00%  1304 ogniwa   2021-08-12..2026-08-12   indeks 157,0008
+```
+
+Kontrola niezależna: historia nie ma ani jednej zmiany składu, więc łańcuch musi się zgadzać
+z ilorazem krańców — 41500,94 / 26433,59 = 1,5700. Zgadza się.
+
+**Zostaje po kroku 40 (nieblokujące):**
+
+- Frontendu jeszcze nie ma — wykres wyników jest częścią kroku 42 (benchmark), zgodnie
+  z planem etapu. Endpoint jest gotowy do podpięcia.
+- `period_return` kwantyzowany do 4 miejsc (`_PCT_QUANT`), zwrot dzienny do 6
+  (`_RETURN_QUANT`) — przy 4 miejscach ruch o 3 punkty bazowe tracił cyfrę znaczącą
+  i seria spłaszczała się schodkowo na wykresie.
+- Nadpisanie `value_pln` za istniejący dzień przy niezmienionej liczbie wierszy (powtórka
+  joba EOD za ten sam dzień) nie unieważnia klucza — zostaje na TTL, ten sam kompromis
+  co w kroku 31.
+
+## Krok 42 — benchmark (ZROBIONY 2026-08-15, commit `6db8138`)
+
+`GET /portfolios/{id}/performance?benchmark=WIG20|^GSPC` dokłada drugą serię znormalizowaną
+do 100, obie przeliczone na PLN. Silnik wyrównania i normalizacji siedzi w
+`analytics/benchmark.py` jako funkcje czyste (14 testów jednostkowych), orkiestracja
+w `service.py`, kontrakt opisany w `docs/api-kontrakt.md`. Frontend:
+`/portfolios/{id}/wyniki` + `PerformanceChart.tsx`, wejście z dashboardu
+(„Zobacz wyniki na tle rynku"). 9 testów integracyjnych na parametrze.
+
+**Dziedzina parametru zamknięta** (`WIG20`, `^GSPC`) — 422 na cokolwiek innego. Otwarta
+byłaby obietnicą, że każde aktywo ze słownika ma historię nadającą się na benchmark; nie ma
+(samo `WIG20` w `prices` ma trzy notowania).
+
+**`key` ≠ `symbol` dla GPW** (decyzja 8): użytkownik prosi o WIG20, liczy to `ETFBW20TR`.
+`approximate: true` + `note` idą do UI, bo ETF śledzi Total Return i ma opłatę ok. 0,5%
+rocznie — to jest przybliżenie i ma być tak oznaczone (CLAUDE.md #3.15).
+
+**Wyrównanie kalendarzy przez `as_of`**, bez interpolacji. Brak notowania lub kursu NBP
+w dniu startu ⇒ `unavailable_reason`, nigdy cichy mnożnik 1.
+
+### Code-review kroku 42 (2026-08-15) — zero blokujących, znaleziska otwarte
+
+Izolacja (`PortfolioDep`), `close_adj`, `max(date) <= D` dla NBP, `Decimal` w całości
+i ujawnione przybliżenie — potwierdzone. Do zrobienia:
+
+1. **`benchmark_marker` powtarza błąd naprawiony dla `valuations_marker`**
+   (`analytics/service.py:952-967`). Marker to samo `MAX(prices.date)`, a notowania
+   benchmarku przybywają **też wstecz** (`make backfill` dopisuje ~1251 sesji `ETFBW20TR.WA`
+   nie ruszając maksimum). Odpowiedź z `unavailable_reason` wisi wtedy w cache przez 6 h TTL
+   mimo że historia już jest. Naprawa: `MAX(date)` **i** `COUNT(*)` (albo `MIN(date)`).
+2. **Marker nie obejmuje kursów FX** — dla `^GSPC` nowy kurs NBP bez nowego notowania nie
+   unieważnia klucza (NBP publikuje ok. 12:00, yfinance EOD wieczorem). Dołożyć
+   `MAX(fx_rates.date)` dla waluty benchmarku, gdy `asset.currency != "PLN"`.
+3. **Brak testu izolacji na nowym parametrze** — harness w `tests/test_isolation.py` nie
+   dokłada query stringów. Realnego wycieku nie ma (dependency biegnie przed handlerem),
+   ale CLAUDE.md #10 wymaga przypadku: użytkownik B pyta o `?benchmark=WIG20` cudzego
+   portfela → 404.
+4. **Komunikat operacyjny w UI** (`service.py:995`): „uruchom `make seed`" renderuje się
+   użytkownikowi, który nie ma jak tego zrobić. Rozdzielić na tekst dla użytkownika
+   + `logger.error` dla operatora.
+5. **`alignBenchmark` w `map` po wierszach** (`PerformanceChart.tsx:333`) — O(n²), ~1,7 mln
+   operacji przy `range=max`. Policzyć raz w `useMemo`.
+6. **`outperformance` liczone na `number`** (`lib/performance.ts:107`) — wynik trafia do
+   użytkownika, więc wg CLAUDE.md §8 powinien iść z backendu jako `string`.
+7. Brak testu, że `approximate: true` faktycznie renderuje „Dane przybliżone" i `note` —
+   to jest realizacja zasady #3.15, akurat ta ścieżka nie powinna zostać bez testu.
+
+Drobne: pusty `currency` zamiast `None` przy `unavailable`, nieosiągalna gałąź
+`if valued is None` w `benchmark.py:151`, `test_real_benchmark_mapping` do przeniesienia
+do `tests/unit/`, podwójny import `date`/`date_`, domyślny benchmark twardo `WIG20`
+także dla portfela czysto amerykańskiego, „pkt" vs „p.p." w etykiecie, dwa wywołania
+`get_asset_by_symbol` na jednej ścieżce żądania.
+
+### Code-review kroku 46 (2026-08-15) — DWA BLOKUJĄCE, do naprawy przed pushem
+
+Izolacja, migracje, blokady doradcze i oznaczanie `heuristic` w UI — w porządku. Ale:
+
+1. 🔴 **Stored XSS na `href` newsa** (`components/news/NewsFeedPanel.tsx:123`). `item.url`
+   pochodzi w całości z niezaufanego feedu, a React **nie** blokuje `javascript:`/`data:`
+   w `href` — wypisuje ostrzeżenie i renderuje link. Naprawa: odrzucać schematy inne niż
+   `http`/`https` **przy ingestii** (`providers/rss.py:207`, `finnhub_news.py:119`,
+   `alphavantage_news.py:169`) + druga linia obrony we froncie (`isSafeHttpUrl`, przy
+   `false` renderuj sam tytuł) + test providera na wpisie z `javascript:`.
+2. 🔴 **Sentyment ginie dla newsów już obecnych w bazie.** `repository.py:98` robi
+   `on_conflict_do_nothing`, więc gdy artykuł przyszedł wcześniej z Finnhuba (te same
+   tickery są zamapowane na `alphavantage` w `db/seed.py`), `ingest_news_sentiment`
+   podnosi tylko `match_confidence`, a `sentiment` i `sentiment_source` wyrzuca.
+   `?with_sentiment_only=true` pokazuje wtedy pustkę, a UI mówi „nikt tego nie ocenił" —
+   dokładnie to przekłamanie, przed którym broni #3.15, tylko z drugiej strony.
+   Naprawa: wąski `UPDATE ... WHERE id=:id AND sentiment IS NULL` + test integracyjny.
+
+Ważne (nieblokujące): cały przebieg joba w jednej transakcji trzymanej przez czas ruchu
+sieciowego (`ingest_news.py:128-197`, `215-273`) — połączenie wisi `idle in transaction`,
+a wyjątek na ostatnim symbolu kasuje dorobek całego przebiegu; limit **dobowy** Alpha Vantage
+(25) nie jest nigdzie egzekwowany, chroni go wyłącznie interwał harmonogramu — powinien być
+licznik w Redisie; `test_rss_provider.py` pokrywa tylko `_plain_text`, brak testów `bozo`,
+pustego feedu, wpisu bez daty i całego `_store`; `content_hash` UNIQUE globalnie zwija dwie
+różne depesze o tym samym tytule i **przypina do pierwszej obce aktywa** (przy tytułach
+w rodzaju „Podsumowanie sesji na GPW") — do hasha warto włączyć host wydawcy.
+
+Drobne: podwójne zużycie tokenów limitera (`GuardedNews` owija provider, który ma już
+własny limiter), `finnhub_news` używa innego wiadra niż `finnhub` z `marketdata` mimo
+wspólnego konta, `sentimentTone` renderuje `NaN` jako „wydźwięk neutralny", brak górnego
+ograniczenia `published_at` (data z przyszłości przykleja się na szczycie feedu na zawsze),
+domyślne adresy trzech żywych feedów wpisane w kod.
 
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 
