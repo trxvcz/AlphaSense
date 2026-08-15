@@ -9,10 +9,11 @@ zwraca `ok` (db i redis `up`, wersja `fd4946f`), a smoke test Fazy 1 przechodzi 
 w obu projektach (375 px i desktop) z niezerową wyceną portfela. Wdrożenie idzie z CI po pushu na `main`.
 Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 **Zrobione i zacommitowane 2026-08-15:** krok 40 (`25d87ad`), krok 46 (`aa97b8a`), krok 42 (`6db8138`).
-**Następny ruch:** naprawa **dwóch blokujących z code-review kroku 46** (XSS na `href` newsa,
-gubiony sentyment przy dedupe) — **przed pushem na `main`**, bo push wyzwala wdrożenie.
-Potem etap 9, **krok 47** (kalendarz dywidend); kolejność `47 → 48 → 49 → 50`,
-tryb „krok po kroku" z code-review po każdym.
+**Dwa blokujące z code-review kroku 46 naprawione** (`cc677fb`): XSS na `href` newsa
+i gubiony sentyment przy dedupe — szczegóły w sekcji kroku 46.
+**Następny ruch:** etap 9, **krok 47** (kalendarz dywidend); kolejność `47 → 48 → 49 → 50`,
+tryb „krok po kroku" z code-review po każdym. Cztery commity czekają na push — push
+wyzwala wdrożenie produkcyjne z CI.
 **Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 41, 43, 44, 45
 nie zaczęte. Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
 w sekcji „Plan etapu 9", decyzja 1.
@@ -32,7 +33,7 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
 | 8 | Metryki i ryzyko (Faza 2) | 🟡 krok zerowy domknięty, 40 i 42 zrobione; 41, 43, 44, 45 nie zaczęte |
-| 9 | Otoczka (Faza 3) | 🟡 w realizacji — krok 46 zrobiony, dwa blokujące z recenzji do naprawy; następny 47 |
+| 9 | Otoczka (Faza 3) | 🟡 w realizacji — krok 46 zrobiony i po recenzji (2 blokujące naprawione); następny 47 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
@@ -84,7 +85,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [ ] 43 Watchlisty i tagi
 [ ] 44 RLS w Postgres (domknięcie ADR-002)
 [ ] 45 Wykresy świecowe
-[x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a`, 2026-08-15; 2 blokujące z recenzji otwarte
+[x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
 [ ] 47 Kalendarz dywidend
 [ ] 48 Import CSV listy pozycji (opcjonalnie)
 [ ] 49 PWA: Serwist, manifest, IndexedDB
@@ -1431,23 +1432,40 @@ do `tests/unit/`, podwójny import `date`/`date_`, domyślny benchmark twardo `W
 także dla portfela czysto amerykańskiego, „pkt" vs „p.p." w etykiecie, dwa wywołania
 `get_asset_by_symbol` na jednej ścieżce żądania.
 
-### Code-review kroku 46 (2026-08-15) — DWA BLOKUJĄCE, do naprawy przed pushem
+### Code-review kroku 46 (2026-08-15) — dwa blokujące NAPRAWIONE
 
-Izolacja, migracje, blokady doradcze i oznaczanie `heuristic` w UI — w porządku. Ale:
+Izolacja, migracje, blokady doradcze i oznaczanie `heuristic` w UI — w porządku. Dwa
+blokujące zamknięte tego samego dnia:
 
-1. 🔴 **Stored XSS na `href` newsa** (`components/news/NewsFeedPanel.tsx:123`). `item.url`
+1. ✅ **Stored XSS na `href` newsa** (`components/news/NewsFeedPanel.tsx`). `item.url`
    pochodzi w całości z niezaufanego feedu, a React **nie** blokuje `javascript:`/`data:`
-   w `href` — wypisuje ostrzeżenie i renderuje link. Naprawa: odrzucać schematy inne niż
-   `http`/`https` **przy ingestii** (`providers/rss.py:207`, `finnhub_news.py:119`,
-   `alphavantage_news.py:169`) + druga linia obrony we froncie (`isSafeHttpUrl`, przy
-   `false` renderuj sam tytuł) + test providera na wpisie z `javascript:`.
-2. 🔴 **Sentyment ginie dla newsów już obecnych w bazie.** `repository.py:98` robi
-   `on_conflict_do_nothing`, więc gdy artykuł przyszedł wcześniej z Finnhuba (te same
+   w `href` — wypisuje ostrzeżenie w konsoli i renderuje link, więc jeden wpis w przejętym
+   feedzie wydawcy wystarczał do wykonania skryptu w zalogowanej sesji.
+   Naprawa: `is_safe_http_url` w `news/providers/base.py` (allowlist `http`/`https`,
+   odrzucenie znaków sterujących **przed** parsowaniem — `"java\nscript:"` przechodzi przez
+   `urlsplit` jako ścieżka względna, a w `href` wykonuje się jako `javascript:`), wpięta
+   we wszystkich trzech providerach; wpis z niebezpiecznym adresem jest pomijany tak samo
+   jak wpis bez daty. Druga linia obrony we froncie: `isSafeHttpUrl` w `lib/news.ts`,
+   przy `false` tytuł renderuje się bez linku i z wyjaśnieniem, zamiast znikać po cichu.
+   Pokrycie: `tests/unit/test_news_url_safety.py` (18 przypadków, każdy provider osobno
+   + kontrole pozytywne). Zweryfikowane odwrotnie: po cofnięciu walidacji w providerach
+   trzy testy padają, co potwierdza, że nie przechodzą przypadkiem.
+2. ✅ **Sentyment ginął dla newsów już obecnych w bazie.** `upsert_news` robi
+   `ON CONFLICT DO NOTHING`, więc gdy artykuł przyszedł wcześniej z Finnhuba (te same
    tickery są zamapowane na `alphavantage` w `db/seed.py`), `ingest_news_sentiment`
-   podnosi tylko `match_confidence`, a `sentiment` i `sentiment_source` wyrzuca.
-   `?with_sentiment_only=true` pokazuje wtedy pustkę, a UI mówi „nikt tego nie ocenił" —
-   dokładnie to przekłamanie, przed którym broni #3.15, tylko z drugiej strony.
-   Naprawa: wąski `UPDATE ... WHERE id=:id AND sentiment IS NULL` + test integracyjny.
+   podnosił tylko `match_confidence`, a `sentiment` i `sentiment_source` wyrzucał.
+   `?with_sentiment_only=true` pokazywał wtedy pustkę, a UI mówiło „nikt tego nie ocenił" —
+   przekłamanie z gatunku tych, przed którymi broni #3.15, tylko odwrócone.
+   Naprawa: `repository.fill_missing_sentiment` — `UPDATE ... WHERE id = :id AND
+   sentiment IS NULL`, wołane z `_store` gdy duplikat przyszedł z oceną. Warunek jest
+   w SQL-u, nie w Pythonie, bo rozstrzygnąć go ma baza, a nie wyścig dwóch workerów.
+   Licznik `sentiment_filled` w logu przebiegu — przy zerze przez kilka przebiegów widać,
+   że job sentymentu nie robi nic poza podnoszeniem pewności.
+   Pokrycie: dwa testy integracyjne (ocena dojeżdża; ocena już zapisana nie jest
+   nadpisywana).
+
+**Bramka po naprawie:** 417 testów backendu (było 397), 61 frontendu (było 50),
+ruff/mypy/`next build` zielone.
 
 Ważne (nieblokujące): cały przebieg joba w jednej transakcji trzymanej przez czas ruchu
 sieciowego (`ingest_news.py:128-197`, `215-273`) — połączenie wisi `idle in transaction`,
