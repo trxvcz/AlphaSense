@@ -1399,38 +1399,59 @@ rocznie — to jest przybliżenie i ma być tak oznaczone (CLAUDE.md #3.15).
 **Wyrównanie kalendarzy przez `as_of`**, bez interpolacji. Brak notowania lub kursu NBP
 w dniu startu ⇒ `unavailable_reason`, nigdy cichy mnożnik 1.
 
-### Code-review kroku 42 (2026-08-15) — zero blokujących, znaleziska otwarte
+### Code-review kroku 42 (2026-08-15) — zero blokujących, znaleziska ZAMKNIĘTE
 
 Izolacja (`PortfolioDep`), `close_adj`, `max(date) <= D` dla NBP, `Decimal` w całości
-i ujawnione przybliżenie — potwierdzone. Do zrobienia:
+i ujawnione przybliżenie — potwierdzone przy recenzji. Siedem znalezisk naprawionych
+tego samego dnia (`aebb008`):
 
-1. **`benchmark_marker` powtarza błąd naprawiony dla `valuations_marker`**
-   (`analytics/service.py:952-967`). Marker to samo `MAX(prices.date)`, a notowania
-   benchmarku przybywają **też wstecz** (`make backfill` dopisuje ~1251 sesji `ETFBW20TR.WA`
-   nie ruszając maksimum). Odpowiedź z `unavailable_reason` wisi wtedy w cache przez 6 h TTL
-   mimo że historia już jest. Naprawa: `MAX(date)` **i** `COUNT(*)` (albo `MIN(date)`).
-2. **Marker nie obejmuje kursów FX** — dla `^GSPC` nowy kurs NBP bez nowego notowania nie
-   unieważnia klucza (NBP publikuje ok. 12:00, yfinance EOD wieczorem). Dołożyć
-   `MAX(fx_rates.date)` dla waluty benchmarku, gdy `asset.currency != "PLN"`.
-3. **Brak testu izolacji na nowym parametrze** — harness w `tests/test_isolation.py` nie
-   dokłada query stringów. Realnego wycieku nie ma (dependency biegnie przed handlerem),
-   ale CLAUDE.md #10 wymaga przypadku: użytkownik B pyta o `?benchmark=WIG20` cudzego
-   portfela → 404.
-4. **Komunikat operacyjny w UI** (`service.py:995`): „uruchom `make seed`" renderuje się
-   użytkownikowi, który nie ma jak tego zrobić. Rozdzielić na tekst dla użytkownika
-   + `logger.error` dla operatora.
-5. **`alignBenchmark` w `map` po wierszach** (`PerformanceChart.tsx:333`) — O(n²), ~1,7 mln
-   operacji przy `range=max`. Policzyć raz w `useMemo`.
-6. **`outperformance` liczone na `number`** (`lib/performance.ts:107`) — wynik trafia do
-   użytkownika, więc wg CLAUDE.md §8 powinien iść z backendu jako `string`.
-7. Brak testu, że `approximate: true` faktycznie renderuje „Dane przybliżone" i `note` —
-   to jest realizacja zasady #3.15, akurat ta ścieżka nie powinna zostać bez testu.
+1. ✅ **`benchmark_marker` powtarzał błąd naprawiony dla `valuations_marker`.** Marker był
+   samym `MAX(prices.date)`, a notowania benchmarku przybywają **też wstecz** (`make backfill`
+   dopisuje ~1251 sesji `ETFBW20TR.WA` nie ruszając maksimum, bo dzisiejszy wiersz zwykle
+   już jest). Odpowiedź z `unavailable_reason` wisiała w cache przez 6 h TTL mimo że
+   historia już była. Naprawa: `marketdata.repository.price_marker_for_asset` zwraca
+   `MAX(date)` **i** `COUNT(*)`.
+2. ✅ **Marker nie obejmował kursów FX.** Dla `^GSPC` nowy kurs NBP bez nowego notowania
+   nie unieważniał klucza — a to stan codzienny, nie skrajny: NBP publikuje ok. 12:00,
+   ingestia notowań chodzi wieczorem, więc świeże notowanie potrafi przez chwilę wisieć
+   na wczorajszym kursie. Naprawa: `get_latest_fx_rate_date` jako trzeci segment markera,
+   tylko dla benchmarku spoza PLN.
+3. ✅ **Brak testu izolacji na nowym parametrze.** Sparametryzowany harness
+   w `tests/test_isolation.py` przechodzi trasy po `app.routes` i nie dokłada query
+   stringów, więc wariant `?benchmark=` nie był przejeżdżany. Dopisany jawny przypadek:
+   użytkownik B pyta o cudzy portfel z `?benchmark=WIG20` → 404, bez wycieku treści.
+4. ✅ **Komunikat operacyjny szedł do UI** — „uruchom `make seed`" renderowało się
+   użytkownikowi, który nie ma jak tego zrobić. Rozdzielone: użytkownik dostaje
+   „Porównanie z {label} jest chwilowo niedostępne", instrukcja idzie w `logger.error`.
+5. ✅ **`alignBenchmark` wołane w `map` po wierszach** — O(n²), ~1,7 mln operacji przy
+   `range=max`. Liczone raz w `useMemo` i podawane zarówno do wykresu, jak i do tabeli.
+6. ✅ **`outperformance` liczone na `number` we froncie.** Przeniesione na backend
+   (`_outperformance`, `Decimal`, string w JSON) — to liczba pokazywana użytkownikowi,
+   więc CLAUDE.md §8 obowiązuje. Backend sprawdza przy okazji zgodność ostatnich dat obu
+   serii zamiast ją zakładać; rozjazd daje `null`, nie liczbę z dwóch różnych dni.
+7. ✅ **Brak testu na oznaczenie danych przybliżonych.** `vitest.config.ts` świadomie nie
+   ma jsdom/RTL (render pokrywa Playwright), więc decyzja prezentacyjna wyszła
+   z komponentu do czystej funkcji `benchmarkNotice` w `lib/performance.ts` — dokładnie
+   ten przypadek, który komentarz w konfiguracji przewiduje. Pięć testów, w tym
+   pierwszeństwo „brak serii" nad „dane przybliżone" i to, że brak `note` **nie** ucisza
+   flagi `approximate` (poprzednia wersja komponentu w tym przypadku nie pokazywała nic).
 
-Drobne: pusty `currency` zamiast `None` przy `unavailable`, nieosiągalna gałąź
-`if valued is None` w `benchmark.py:151`, `test_real_benchmark_mapping` do przeniesienia
-do `tests/unit/`, podwójny import `date`/`date_`, domyślny benchmark twardo `WIG20`
-także dla portfela czysto amerykańskiego, „pkt" vs „p.p." w etykiecie, dwa wywołania
-`get_asset_by_symbol` na jednej ścieżce żądania.
+Drobne zamknięte: `currency: null` zamiast pustego stringa (i w kontrakcie API),
+nieosiągalna gałąź w `benchmark.py` opisana zamiast usuniętej, `test_real_benchmark_mapping`
+przeniesiony do `tests/unit/test_benchmark_mapping.py` jako test kontraktu produktowego,
+„pkt" → „p.p." w etykiecie, jedno `get_asset_by_symbol` zamiast dwóch na ścieżce żądania.
+
+**Świadomie zostawione:**
+- **Alias `date_`** (`service.py`, `schemas.py`) zamiast sugerowanego `import datetime as dt`.
+  Powód istnienia dopisany w komentarzu; sama zamiana dotknęłaby każdej adnotacji `date`
+  w obu plikach, czyli byłaby churnem większym niż problem.
+- **Domyślny benchmark `WIG20`** także dla portfela czysto amerykańskiego. To decyzja
+  produktowa (co pokazać przy wejściu na ekran), nie usterka — do rozstrzygnięcia razem
+  z krokiem 41, gdy dojdzie beta i wybór benchmarku zacznie znaczyć więcej.
+
+**Bramka po naprawie:** 422 testy backendu (było 417), 63 frontendu (było 61),
+ruff/mypy/`next build` zielone. Obie regresje cache zweryfikowane odwrotnie: po cofnięciu
+nowych segmentów markera dwa nowe testy padają.
 
 ### Code-review kroku 46 (2026-08-15) — dwa blokujące NAPRAWIONE
 
