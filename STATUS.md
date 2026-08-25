@@ -11,13 +11,23 @@ Backlog etapu 6 domknięty 2026-07-29 — patrz sekcja niżej.
 **Zrobione i zacommitowane 2026-08-15:** krok 40 (`25d87ad`), krok 46 (`aa97b8a`), krok 42 (`6db8138`).
 **Dwa blokujące z code-review kroku 46 naprawione** (`cc677fb`): XSS na `href` newsa
 i gubiony sentyment przy dedupe — szczegóły w sekcji kroku 46.
-**Następny ruch:** etap 9, **krok 47** (kalendarz dywidend); kolejność `47 → 48 → 49 → 50`,
-tryb „krok po kroku" z code-review po każdym. Cztery commity czekają na push — push
+**Zrobione 2026-08-25:** krok **41** w całości — 41a (tabela `nbp_reference_rates`, provider
+`NbpReferenceRatesProvider`, tygodniowy job workera, migracja `7a1c4e2b9f38`) i 41b
+(`analytics/risk.py`, `GET /portfolios/{id}/risk`, podstrona `/ryzyko` z wykresem
+underwater i heatmapą). Szczegóły w sekcjach kroków 41a i 41b niżej.
+**Zrobione 2026-08-23:** krok 47 (kalendarz dywidend) — backend, job workera, frontend,
+migracja `c03ad7b7217b`. Szczegóły i zmiana dostawcy (Finnhub → Alpha Vantage) w sekcji
+kroku 47 niżej.
+**Następny ruch:** etap 8, **krok 43a — DOKOŃCZENIE** (patrz sekcja kroku 43 niżej:
+filtr `?tags=` w `/allocation`, fixture izolacji, testy). **UWAGA: suita jest
+CZERWONA** — 10 testów `test_isolation.py` pada na `KeyError: 'tag_id'`/`'watchlist_id'`. Decyzją użytkownika (2026-08-25)
+etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
+tryb „krok po kroku" z code-review po każdym. Commity czekają na push — push
 wyzwala wdrożenie produkcyjne z CI.
 **Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 41, 43, 44, 45
 nie zaczęte. Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
 w sekcji „Plan etapu 9", decyzja 1.
-**Ostatnia aktualizacja:** 2026-08-15
+**Ostatnia aktualizacja:** 2026-08-25
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -32,8 +42,8 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
-| 8 | Metryki i ryzyko (Faza 2) | 🟡 krok zerowy domknięty, 40 i 42 zrobione; 41, 43, 44, 45 nie zaczęte |
-| 9 | Otoczka (Faza 3) | 🟡 w realizacji — krok 46 zrobiony i po recenzji (2 blokujące naprawione); następny 47 |
+| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42 zrobione; **43 w toku (niedokończone, suita czerwona)**; 44, 45 zostały |
+| 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46 i 47 zrobione; następny 48 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
@@ -80,13 +90,13 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 38 Backup pg_dump (skrypty + cron + test odtworzenia; bucket do założenia po Twojej stronie)
 [x] 39 Smoke test 375px + desktop (`make smoke`; przeszedł na produkcji 2026-08-10, 2 passed)  ← KONIEC FAZY 1
 [x] 40 Zwroty dzienne (bez dni composition_change) — `25d87ad`, 2026-08-12
-[ ] 41 Ryzyko: zmienność, Sharpe, drawdown, beta
+[x] 41 Ryzyko: zmienność, Sharpe, drawdown + underwater, beta, heatmapa miesięczna — 41a (stopa NBP) i 41b (metryki) zrobione 2026-08-25
 [x] 42 Benchmark (WIG20 przez ETFBW20TR, ^GSPC) — `6db8138`, 2026-08-15
 [ ] 43 Watchlisty i tagi
 [ ] 44 RLS w Postgres (domknięcie ADR-002)
 [ ] 45 Wykresy świecowe
 [x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
-[ ] 47 Kalendarz dywidend
+[x] 47 Kalendarz dywidend (Alpha Vantage `DIVIDENDS`; GPW nieobjęta i oznaczona) — 2026-08-23
 [ ] 48 Import CSV listy pozycji (opcjonalnie)
 [ ] 49 PWA: Serwist, manifest, IndexedDB
 [ ] 50 Web Push + i18n
@@ -1002,6 +1012,195 @@ zaaplikowane na bazie dev, gdy ta praca się kończyła — stąd round-trip tes
 bazie, żeby nie zdejmować cudzych tabel. Zmiany nie zostały zacommitowane: drzewo zawiera
 przemieszany dorobek dwóch sesji i rozdzielenie go na commity jest decyzją użytkownika.
 
+## Krok 41a — źródło stopy referencyjnej NBP (ZROBIONY 2026-08-25)
+
+Podkrok kroku 41: Sharpe potrzebuje stopy wolnej od ryzyka, a plan mówi „stopa
+referencyjna NBP jako konfigurowalny parametr". **Decyzja użytkownika (2026-08-25):
+pobieramy ją z rzeczywistego źródła, historycznie**, a nie jako stałą w ENV — Sharpe
+na wieloletniej serii ze stałą dzisiejszą stopą byłby policzony źle (stopa szła w tym
+okresie od 0,10% do 6,75%). Wariant `RISK_FREE_RATE` w ENV odpadł.
+
+**Źródło (ustalone na żywo, nie z dokumentacji):** `api.nbp.pl` — ten sam, z którego
+bierzemy kursy i złoto — **nie wystawia stóp procentowych** (`/api/interestrates` → 404).
+NBP publikuje je jako statyczne pliki XML na `static.nbp.pl`:
+`stopy_procentowe.xml` (stan bieżący) i `stopy_procentowe_archiwum.xml`
+(**pełna historia od 1998-02-26**, 96 zmian). Bierzemy **wyłącznie archiwum** — jego
+ostatni wpis jest identyczny z plikiem bieżącym (test pilnuje tego założenia), więc
+drugie żądanie byłoby kolejnym punktem awarii bez żadnego zysku.
+
+**Pułapka udokumentowana w kodzie i w teście:** atrybut `data_publikacji` w archiwum
+stoi na `2015-03-04`, mimo że treść sięga 2026-03-05 — NBP go nie aktualizuje.
+Świeżość liczymy wyłącznie z `max(effective_from)`.
+
+**Co powstało:**
+- `backend/app/modules/marketdata/providers/nbp_rates.py` — `ReferenceRate`,
+  `NbpReferenceRatesProvider`, `GuardedReferenceRates` (limiter + bezpiecznik; przy
+  dywidendach tego zabrakło i było znaleziskiem recenzji, tu nie powtórzone).
+  Świadomie **poza** `Protocol DataProvider`: stopa procentowa to nie `Capability.FX`
+  ani `OHLCV`, więc nie wchodzi do `FallbackChain`.
+- Tabela `nbp_reference_rates` (migracja `7a1c4e2b9f38`), model `NbpReferenceRate`.
+  Wiersz = zmiana stopy, PK jednokolumnowy, `rate` jako **ułamek roczny**
+  (`0.03750000`), nie procent.
+- `repository.upsert_reference_rates` / `get_reference_rate` (lookup
+  `max(effective_from) <= D`, jak przy kursach) / `list_reference_rates`
+  (dociąga wpis sprzed `start`, żeby początek serii nie został bez stopy) /
+  `get_latest_reference_rate_date`.
+- `backend/worker/jobs/ingest_nbp_rates.py` — job **tygodniowy** (środa 6:20 UTC,
+  `CronTrigger`), blokada doradcza `ingest_nbp_rates`, jedno żądanie o pełne archiwum,
+  `ON CONFLICT DO UPDATE`. Nieudany przebieg **nie** rzuca: poprzednie wartości są nadal
+  poprawne (stopa obowiązuje do następnej decyzji RPP), więc awaria źródła co najwyżej
+  opóźnia zauważenie zmiany o tydzień.
+- `docs/model-danych.md` — wiersz tabeli + uzasadnienia.
+
+**Decyzje projektowe:**
+- Zapisujemy **tylko stopę referencyjną** (`ref`), nie wszystkich pięciu z XML-a —
+  pozostałe nie mają w projekcie odbiorcy (CLAUDE.md #3.11).
+- Parsowanie stdlib `xml.etree.ElementTree` + twardy limit 4 MB na odpowiedź,
+  **bez** dokładania `defusedxml` (nowa zależność wymagałaby osobnej decyzji,
+  CLAUDE.md #10). ElementTree w CPythonie nie rozwiązuje encji zewnętrznych, więc
+  limit rozmiaru zamyka realne ryzyko („billion laughs").
+- Brak stopy dla danej daty → `None`, **nigdy zero**: zero jest poprawną stopą
+  (RPP miała 0,10%), więc podstawione cicho zmieniłoby Sharpe'a nie do odróżnienia
+  od policzonego na prawdziwych danych. Krok 41b ma wtedy **nie liczyć** wskaźnika.
+
+**Weryfikacja:** 17 nowych testów (7 jednostkowych na parserze + nagranych fixture'ach
+`stopy_archiwum.xml`/`stopy_biezace.xml`, 2 na samych fixture'ach, 8 integracyjnych na
+lookupie i idempotencji). Cała suita **459 passed** (było 442). `ruff format --check`,
+`ruff check`, `mypy app worker`, `next build` — zielone. `alembic heads` → jedna głowa
+`7a1c4e2b9f38`. Job uruchomiony na żywo: 96 wierszy zapisanych, `latest=2026-03-05`.
+Lookup sprawdzony na realnych datach: 2026-08-25 → 3,75%, 2023-09-06 → 6,75%,
+2020-05-29 → 0,10%, 1990-01-01 → `None`. Scheduler po restarcie rejestruje
+`ingest_nbp_rates` (16 jobów).
+
+**Nie zrobione (świadomie, to krok 41b):** żadnej metryki ryzyka jeszcze nie ma —
+`nbp_reference_rates` nie ma na razie ani jednego konsumenta poza testami, tabela
+czeka na Sharpe'a. Świeżość tej serii nie jest jeszcze pokazana w `/meta/freshness`.
+
+## Krok 43 — watchlisty i tagi (W TOKU 2026-08-25, NIEDOKOŃCZONY)
+
+Podzielony na **43a** (backend) i **43b** (frontend). 43a jest **w połowie** —
+przerwane na limicie sesji. **Drzewo robocze nie jest w stanie „gotowe": suita
+backendu jest czerwona.**
+
+**Zrobione:**
+- Cztery tabele + migracja `f76793e14dad` (zastosowana, jedna głowa):
+  `watchlists`, `watchlist_items`, `tags`, `asset_tags`. Klucze złożone z par
+  naturalnych, FK do `assets` bez kaskady (jak `holdings.asset_id`), kaskada
+  z `users` w dół. Modele zarejestrowane w `alembic/env.py`.
+- `core/deps.py`: `get_owned_watchlist`/`WatchlistDep` i `get_owned_tag`/`TagDep`
+  — wzorzec 404-zawsze, filtr własności w zapytaniu.
+- Moduł `modules/tags/` (models, repository, schemas, service, routes):
+  `GET/POST /tags`, `PATCH/DELETE /tags/{tag_id}`, `GET /tags/{tag_id}/assets`,
+  `PUT/DELETE /tags/{tag_id}/assets/{asset_id}`.
+- Moduł `modules/watchlist/` (jw.): `GET/POST /watchlists`,
+  `PATCH/DELETE /watchlists/{watchlist_id}`, `GET /watchlists/{watchlist_id}/items`,
+  `PUT/DELETE /watchlists/{watchlist_id}/items/{asset_id}`.
+- Oba routery wpięte w `app/main.py`. `ruff`, `mypy` — zielone.
+
+**Decyzje projektowe (podjęte i zapisane w kodzie):**
+- **Tag wisi na AKTYWIE, nie na pozycji** — tak rezerwuje `docs/model-danych.md`
+  (`asset_tags`) i tak jest użyteczniej: „dywidendowe" to cecha spółki, więc tag
+  działa we wszystkich portfelach użytkownika.
+- **Tag należy do użytkownika, `assets` jest globalne** — izolacja przy każdym
+  odczycie idzie przez `JOIN tags` po `tags.user_id`. Bez tego użytkownik A
+  zobaczyłby, że ktoś oznaczył PKN jako „do sprzedania".
+- **Chronionym zasobem jest tag, nie aktywo** — stąd `/tags/{tag_id}/assets/{asset_id}`,
+  a nie odwrotnie.
+- **Filtr `?tags=` ma mieć semantykę OR (suma), nie AND** — przecięcie dla
+  większości par tagów dałoby pustkę i wyglądało jak awaria filtra. Zapisane
+  w `tags/repository.asset_ids_for_tag_names`.
+- **Watchlista to nie portfel** — bez ilości, wyceny, snapshotów i analityki
+  (CLAUDE.md #3.11). `WatchlistItemOut` świadomie nie ma `value_pln`.
+- `PUT` (idempotentny) zamiast `POST` dla wiązania; `DELETE` zwraca 204 także
+  gdy powiązania nie było.
+- Duplikat nazwy → `ConflictError` (409) z komunikatem po polsku; `UNIQUE`
+  w bazie zostaje jako ostatnia linia obrony.
+
+**DO DOKOŃCZENIA w 43a (w tej kolejności):**
+1. **Naprawić czerwoną suitę.** `tests/test_isolation.py` sam wykrywa nowe trasy
+   (`RESOURCE_PARAMS` zawierało już `watchlist_id` i `tag_id`) i pada
+   `KeyError: 'tag_id'`/`'watchlist_id'` — **10 testów**. To **luka w fixture
+   testowym**, nie wyciek: `get_owned_tag`/`get_owned_watchlist` są wpięte na
+   każdej trasie. Trzeba dołożyć tworzenie tagu i watchlisty użytkownika A do
+   fixture'u zasobów w tym pliku.
+2. **Filtr `?tags=` w `GET /portfolios/{id}/allocation`** — parametr zapytania,
+   zawężenie `valued.holdings` po `asset_ids_for_tag_names`, **`tags` jako
+   osobny segment klucza cache** (inaczej filtr oddawałby wynik bez filtru).
+   `service.allocation` i `routes.get_allocation` jeszcze nietknięte.
+3. **Testy**: integracyjne CRUD tagów i watchlist (ścieżka szczęśliwa + 404 na
+   cudzy zasób + 409 na duplikat nazwy + idempotencja `PUT`), test filtru
+   alokacji po tagach.
+4. **`docs/model-danych.md`** (wiersze 28–29 nadal bez kolumn) i
+   **`docs/api-kontrakt.md`** (brak sekcji tagów/watchlist).
+
+**43b (frontend) — nie zaczęte:** zarządzanie tagami przy pozycji, filtr tagów
+nad widokiem struktury, widok watchlist.
+
+## Krok 41b — metryki ryzyka (ZROBIONY 2026-08-25)
+
+Zmienność, Sharpe, max drawdown z wykresem underwater, beta i heatmapa zwrotów
+miesięcznych. Konsument stopy referencyjnej z kroku 41a.
+
+**Co powstało:**
+- `backend/app/modules/analytics/risk.py` — czysta matematyka bez I/O (jak `returns.py`
+  i `benchmark.py`): `volatility`, `sharpe`, `beta`, `max_drawdown`, `underwater`,
+  `monthly_returns`, `risk_free_daily`. Reużywa `benchmark.as_of_values` do wyrównania
+  stopy do dat (to ta sama reguła `max(effective_from) <= D`).
+- `service.risk` + `GET /portfolios/{id}/risk?range=&benchmark=` (`RiskOut`), cache Redis
+  z **własnym segmentem świeżości dla stopy referencyjnej** — przychodzi z tygodniowego
+  joba, więc żaden z pozostałych markerów by nie drgnął przy decyzji RPP.
+- Frontend: `lib/risk.ts`, `components/dashboard/RiskPanel.tsx`,
+  `components/charts/UnderwaterChart.tsx`, `components/charts/MonthlyReturnsHeatmap.tsx`,
+  podstrona `app/portfolios/[id]/ryzyko`, link z dashboardu, klucz `qk.risk`.
+- `docs/api-kontrakt.md` — sekcja `/risk` z pełnym przykładem i uzasadnieniami.
+
+**Decyzje projektowe:**
+- **Wszystko liczone z ogniw i indeksu łańcuchowego**, nigdy z `value_pln` (ADR-101):
+  wpłata to nie zmienność i nie wyjście z obsunięcia.
+- **Jedno ogniwo = jedna obserwacja**, annualizacja przez √252. Ważenie ogniw długością
+  wymagałoby kalendarza sesji per rynek, którego portfel wielorynkowy nie ma jednego.
+- **Próg `MIN_OBSERVATIONS = 20`** dla zmienności, Sharpe'a i bety. Drawdown progu **nie
+  ma** — jedno obsunięcie jest faktem, a nie oszacowaniem rozkładu.
+- **Osobny `*_unavailable_reason` na metrykę.** Przy tej samej serii zmienność bywa
+  policzalna, a Sharpe nie (brak stopy NBP). Jeden wspólny komunikat kłamałby o jednym.
+- **Sharpe na stopie zmiennej w czasie**; dni bez stopy wypadają **w parze** ze swoim
+  zwrotem, żeby nie przyjąć po cichu rf = 0.
+- **Beta parowana po datach** (`previous_date → date`), nie zestawiana obok siebie —
+  ogniwa portfela bywają pomijane, więc naiwne zestawienie przesunęłoby serie.
+- **Heatmapa składa ogniwa**, nie dzieli indeksu z krańców miesiąca (w miesiącu ze
+  zmianą składu indeks stoi na zerwanym ogniwie).
+- **Podstrona `/ryzyko`, nie sekcja na dashboardzie** — dashboard trzyma zasadę 5–7 KPI
+  (CLAUDE.md §21), a to pięć wskaźników i dwa wykresy.
+- **Dostępność:** heatmapa to tabela HTML z liczbami w komórkach i nagłówkami wierszy/
+  kolumn (nie kanwas), paleta niebieski/pomarańczowy zamiast zielony/czerwony,
+  miesiąc bez danych jest pusty i opisany, a nie pokazany jako zero. Miesiące policzone
+  z mniej niż 5 dni dostają gwiazdkę „dane niepełne" (CLAUDE.md #3.15).
+
+**Weryfikacja:** 47 nowych testów (30 jednostkowych `test_risk.py` — wartości oczekiwane
+z **niezależnej implementacji** `statistics` ze stdlib, nie przepisane z naszego kodu;
+16 integracyjnych `tests/integration/test_risk.py`, w tym beta = 1 i beta = 2 jako
+przypadki referencyjne end-to-end, 404 na cudzy portfel i test „brak stopy zabiera
+Sharpe'a, nie zmienność"; 9 frontendowych `lib/risk.test.ts`). Cała suita backendu
+**506 passed** (było 459), frontend **77 passed** (było 68). `ruff format --check`,
+`ruff check`, `mypy app worker`, `tsc --noEmit`, `eslint`, `next build` — zielone.
+Trasa `/portfolios/[id]/ryzyko` buduje się jako dynamiczna.
+
+**Weryfikacja na żywych danych** (dev, po `seed-history` od 2025-01-02, 429 dni):
+`range=max` → 428 obserwacji, zmienność 0,3063, drawdown −0,3964 (2025-10-06 →
+2026-02-05, nieodrobiony), beta wobec `^GSPC` 0,884, 20 miesięcy na heatmapie.
+`range=1Y` z benchmarkiem WIG20 → Sharpe −0,895185 przy etykiecie „Stopa referencyjna
+NBP (historyczna)", beta 0,284 z `approximate=true`.
+
+**Uwaga operacyjna:** fixture `clean_rates` w `tests/integration/test_risk.py` czyści
+całą tabelę `nbp_reference_rates` (potrzebny jest przypadek pustej tabeli), więc
+**po przebiegu suity na bazie dev Sharpe znika**, dopóki nie uruchomi się ponownie
+`ingest_nbp_rates`. Ta sama klasa problemu co przy dywidendach — baza testowa i dev
+to jedna instancja.
+
+**Nie zrobione (świadomie):** świeżość serii stóp nadal nie jest pokazana
+w `/meta/freshness`. Metryki nie są wystawione na głównym dashboardzie ani w API
+zbiorczym — wejście jest przez podstronę `/ryzyko`.
+
 ## Krok 46 — newsy (ZROBIONY 2026-08-11: backend, Finnhub, Alpha Vantage, frontend)
 
 **Co powstało:** `news`/`news_assets` + migracja `20260810_news_i_news_assets.py` (round-trip
@@ -1502,6 +1701,94 @@ własny limiter), `finnhub_news` używa innego wiadra niż `finnhub` z `marketda
 wspólnego konta, `sentimentTone` renderuje `NaN` jako „wydźwięk neutralny", brak górnego
 ograniczenia `published_at` (data z przyszłości przykleja się na szczycie feedu na zawsze),
 domyślne adresy trzech żywych feedów wpisane w kod.
+
+## Krok 47 — kalendarz dywidend (ZROBIONY 2026-08-23)
+
+**Co powstało:** `dividend_events` + migracja `c03ad7b7217b`
+(`20260823_dividend_events.py`) · `modules/dividends/` (`models`, `providers/base`,
+`providers/alphavantage_dividends`, `repository`, `service`, `schemas`, `routes`) ·
+`worker/jobs/ingest_dividends.py` + job dobowy w `worker/scheduler.py` (5:15 UTC) ·
+frontend: `lib/dividends.ts` (+ testy), `components/dividends/DividendCalendarPanel.tsx`,
+`app/portfolios/[id]/dywidendy/page.tsx`, wejście z dashboardu portfela ·
+`docs/api-kontrakt.md` (sekcja „Dywidendy"), `docs/model-danych.md`.
+
+### Zmiana dostawcy wymuszona przez rzeczywistość — Finnhub → Alpha Vantage
+
+Plan kroku 47 mówił „Finnhub dla zagranicy". `GET /stock/dividend?symbol=AAPL` zwraca
+na darmowym planie `403 {"error":"You don't have access to this resource."}` — sprawdzone
+2026-08-23 realnym kluczem produkcyjnym, ten sam wynik co `/news-sentiment` w kroku 46.
+Zakres kroku bez zmian, zmienia się wyłącznie źródło: Alpha Vantage `function=DIVIDENDS`
+jest w darmowym planie i oddaje komplet czterech dat (`ex_dividend_date`,
+`declaration_date`, `record_date`, `payment_date`) plus kwotę na akcję.
+
+**GPW nadal nie jest pokryta — zgodnie z tym, co plan przewidywał jako ograniczenie.**
+Alpha Vantage dla `PKN.WAR` oddaje `{"symbol": "PKN.WAR", "data": []}`, czyli odpowiedź
+**nie do odróżnienia od „spółka nie płaci dywidendy"**. Dlatego pokrycie rozstrzyga
+mapowanie `asset_source_map` (provider `alphavantage`), a nie obecność zdarzeń w bazie:
+aktywo bez mapowania jest raportowane jako **nieobjęte** (`assets_without_coverage`,
+`uncovered_markets`), a nie jako „bez dywidend" (CLAUDE.md #3.15). UI pokazuje tę notę
+**nad** listą i także wtedy, gdy lista nie jest pusta.
+
+### Decyzje przy implementacji
+
+- **`ON CONFLICT DO UPDATE`, odwrotnie niż przy newsach.** Treść opublikowanej depeszy
+  jest niezmienna, zapowiedziana dywidenda — nie: kwota i data wypłaty bywają korygowane
+  przed wypłatą, więc świeższa odpowiedź dostawcy wygrywa. Klucz naturalny
+  `UNIQUE (asset_id, ex_date)`.
+- **Bez przeliczania na PLN i bez podatku.** Kurs właściwy dla wypłaty to kurs z dnia
+  poprzedzającego wypłatę, czyli z przyszłości — liczba w PLN pokazana dziś byłaby
+  prognozą udającą wycenę. Podatek u źródła i rozliczenia to Etap 21 (CLAUDE.md §22);
+  `dividend_events` świadomie nie ma `user_id` ani niczego, co dałoby się pomylić
+  z wpisem księgowym.
+- **`estimated_gross` = kwota × DZISIEJSZA ilość** — UI nazywa to szacunkiem, nie
+  należnością.
+- **Okno kalendarza zaczyna się dziś.** Wczorajsza ex-data jest już nie do złapania,
+  a pokazana wśród „nadchodzących" sugerowałaby, że da się z nią coś zrobić. Job zapisuje
+  jednak także historię (dostawca oddaje ją w tej samej odpowiedzi, więc nie kosztuje
+  dodatkowego zapytania) — filtr po dacie jest po stronie odczytu.
+- **Budżet 25 zapytań/dobę jest ograniczeniem pierwszej klasy.** Job dobowy (`CronTrigger`
+  5:15 UTC, nie interwał — interwał liczyłby się od startu workera, więc restart
+  przesuwałby porę), pyta wyłącznie o aktywa, które ktokolwiek **trzyma**, i bierze
+  najwyżej 8 symboli na przebieg (`_MAX_SYMBOLS_PER_RUN`), zostawiając zapas jobowi
+  sentymentu z kroku 46 (12 przebiegów/dobę).
+- **Brak wpisu w nawigacji globalnej.** `NAV_ITEMS` ma pięć pozycji i to sufit dolnego
+  paska na 375 px (komentarz w `components/nav/navItems.ts`); szósta wymaga przebudowy
+  paska, czyli zmiany poza zakresem tego kroku. Wejście prowadzi z dashboardu portfela,
+  tak jak do struktury, wyników i rynków.
+
+### Weryfikacja
+
+- `ruff format --check`/`ruff check`/`mypy app` (strict, 76 plików) zielone.
+- Backend: **442 passed** (435 poprzednich + 7 nowych integracyjnych), plus 7 nowych
+  jednostkowych dla providera. Harness izolacji **automatycznie objął nową trasę**:
+  `test_user_b_cannot_touch_user_a_resources[['GET']:/api/portfolios/{portfolio_id}/dividends]`.
+- Frontend: `npm run lint`, `tsc --noEmit`, Vitest **68 passed** (63 poprzednich + 5 nowych w `lib/dividends.test.ts`),
+  `next build` — trasa `/portfolios/[id]/dywidendy` w wykazie.
+- **Żywa weryfikacja na dev:** job pobrał **57 zdarzeń dla AAPL** (historia od 2012-08-09,
+  ostatnia ex-data 2026-08-10) i zapisał je idempotentnie; MSFT w tym samym przebiegu
+  padł na dobowym limicie Alpha Vantage i **nie przerwał joba**
+  (`failed_symbols=1 stored=57`) — dokładnie zachowanie z reguły 6 skilla `job-eod`.
+  `GET /portfolios/{id}/dividends?horizon_days=365` na portfelu demo zwraca pustą listę
+  z `assets_covered=2`, `assets_without_coverage=["CDR","PKN","bitcoin"]` i
+  `uncovered_markets=["CRYPTO","GPW"]` — pustka jest **prawdziwa** (następna ex-data AAPL
+  nie jest jeszcze ogłoszona) i opisana, a nie milcząca.
+
+### Zostaje po kroku 47 (nieblokujące)
+
+- **Kalendarz pokazuje dziś pustkę nawet dla pokrytych spółek**, bo Alpha Vantage podaje
+  wyłącznie dywidendy **już ogłoszone** — między wypłatami nie ma czego pokazać. To
+  poprawne zachowanie, ale warto po kilku tygodniach sprawdzić, jak często ekran jest
+  pusty przy realnym portfelu, zanim krok 50 oprze na nim powiadomienie push (decyzja 3
+  planu etapu 9: push o zbliżającej się ex-dacie).
+- **Brak dostawcy dla GPW.** Do rozważenia w Etapie 22 (jakość danych): komunikaty ESPI
+  albo strony relacji inwestorskich jako źródło ex-dat dla polskich spółek. Dziś rynek
+  z największą liczbą pozycji jest poza kalendarzem i tylko o tym informujemy.
+- **`_MAX_SYMBOLS_PER_RUN = 8` przy stałej kolejności po `provider_symbol`** — przy
+  portfelu z więcej niż 8 mapowanymi aktywami symbole z końca alfabetu nie doczekają się
+  odświeżenia. Rotacja po `MIN(fetched_at)` byłaby uczciwsza; nie zrobiona, bo dziś
+  mapowanych aktywów jest 2.
+- Brak podkomendy CLI (`python -m app.cli ingest-dividends`) — tak samo jak przy newsach
+  z kroku 46; ręczne uruchomienie idzie przez `python -c`.
 
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 

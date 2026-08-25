@@ -221,3 +221,109 @@ class PerformanceOut(BaseModel):
     @field_serializer("period_return")
     def _ser_optional(self, v: Decimal | None) -> str | None:
         return None if v is None else _ser_decimal(v)
+
+
+class DrawdownOut(BaseModel):
+    """Największe obsunięcie (`GET /risk`, plan krok 41b).
+
+    `value` jest **ujemne** (`"-0.2300"` = spadek o 23%) — znak niesie
+    kierunek, więc UI nie musi zgadywać. `recovered_at=null` znaczy
+    „jeszcze nie odrobione", co jest czym innym niż obsunięcie zamknięte
+    w przeszłości.
+    """
+
+    value: Decimal
+    peak_date: date
+    trough_date: date
+    recovered_at: date | None
+
+    @field_serializer("value")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+
+class UnderwaterPointOut(BaseModel):
+    """Punkt wykresu underwater: dystans do dotychczasowego szczytu
+    (`0` na szczycie, wartości ujemne poniżej)."""
+
+    date: date
+    value: Decimal
+
+    @field_serializer("value")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+
+class MonthlyReturnOut(BaseModel):
+    """Jedna komórka heatmapy zwrotów miesięcznych.
+
+    `links` to liczba ogniw, z których miesiąc powstał — miesiąc policzony
+    z trzech dni i z dwudziestu wygląda na heatmapie identycznie, a znaczy
+    co innego (CLAUDE.md #3.15). Miesiące bez ani jednego ogniwa **nie
+    występują** w liście: heatmapa ma pokazać dziurę, nie zero.
+    """
+
+    year: int
+    month: int
+    ret: Decimal
+    links: int
+
+    @field_serializer("ret")
+    def _ser(self, v: Decimal) -> str:
+        return _ser_decimal(v)
+
+
+class BetaOut(BaseModel):
+    """Beta wobec wybranego benchmarku.
+
+    Benchmark jest częścią wyniku, nie kontekstem: „beta 1,2" bez informacji,
+    wobec czego liczona, to liczba bez znaczenia. `approximate=true` niesie
+    to samo ostrzeżenie co przy wykresie (WIG20 liczony z ETF-a `ETFBW20TR`).
+    """
+
+    key: str
+    symbol: str
+    label: str
+    approximate: bool
+    value: Decimal | None
+    observations: int
+    unavailable_reason: str | None
+
+    @field_serializer("value")
+    def _ser_optional(self, v: Decimal | None) -> str | None:
+        return None if v is None else _ser_decimal(v)
+
+
+class RiskOut(BaseModel):
+    """Wyjście `GET /portfolios/{portfolio_id}/risk?range=` (plan krok 41b).
+
+    Każda metryka ma **własny** `*_unavailable_reason`, bo powody bywają
+    różne przy tej samej serii: zmienności może brakować przez krótką
+    historię, a Sharpe'a — przez brak stopy referencyjnej NBP w bazie.
+    Jeden wspólny komunikat kłamałby o jednym z nich.
+
+    `observations`/`min_observations` są w odpowiedzi, żeby UI mogło
+    napisać „za mało danych (12 z 20)" zamiast pokazywać pustkę bez powodu.
+
+    `risk_free_label` opisuje, czym liczono Sharpe'a — dana ma być
+    identyfikowalna co do źródła (CLAUDE.md #3.15, §23).
+    """
+
+    range: str
+    first_date: date | None
+    last_date: date | None
+    observations: int
+    min_observations: int
+    volatility: Decimal | None
+    volatility_unavailable_reason: str | None
+    sharpe: Decimal | None
+    sharpe_unavailable_reason: str | None
+    risk_free_label: str | None
+    max_drawdown: DrawdownOut | None
+    underwater: list[UnderwaterPointOut]
+    monthly_returns: list[MonthlyReturnOut]
+    beta: BetaOut | None
+
+    @field_serializer("volatility", "sharpe")
+    def _ser_optional(self, v: Decimal | None) -> str | None:
+        return None if v is None else _ser_decimal(v)

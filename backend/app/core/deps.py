@@ -22,6 +22,8 @@ from app.core.security import decode_access_token
 from app.db.session import DbSession
 from app.modules.auth.models import User
 from app.modules.portfolio.models import Holding, Portfolio
+from app.modules.tags.models import Tag
+from app.modules.watchlist.models import Watchlist
 
 _BEARER_PREFIX = "Bearer "
 
@@ -97,3 +99,45 @@ async def get_owned_holding(
 
 
 HoldingDep = Annotated[Holding, Depends(get_owned_holding)]
+
+
+async def get_owned_watchlist(
+    watchlist_id: UUID,
+    user: CurrentUserDep,
+    db: DbSession,
+) -> Watchlist:
+    """Zależność zasobowa dla tras `/watchlists/{watchlist_id}...` (krok 43).
+
+    Ten sam wzorzec co `get_owned_portfolio`: filtr własności w samym
+    zapytaniu i **404 zawsze**, nigdy 403 — cudza watchlista ma być
+    nieodróżnialna od nieistniejącej (skill `izolacja-danych`).
+    """
+    watchlist = await db.scalar(
+        select(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user.id)
+    )
+    if watchlist is None:
+        raise NotFoundError("Nie znaleziono listy obserwowanych")
+    return watchlist
+
+
+WatchlistDep = Annotated[Watchlist, Depends(get_owned_watchlist)]
+
+
+async def get_owned_tag(
+    tag_id: UUID,
+    user: CurrentUserDep,
+    db: DbSession,
+) -> Tag:
+    """Zależność zasobowa dla tras `/tags/{tag_id}...` (krok 43).
+
+    Tag należy do użytkownika, mimo że wskazuje na globalne `assets` —
+    dlatego autoryzacja idzie po `tags.user_id`, a nie po aktywie. Gdyby
+    szła po aktywie, każdy widziałby, jak inni oznaczyli te same spółki.
+    """
+    tag = await db.scalar(select(Tag).where(Tag.id == tag_id, Tag.user_id == user.id))
+    if tag is None:
+        raise NotFoundError("Nie znaleziono tagu")
+    return tag
+
+
+TagDep = Annotated[Tag, Depends(get_owned_tag)]

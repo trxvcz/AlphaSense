@@ -20,9 +20,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.db.base import Base
 from app.modules.auth import models as auth_models  # noqa: F401  (rejestracja w Base.metadata)
+from app.modules.dividends import models as dividends_models  # noqa: F401
 from app.modules.marketdata import models as marketdata_models  # noqa: F401
 from app.modules.news import models as news_models  # noqa: F401
 from app.modules.portfolio import models as portfolio_models  # noqa: F401
+from app.modules.tags import models as tags_models  # noqa: F401
+from app.modules.watchlist import models as watchlist_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

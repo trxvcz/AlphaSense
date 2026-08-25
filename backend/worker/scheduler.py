@@ -30,7 +30,9 @@ from sqlalchemy import select
 from app.core.observability import init_sentry
 from app.db.session import AsyncSessionLocal
 from app.modules.marketdata.models import Market
+from worker.jobs.ingest_dividends import ingest_dividends
 from worker.jobs.ingest_market import ingest_market
+from worker.jobs.ingest_nbp_rates import ingest_nbp_rates
 from worker.jobs.ingest_news import ingest_news, ingest_news_sentiment
 
 logger = structlog.get_logger(__name__)
@@ -51,6 +53,22 @@ _NEWS_INTERVAL_MINUTES = 30
 # darmowego planu (25 zapytań/dobę): zostawia zapas na restart workera
 # i na ręczne uruchomienie joba, zamiast trafiać w limit co do sztuki.
 _SENTIMENT_INTERVAL_MINUTES = 120
+# Kalendarz dywidend (krok 47) — raz na dobę, o 5:15 UTC. Zapowiedź
+# dywidendy zmienia się kilka razy do roku na spółkę, więc częstsze pytanie
+# kupowałoby nieaktualność liczoną w godzinach za cenę dobowego budżetu
+# Alpha Vantage (25 zapytań, dzielone z jobem sentymentu). Godzina wcześnie
+# rano i minuta różna od pełnej — żeby ten job nie startował równo z jobem
+# sentymentu i nie konkurował z nim o te same tokeny limitera.
+_DIVIDENDS_HOUR_UTC = 5
+_DIVIDENDS_MINUTE = 15
+# Stopa referencyjna NBP (krok 41a) — raz w tygodniu, w środę o 6:20 UTC.
+# RPP obraduje zwykle w środy i publikuje decyzję tego samego dnia po
+# południu, więc środowy poranek łapie decyzję z poprzedniego posiedzenia
+# na pewno, a nie w połowie publikacji. Częstsze pytanie nic nie wnosi:
+# między posiedzeniami stopa jest z definicji stała.
+_NBP_RATES_DAY_OF_WEEK = "wed"
+_NBP_RATES_HOUR_UTC = 6
+_NBP_RATES_MINUTE = 20
 
 
 async def _load_markets() -> list[Market]:
@@ -123,6 +141,52 @@ def _register_jobs(scheduler: AsyncIOScheduler, markets: list[Market]) -> None:
         "scheduler.job_registered",
         job="ingest_news_sentiment",
         interval_minutes=_SENTIMENT_INTERVAL_MINUTES,
+    )
+
+    # Dywidendy (krok 47, etap 9) — `CronTrigger`, nie `IntervalTrigger`:
+    # interwał dobowy liczyłby się od startu workera, więc każdy restart
+    # przesuwałby porę odpytywania dostawcy. Przy jobie, którego jedynym
+    # realnym ograniczeniem jest dobowy limit zapytań, pora ma być
+    # przewidywalna. Strefa UTC świadomie: to nie jest dana EOD żadnego
+    # rynku, więc `markets`/ADR-102 nie mają tu czego rozstrzygać.
+    scheduler.add_job(
+        ingest_dividends,
+        trigger=CronTrigger(hour=_DIVIDENDS_HOUR_UTC, minute=_DIVIDENDS_MINUTE, timezone="UTC"),
+        id="dividends:ingest",
+        name="ingest_dividends",
+        replace_existing=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
+    logger.info(
+        "scheduler.job_registered",
+        job="ingest_dividends",
+        hour_utc=_DIVIDENDS_HOUR_UTC,
+        minute=_DIVIDENDS_MINUTE,
+    )
+
+    # Stopa referencyjna NBP (krok 41a, etap 8) — wejście do Sharpe'a.
+    # `CronTrigger` z tego samego powodu co przy dywidendach: interwał
+    # tygodniowy liczony od startu workera dryfowałby po kalendarzu przy
+    # każdym restarcie. UTC świadomie — to nie jest dana EOD żadnego rynku.
+    scheduler.add_job(
+        ingest_nbp_rates,
+        trigger=CronTrigger(
+            day_of_week=_NBP_RATES_DAY_OF_WEEK,
+            hour=_NBP_RATES_HOUR_UTC,
+            minute=_NBP_RATES_MINUTE,
+            timezone="UTC",
+        ),
+        id="nbp:reference_rates",
+        name="ingest_nbp_rates",
+        replace_existing=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
+    logger.info(
+        "scheduler.job_registered",
+        job="ingest_nbp_rates",
+        day_of_week=_NBP_RATES_DAY_OF_WEEK,
+        hour_utc=_NBP_RATES_HOUR_UTC,
+        minute=_NBP_RATES_MINUTE,
     )
 
 

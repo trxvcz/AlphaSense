@@ -70,7 +70,7 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
             {portfolioQuery.data.name}
           </h1>
-          {/* Wejścia w widoki struktury (krok 33), wyników (kroki 40/42) i rynków (krok 34) z
+          {/* Wejścia w widoki struktury (krok 33), wyników (kroki 40/42), rynków (krok 34) i dywidend (krok 47) z
               kontekstem tego portfela — nawigacja globalna prowadzi na
               `/struktura` i `/rynki`, które muszą dopiero zapytać, o który
               portfel chodzi. */}
@@ -86,6 +86,18 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
               className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
             >
               Zobacz wyniki na tle rynku →
+            </Link>
+            <Link
+              href={`/portfolios/${portfolioId}/ryzyko`}
+              className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+            >
+              Zobacz ryzyko portfela →
+            </Link>
+            <Link
+              href={`/portfolios/${portfolioId}/dywidendy`}
+              className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+            >
+              Zobacz kalendarz dywidend →
             </Link>
             <Link
               href={`/portfolios/${portfolioId}/rynki`}

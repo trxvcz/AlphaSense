@@ -25,6 +25,11 @@ export const qk = {
   // wymienne. Ta sama zasada co przy `news` niżej.
   performance: (portfolioId: string, range: string, benchmark: string | null) =>
     ["performance", portfolioId, range, benchmark ?? "none"] as const,
+  // `range` i `benchmark` w kluczu z tego samego powodu co w `performance`:
+  // oba zawężają zasób po stronie API (inne okno, beta wobec innego
+  // benchmarku), więc odpowiedzi nie są wymienne.
+  risk: (portfolioId: string, range: string, benchmark: string | null) =>
+    ["risk", portfolioId, range, benchmark ?? "none"] as const,
   markets: (portfolioId: string) => ["markets", portfolioId] as const,
   // `withSentimentOnly` jest CZĘŚCIĄ klucza, nie parametrem odczytu: filtr
   // zawęża zbiór po stronie API, więc odpowiedzi z `true` i `false` to dwa
@@ -32,4 +37,9 @@ export const qk = {
   // z poprzedniego zapytania jako świeże.
   news: (portfolioId: string, withSentimentOnly: boolean) =>
     ["news", portfolioId, withSentimentOnly] as const,
+  // `horizonDays` jest CZĘŚCIĄ klucza z tego samego powodu co `range`
+  // w `performance`: zawęża zbiór po stronie API, więc odpowiedzi dla
+  // 30 i 90 dni nie są wymienne.
+  dividends: (portfolioId: string, horizonDays: number) =>
+    ["dividends", portfolioId, horizonDays] as const,
 };

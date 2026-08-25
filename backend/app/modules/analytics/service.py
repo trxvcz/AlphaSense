@@ -130,8 +130,16 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_key, get_cached_json, set_cached_json
+from app.modules.analytics import risk as risk_module
 from app.modules.analytics.benchmark import Quote, benchmark_index
-from app.modules.analytics.returns import IndexPoint, ValuationPoint, chain_index, period_return
+from app.modules.analytics.returns import (
+    DailyReturn,
+    IndexPoint,
+    ValuationPoint,
+    chain_index,
+    daily_returns,
+    period_return,
+)
 from app.modules.marketdata import repository as marketdata_repository
 from app.modules.marketdata.models import Asset, Price
 from app.modules.portfolio import repository as portfolio_repository
@@ -1112,3 +1120,364 @@ async def _benchmark_series(
         outperformance=_outperformance(portfolio_points, quantized),
         points=quantized,
     )
+
+
+# --- ryzyko (plan krok 41b, etap 8) ----------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DrawdownOut:
+    value: Decimal
+    peak_date: date
+    trough_date: date
+    recovered_at: date | None
+
+
+@dataclass(frozen=True, slots=True)
+class UnderwaterPointOut:
+    date: date
+    value: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyReturnOut:
+    year: int
+    month: int
+    ret: Decimal
+    links: int
+
+
+@dataclass(frozen=True, slots=True)
+class BetaOut:
+    """Beta względem konkretnego benchmarku — albo powód, dla którego jej nie ma.
+
+    Benchmark jest częścią wyniku, nie kontekstem: „beta 1,2" bez informacji,
+    wobec czego, to liczba bez znaczenia. `approximate` niesie tę samą
+    informację co przy wykresie (WIG20 liczony z ETF-a, CLAUDE.md #3.15).
+    """
+
+    key: str
+    symbol: str
+    label: str
+    approximate: bool
+    value: Decimal | None
+    observations: int
+    unavailable_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Risk:
+    """Wynik `GET /portfolios/{id}/risk?range=`.
+
+    Każda metryka jest `... | None` z osobnym `*_unavailable_reason`, bo
+    powody bywają różne i niesprowadzalne do jednego: zmienności może
+    brakować przez krótką serię, a Sharpe'a — przy tej samej serii — przez
+    brak stopy referencyjnej w bazie. Jeden wspólny komunikat kłamałby
+    o jednym z nich (CLAUDE.md #3.15).
+
+    `observations` to liczba ogniw, z których faktycznie liczono — ta sama
+    rola co `links` w `Performance`: zmienność z 25 obserwacji i z 250
+    wygląda identycznie, a znaczy co innego.
+    """
+
+    range: str
+    first_date: date | None
+    last_date: date | None
+    observations: int
+    min_observations: int
+    volatility: Decimal | None
+    volatility_unavailable_reason: str | None
+    sharpe: Decimal | None
+    sharpe_unavailable_reason: str | None
+    risk_free_label: str | None
+    max_drawdown: DrawdownOut | None
+    underwater: list[UnderwaterPointOut]
+    monthly_returns: list[MonthlyReturnOut]
+    beta: BetaOut | None
+
+
+_TOO_FEW_OBSERVATIONS = (
+    "Za mało danych, żeby policzyć tę metrykę — potrzeba co najmniej "
+    f"{risk_module.MIN_OBSERVATIONS} dni z wyceną."
+)
+_NO_RISK_FREE = (
+    "Brak stopy referencyjnej NBP dla tego okresu — Sharpe wymaga stopy wolnej od ryzyka."
+)
+_RISK_FREE_LABEL = "Stopa referencyjna NBP (historyczna, źródło: NBP)"
+
+
+def _risk_to_json(result: Risk) -> str:
+    return json.dumps(
+        {
+            "range": result.range,
+            "first_date": None if result.first_date is None else result.first_date.isoformat(),
+            "last_date": None if result.last_date is None else result.last_date.isoformat(),
+            "observations": result.observations,
+            "min_observations": result.min_observations,
+            "volatility": None if result.volatility is None else str(result.volatility),
+            "volatility_unavailable_reason": result.volatility_unavailable_reason,
+            "sharpe": None if result.sharpe is None else str(result.sharpe),
+            "sharpe_unavailable_reason": result.sharpe_unavailable_reason,
+            "risk_free_label": result.risk_free_label,
+            "max_drawdown": (
+                None
+                if result.max_drawdown is None
+                else {
+                    "value": str(result.max_drawdown.value),
+                    "peak_date": result.max_drawdown.peak_date.isoformat(),
+                    "trough_date": result.max_drawdown.trough_date.isoformat(),
+                    "recovered_at": (
+                        None
+                        if result.max_drawdown.recovered_at is None
+                        else result.max_drawdown.recovered_at.isoformat()
+                    ),
+                }
+            ),
+            "underwater": [
+                {"date": p.date.isoformat(), "value": str(p.value)} for p in result.underwater
+            ],
+            "monthly_returns": [
+                {"year": m.year, "month": m.month, "ret": str(m.ret), "links": m.links}
+                for m in result.monthly_returns
+            ],
+            "beta": (
+                None
+                if result.beta is None
+                else {
+                    "key": result.beta.key,
+                    "symbol": result.beta.symbol,
+                    "label": result.beta.label,
+                    "approximate": result.beta.approximate,
+                    "value": None if result.beta.value is None else str(result.beta.value),
+                    "observations": result.beta.observations,
+                    "unavailable_reason": result.beta.unavailable_reason,
+                }
+            ),
+        }
+    )
+
+
+def _risk_from_json(raw: str) -> Risk:
+    data = json.loads(raw)
+    drawdown = data["max_drawdown"]
+    beta_data = data["beta"]
+    return Risk(
+        range=data["range"],
+        first_date=(None if data["first_date"] is None else date.fromisoformat(data["first_date"])),
+        last_date=(None if data["last_date"] is None else date.fromisoformat(data["last_date"])),
+        observations=data["observations"],
+        min_observations=data["min_observations"],
+        volatility=None if data["volatility"] is None else Decimal(data["volatility"]),
+        volatility_unavailable_reason=data["volatility_unavailable_reason"],
+        sharpe=None if data["sharpe"] is None else Decimal(data["sharpe"]),
+        sharpe_unavailable_reason=data["sharpe_unavailable_reason"],
+        risk_free_label=data["risk_free_label"],
+        max_drawdown=(
+            None
+            if drawdown is None
+            else DrawdownOut(
+                value=Decimal(drawdown["value"]),
+                peak_date=date.fromisoformat(drawdown["peak_date"]),
+                trough_date=date.fromisoformat(drawdown["trough_date"]),
+                recovered_at=(
+                    None
+                    if drawdown["recovered_at"] is None
+                    else date.fromisoformat(drawdown["recovered_at"])
+                ),
+            )
+        ),
+        underwater=[
+            UnderwaterPointOut(date=date.fromisoformat(p["date"]), value=Decimal(p["value"]))
+            for p in data["underwater"]
+        ],
+        monthly_returns=[
+            MonthlyReturnOut(
+                year=m["year"], month=m["month"], ret=Decimal(m["ret"]), links=m["links"]
+            )
+            for m in data["monthly_returns"]
+        ],
+        beta=(
+            None
+            if beta_data is None
+            else BetaOut(
+                key=beta_data["key"],
+                symbol=beta_data["symbol"],
+                label=beta_data["label"],
+                approximate=beta_data["approximate"],
+                value=None if beta_data["value"] is None else Decimal(beta_data["value"]),
+                observations=beta_data["observations"],
+                unavailable_reason=beta_data["unavailable_reason"],
+            )
+        ),
+    )
+
+
+async def _beta_against(
+    db: AsyncSession,
+    spec: BenchmarkSpec,
+    index_points: Sequence[IndexPoint],
+    links: Sequence[DailyReturn],
+) -> BetaOut:
+    """Beta portfela względem `spec`, liczona na OGNIWACH, nie na indeksie.
+
+    Kluczowe jest parowanie: dla każdego ogniwa portfela (`previous_date →
+    date`) bierzemy zwrot benchmarku **z tego samego przedziału**, a nie
+    „kolejny zwrot benchmarku". Ogniwa portfela bywają pomijane (zmiana
+    składu, ADR-101), więc naiwne zestawienie dwóch list obok siebie
+    przesunęłoby serie względem siebie i dało betę wyglądającą normalnie
+    i nieprawdziwą.
+
+    Ogniwa, dla których benchmark nie ma notowania po obu stronach
+    przedziału, wypadają w parze — z tego samego powodu co brakująca stopa
+    w Sharpie.
+    """
+    asset = await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
+    series = await _benchmark_series(db, spec, asset, index_points)
+    if series.unavailable_reason is not None or not series.points:
+        return BetaOut(
+            key=spec.key,
+            symbol=spec.symbol,
+            label=spec.label,
+            approximate=spec.approximate,
+            value=None,
+            observations=0,
+            unavailable_reason=series.unavailable_reason
+            or f"Brak historii {spec.label} dla tego okresu.",
+        )
+
+    by_date = {point.date: point.index for point in series.points}
+    portfolio_returns: list[Decimal] = []
+    benchmark_returns: list[Decimal] = []
+    for link in links:
+        start = by_date.get(link.previous_date)
+        end = by_date.get(link.date)
+        if start is None or end is None or start == 0:
+            continue
+        portfolio_returns.append(link.ret)
+        benchmark_returns.append(end / start - 1)
+
+    value = risk_module.beta(portfolio_returns, benchmark_returns)
+    return BetaOut(
+        key=spec.key,
+        symbol=spec.symbol,
+        label=spec.label,
+        approximate=spec.approximate,
+        value=None if value is None else _quantize_return(value),
+        observations=len(portfolio_returns),
+        unavailable_reason=None if value is not None else _TOO_FEW_OBSERVATIONS,
+    )
+
+
+async def risk(
+    db: AsyncSession, portfolio: Portfolio, *, range_: str, benchmark: str | None = None
+) -> Risk:
+    """`GET /portfolios/{portfolio_id}/risk?range=` — orkiestracja I/O wokół
+    czystego `analytics.risk` (plan krok 41b).
+
+    Ta sama seria wejściowa co `performance` (snapshoty → ogniwa → indeks
+    łańcuchowy), bo to jest jedyna seria, na której te metryki wolno liczyć:
+    `value_pln` niesie wpłaty, a wpłata nie jest ani zmiennością, ani
+    wyjściem z obsunięcia (ADR-101).
+
+    Stopa wolna od ryzyka pochodzi z `nbp_reference_rates` (krok 41a) i jest
+    **zmienna w czasie** — dla każdego ogniwa bierzemy stopę obowiązującą
+    w jego dniu. Stała stopa na wieloletniej serii dałaby po prostu inny
+    wynik: stopa referencyjna szła w tym okresie od 0,10% do 6,75%.
+    """
+    spec = BENCHMARKS[benchmark] if benchmark is not None else None
+    benchmark_asset = (
+        await marketdata_repository.get_asset_by_symbol(db, spec.symbol)
+        if spec is not None
+        else None
+    )
+    key = cache_key(
+        "risk",
+        portfolio.id,
+        portfolio.holdings_version,
+        await portfolio_repository.valuations_marker(db, portfolio.id),
+        range_,
+        spec.key if spec is not None else "none",
+        await _benchmark_marker(db, spec, benchmark_asset),
+        # Własny segment świeżości dla stopy referencyjnej: przychodzi
+        # z tygodniowego joba workera, nie ze snapshotów, więc żaden
+        # z pozostałych markerów nie drgnie, gdy RPP zmieni stopę.
+        str(await marketdata_repository.get_latest_reference_rate_date(db)),
+    )
+    cached = await get_cached_json(key)
+    if cached is not None:
+        return _risk_from_json(cached)
+
+    valuations = await portfolio_repository.list_valuations(
+        db, portfolio.id, range_=range_, today=portfolio_service.today()
+    )
+    points = [
+        ValuationPoint(date=v.date, value_pln=v.value_pln, composition_change=v.composition_change)
+        for v in valuations
+    ]
+    series = daily_returns(points)
+    index = chain_index(points)
+    links = series.returns
+    observations = len(links)
+
+    enough = observations >= risk_module.MIN_OBSERVATIONS
+    vol = risk_module.volatility([link.ret for link in links]) if enough else None
+
+    rate_rows = (
+        await marketdata_repository.list_reference_rates(
+            db, start=links[0].date, end=links[-1].date
+        )
+        if links
+        else []
+    )
+    risk_free = risk_module.risk_free_daily(
+        [Quote(date=row.effective_from, value=row.rate) for row in rate_rows],
+        [link.date for link in links],
+    )
+    sharpe_value = risk_module.sharpe([link.ret for link in links], risk_free) if enough else None
+    # Rozróżniamy „za krótka seria" od „brak stopy": przy tej samej serii
+    # zmienność potrafi być policzona, a Sharpe nie, i użytkownik ma prawo
+    # wiedzieć, czego brakuje.
+    known_rates = sum(1 for rate in risk_free if rate is not None)
+    if sharpe_value is not None:
+        sharpe_reason = None
+    elif known_rates < risk_module.MIN_OBSERVATIONS:
+        sharpe_reason = _NO_RISK_FREE
+    else:
+        sharpe_reason = _TOO_FEW_OBSERVATIONS
+
+    drawdown = risk_module.max_drawdown(index)
+
+    result = Risk(
+        range=range_,
+        first_date=points[0].date if points else None,
+        last_date=points[-1].date if points else None,
+        observations=observations,
+        min_observations=risk_module.MIN_OBSERVATIONS,
+        volatility=None if vol is None else _quantize_pct(vol),
+        volatility_unavailable_reason=None if vol is not None else _TOO_FEW_OBSERVATIONS,
+        sharpe=None if sharpe_value is None else _quantize_return(sharpe_value),
+        sharpe_unavailable_reason=sharpe_reason,
+        risk_free_label=_RISK_FREE_LABEL if known_rates else None,
+        max_drawdown=(
+            None
+            if drawdown is None
+            else DrawdownOut(
+                value=_quantize_pct(drawdown.value),
+                peak_date=drawdown.peak_date,
+                trough_date=drawdown.trough_date,
+                recovered_at=drawdown.recovered_at,
+            )
+        ),
+        underwater=[
+            UnderwaterPointOut(date=p.date, value=_quantize_pct(p.value))
+            for p in risk_module.underwater(index)
+        ],
+        monthly_returns=[
+            MonthlyReturnOut(year=m.year, month=m.month, ret=_quantize_pct(m.ret), links=m.links)
+            for m in risk_module.monthly_returns(links)
+        ],
+        beta=(await _beta_against(db, spec, index, links) if spec is not None else None),
+    )
+
+    await set_cached_json(key, _risk_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
+    return result

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -32,8 +32,17 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.marketdata.models import Asset, AssetSourceMap, FxRate, IngestionRun, Market, Price
+from app.modules.marketdata.models import (
+    Asset,
+    AssetSourceMap,
+    FxRate,
+    IngestionRun,
+    Market,
+    NbpReferenceRate,
+    Price,
+)
 from app.modules.marketdata.providers.base import FxQuote, PriceBar
+from app.modules.marketdata.providers.nbp_rates import ReferenceRate
 
 logger = structlog.get_logger(__name__)
 
@@ -696,3 +705,112 @@ async def get_latest_ingestion_runs(db: AsyncSession) -> dict[str, IngestionRun]
     )
     result = await db.execute(stmt)
     return {run.market_code: run for run in result.scalars().all()}
+
+
+async def upsert_reference_rates(
+    db: AsyncSession,
+    rates: list[ReferenceRate],
+    *,
+    source: str,
+    fetched_at: datetime,
+) -> int:
+    """Zapisuje historię stopy referencyjnej NBP idempotentnie.
+
+    `ON CONFLICT (effective_from) DO UPDATE` — job tygodniowy pobiera za
+    każdym razem pełne archiwum (jedno żądanie, ~96 wierszy), więc
+    przytłaczająca większość wierszy to powtórka. Zwraca liczbę zapisanych
+    wierszy, żeby job miał co zalogować.
+    """
+    if not rates:
+        logger.info("marketdata.upsert_reference_rates.empty")
+        return 0
+    values = [
+        {
+            "effective_from": rate.effective_from,
+            "rate": rate.rate,
+            "source": source,
+            "fetched_at": fetched_at,
+        }
+        for rate in rates
+    ]
+    stmt = insert(NbpReferenceRate).values(values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[NbpReferenceRate.effective_from],
+        set_={
+            "rate": stmt.excluded.rate,
+            "source": stmt.excluded.source,
+            "fetched_at": stmt.excluded.fetched_at,
+        },
+    )
+    await db.execute(stmt)
+    await db.commit()
+    logger.info("marketdata.upsert_reference_rates.done", count=len(values))
+    return len(values)
+
+
+async def get_reference_rate(db: AsyncSession, on_date: date) -> Decimal | None:
+    """Stopa referencyjna NBP obowiązująca w dniu `on_date` (ułamek roczny).
+
+    `max(effective_from) <= D`, dokładnie jak `get_rate_pln` dla kursów
+    (CLAUDE.md #3.5) — z tą różnicą, że tu „cofanie się" nie jest obejściem
+    weekendu, tylko istotą danej: stopa obowiązuje od decyzji RPP do
+    następnej decyzji.
+
+    Zwraca `None`, gdy `on_date` jest wcześniejsza niż pierwszy wpis w
+    archiwum (NBP publikuje od 1998-02-26) albo gdy tabela jest jeszcze
+    pusta. Wołający (Sharpe, krok 41b) ma wtedy **nie liczyć** wskaźnika,
+    a nie podstawiać zero — zero jest wartością tak samo prawdopodobną jak
+    każda inna i milcząco zmieniłoby wynik.
+    """
+    stmt = (
+        select(NbpReferenceRate.rate)
+        .where(NbpReferenceRate.effective_from <= on_date)
+        .order_by(NbpReferenceRate.effective_from.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def list_reference_rates(
+    db: AsyncSession, *, start: date, end: date
+) -> list[NbpReferenceRate]:
+    """Zmiany stopy obowiązujące w `[start, end]`, wraz z tą sprzed `start`.
+
+    Sharpe na serii dziennej potrzebuje stopy dla **każdego** dnia okresu,
+    a nie tylko dla dni, w których RPP coś zmieniła. Wpis obowiązujący na
+    początku okresu prawie nigdy nie ma `effective_from == start`, więc
+    zapytanie zawężone do `[start, end]` zostawiłoby początek serii bez
+    stopy. Stąd dociągamy jeden wiersz wstecz i wołający robi lokalny
+    lookup `max(effective_from) <= D` po tej liście — jedno zapytanie na
+    cały okres zamiast jednego na dzień.
+    """
+    boundary = (
+        select(func.max(NbpReferenceRate.effective_from))
+        .where(NbpReferenceRate.effective_from <= start)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(NbpReferenceRate)
+        .where(
+            NbpReferenceRate.effective_from <= end,
+            or_(
+                NbpReferenceRate.effective_from >= start,
+                NbpReferenceRate.effective_from == boundary,
+            ),
+        )
+        .order_by(NbpReferenceRate.effective_from)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_latest_reference_rate_date(db: AsyncSession) -> date | None:
+    """Najnowsze `effective_from` w tabeli — podstawa oceny świeżości.
+
+    Świeżość liczymy **z tej daty**, nigdy z `data_publikacji` w XML-u NBP,
+    który jest zamrożony na 2015 roku (patrz `providers/nbp_rates`).
+    """
+    stmt = select(func.max(NbpReferenceRate.effective_from))
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()

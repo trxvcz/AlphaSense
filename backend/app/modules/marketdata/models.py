@@ -207,3 +207,28 @@ Index(
     IngestionRun.market_code,
     IngestionRun.started_at.desc(),
 )
+
+
+class NbpReferenceRate(Base):
+    """Stopa referencyjna NBP obowiązująca od `effective_from` (krok 41a).
+
+    Wiersz = **zmiana stopy**, nie dzień. NBP publikuje decyzje RPP, a nie
+    szereg dzienny, więc kopiowanie tej samej wartości na każdy dzień
+    kalendarzowy byłoby zapisywaniem danych, których źródło nie ma.
+    Obowiązywanie „do następnej zmiany" wynika z lookupu
+    `max(effective_from) <= D` przy odczycie (`repository.
+    get_reference_rate`) — ten sam wzorzec co `fx_rates` (CLAUDE.md #3.5).
+
+    `rate` to **ułamek roczny** (`0.03750000` = 3,75% p.a.), nie procent —
+    patrz `providers/nbp_rates.ReferenceRate`.
+
+    Dana nie należy do użytkownika (jak `fx_rates`, `prices`, `news`), więc
+    żaden FK nie prowadzi do `users`.
+    """
+
+    __tablename__ = "nbp_reference_rates"
+
+    effective_from: Mapped[date_] = mapped_column(Date(), primary_key=True)
+    rate: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    source: Mapped[str] = mapped_column(String())
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

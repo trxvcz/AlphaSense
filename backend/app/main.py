@@ -21,9 +21,12 @@ from app.core.observability import init_sentry
 from app.core.rate_limit import DefaultRateLimitMiddleware, limiter
 from app.modules.analytics.routes import router as analytics_router
 from app.modules.auth.routes import router as auth_router
+from app.modules.dividends.routes import router as dividends_router
 from app.modules.marketdata.routes import router as marketdata_router
 from app.modules.news.routes import router as news_router
 from app.modules.portfolio.routes import router as portfolio_router
+from app.modules.tags.routes import router as tags_router
+from app.modules.watchlist.routes import router as watchlist_router
 
 settings = get_settings()
 
@@ -65,6 +68,9 @@ app.include_router(portfolio_router, prefix="/api")
 app.include_router(marketdata_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
+app.include_router(dividends_router, prefix="/api")
+app.include_router(tags_router, prefix="/api")
+app.include_router(watchlist_router, prefix="/api")
 
 
 @app.exception_handler(DomainError)

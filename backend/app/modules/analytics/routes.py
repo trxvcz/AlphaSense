@@ -26,12 +26,17 @@ from app.modules.analytics.schemas import (
     AllocationOut,
     BenchmarkOut,
     BenchmarkPointOut,
+    BetaOut,
     ConcentrationOut,
+    DrawdownOut,
     IndexChangeOut,
     MarketIndexOut,
     MarketRankingItemOut,
+    MonthlyReturnOut,
     PerformanceOut,
     PerformancePointOut,
+    RiskOut,
+    UnderwaterPointOut,
 )
 from app.modules.marketdata.schemas import PricePointOut
 from app.modules.portfolio.routes import ValuationRangeParam
@@ -124,6 +129,77 @@ async def get_performance(
                     BenchmarkPointOut(date=p.date, as_of=p.as_of, index=p.index)
                     for p in result.benchmark.points
                 ],
+            )
+        ),
+    )
+
+
+@router.get("/portfolios/{portfolio_id}/risk", response_model=RiskOut)
+async def get_risk(
+    portfolio: PortfolioDep,
+    db: DbSession,
+    range_: Annotated[ValuationRangeParam, Query(alias="range")] = ValuationRangeParam.MAX,
+    benchmark: Annotated[BenchmarkParam | None, Query()] = None,
+) -> RiskOut:
+    """Zmienność, Sharpe, max drawdown + underwater, beta i heatmapa
+    miesięczna (krok 41b, etap 8).
+
+    Wszystko liczone z tej samej serii co `/performance` — ogniwa i indeks
+    łańcuchowy ze snapshotów, nigdy `value_pln` (ADR-101): wpłata to nie
+    zmienność i nie wyjście z obsunięcia.
+
+    `benchmark` jest wymagany **tylko dla bety** — bez niego reszta metryk
+    liczy się normalnie, a `beta` jest `null`. Ten sam enum co
+    w `/performance`, żeby wybór benchmarku na dashboardzie znaczył to samo
+    na wykresie i we wskaźniku.
+
+    Sharpe używa historycznej stopy referencyjnej NBP (krok 41a), zmiennej
+    w czasie; przy braku stopy zwracamy `null` z powodem, nigdy liczbę
+    policzoną z podstawionego zera.
+    """
+    result = await service.risk(
+        db,
+        portfolio,
+        range_=range_.value,
+        benchmark=None if benchmark is None else benchmark.value,
+    )
+    return RiskOut(
+        range=result.range,
+        first_date=result.first_date,
+        last_date=result.last_date,
+        observations=result.observations,
+        min_observations=result.min_observations,
+        volatility=result.volatility,
+        volatility_unavailable_reason=result.volatility_unavailable_reason,
+        sharpe=result.sharpe,
+        sharpe_unavailable_reason=result.sharpe_unavailable_reason,
+        risk_free_label=result.risk_free_label,
+        max_drawdown=(
+            None
+            if result.max_drawdown is None
+            else DrawdownOut(
+                value=result.max_drawdown.value,
+                peak_date=result.max_drawdown.peak_date,
+                trough_date=result.max_drawdown.trough_date,
+                recovered_at=result.max_drawdown.recovered_at,
+            )
+        ),
+        underwater=[UnderwaterPointOut(date=p.date, value=p.value) for p in result.underwater],
+        monthly_returns=[
+            MonthlyReturnOut(year=m.year, month=m.month, ret=m.ret, links=m.links)
+            for m in result.monthly_returns
+        ],
+        beta=(
+            None
+            if result.beta is None
+            else BetaOut(
+                key=result.beta.key,
+                symbol=result.beta.symbol,
+                label=result.beta.label,
+                approximate=result.beta.approximate,
+                value=result.beta.value,
+                observations=result.beta.observations,
+                unavailable_reason=result.beta.unavailable_reason,
             )
         ),
     )

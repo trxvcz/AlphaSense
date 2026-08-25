@@ -29,7 +29,8 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 | `tags`, `asset_tags` | | | Faza 2 |
 | `news` | id | title, url **UNIQUE**, source, published_at, fetched_at, content_hash **UNIQUE**, summary, sentiment, sentiment_source | krok 46; dwa ograniczenia unikalności, bo ta sama depesza PAP chodzi po serwisach pod różnymi URL-ami |
 | `news_assets` | (news_id, asset_id) | published_at (zdenormalizowane), match_confidence | krok 46; `ON DELETE CASCADE` w obie strony, brak FK do `users` — newsy nie są własnością użytkownika. `match_confidence`: `source` (powiązanie podał dostawca pytany o symbol — fakt) albo `heuristic` (dopasowanie tekstu po naszej stronie — przybliżenie, UI ma je oznaczyć, CLAUDE.md #3.15). Domyślnie `heuristic`, bo pominięcie kolumny ma zaniżać deklarowaną pewność, nie zawyżać |
-| `dividend_events` | | | Faza 3 |
+| `dividend_events` | id | asset_id, ex_date, record_date, pay_date, declaration_date, amount, currency, source, fetched_at; **UNIQUE (asset_id, ex_date)** | krok 47; zapis `ON CONFLICT DO UPDATE` — zapowiedziana kwota/data wypłaty bywa korygowana przed wypłatą, więc świeższa odpowiedź dostawcy wygrywa (odwrotnie niż przy `news`). Brak FK do `users`: zdarzenie nie jest własnością użytkownika, izolacja dzieje się przy odczycie. `amount` w walucie notowania, brutto — bez PLN i bez podatku (to nie jest wpis księgowy, Etap 21) |
+| `nbp_reference_rates` | effective_from | rate, source, fetched_at | krok 41a; **wiersz = zmiana stopy (decyzja RPP), nie dzień** — NBP nie publikuje szeregu dziennego, więc obowiązywanie „do następnej zmiany" wynika z lookupu `max(effective_from) <= D` przy odczycie, jak w `fx_rates` (CLAUDE.md #3.5). `rate` to **ułamek roczny** (`0.03750000` = 3,75% p.a.), nie procent — źródło podaje procent z przecinkiem (`"3,75"`). Klucz główny jednokolumnowy: w danym dniu obowiązuje dokładnie jedna stopa referencyjna, więc nie potrzeba ani sztucznego `id`, ani osobnego `UNIQUE`, ani dodatkowego indeksu. Brak FK do `users` — dana makro nie jest własnością użytkownika. Źródło: `static.nbp.pl/dane/stopy/stopy_procentowe_archiwum.xml` (`api.nbp.pl` **nie** wystawia stóp procentowych); świeżość liczona z `max(effective_from)`, **nigdy** z atrybutu `data_publikacji` w XML-u, który NBP ma zamrożony na 2015 roku |
 
 ## Indeksy
 
@@ -42,6 +43,8 @@ CREATE INDEX ON portfolio_valuations (portfolio_id, date DESC);
 CREATE INDEX ON ingestion_runs (market_code, started_at DESC);
 CREATE INDEX ON news_assets (asset_id, published_at DESC);
 CREATE INDEX ON news (published_at DESC);
+-- rosnąco, nie malejąco: kalendarz czyta najbliższe ex-daty od dziś w przód
+CREATE INDEX ON dividend_events (asset_id, ex_date);
 ```
 
 ## Ograniczenia

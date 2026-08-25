@@ -46,7 +46,7 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 | Metoda | Ścieżka | Opis |
 |---|---|---|
 | GET | `/portfolios/{portfolio_id}/performance?range=1M\|3M\|1Y\|YTD\|max&benchmark=WIG20\|^GSPC` | zwrot za okres + seria indeksu łańcuchowego + opcjonalna seria porównawcza (kroki 40 i 42, cache Redis) |
-| GET | `/portfolios/{portfolio_id}/risk?range=&benchmark=` | zmienność, Sharpe, drawdown, beta (krok 41 — **jeszcze nie ma**) |
+| GET | `/portfolios/{portfolio_id}/risk?range=1M\|3M\|1Y\|YTD\|max&benchmark=WIG20\|^GSPC` | zmienność, Sharpe, max drawdown + underwater, beta, zwroty miesięczne (krok 41b, cache Redis) |
 
 ```jsonc
 // GET /portfolios/{id}/performance?range=1M  (etap 8, krok 40)
@@ -111,6 +111,60 @@ Bez parametru `benchmark` w odpowiedzi jest `null`. Z parametrem dochodzi druga 
 
 **Wyrównanie kalendarzy.** Snapshoty portfela i sesje giełdy nie leżą na tych samych datach. Dla każdej daty portfela benchmark bierze ostatnie notowanie nie późniejsze niż ona (`as_of`) — nie interpoluje i nie przesuwa dat portfela. Brak notowania w dniu startu **lub wcześniej** ⇒ `unavailable_reason`: bez wspólnego punktu odniesienia obie linie startowałyby w różnych miejscach osi X.
 
+### `/risk` (krok 41b)
+
+```jsonc
+// GET /portfolios/{id}/risk?range=1Y&benchmark=^GSPC
+{
+  "range": "1Y",
+  "first_date": "2025-08-25",
+  "last_date": "2026-08-25",
+  "observations": 261,          // liczba ogniw, z których liczono
+  "min_observations": 20,       // próg, poniżej którego metryki są `null`
+  "volatility": "0.2958",       // annualizowana (σ·√252); null ⇒ patrz reason
+  "volatility_unavailable_reason": null,
+  "sharpe": "-0.895185",        // annualizowany, na nadwyżce ponad stopę NBP
+  "sharpe_unavailable_reason": null,
+  "risk_free_label": "Stopa referencyjna NBP (historyczna, źródło: NBP)",
+  "max_drawdown": {
+    "value": "-0.3964",         // UJEMNE — znak niesie kierunek
+    "peak_date": "2025-10-06",
+    "trough_date": "2026-02-05",
+    "recovered_at": null        // null = jeszcze nieodrobione
+  },
+  "underwater": [               // dystans do biegnącego szczytu, per dzień
+    { "date": "2025-08-25", "value": "0.0000" },
+    { "date": "2025-08-26", "value": "-0.0123" }
+  ],
+  "monthly_returns": [          // miesiące BEZ ogniw po prostu nie występują
+    { "year": 2025, "month": 9, "ret": "0.0288", "links": 21 }
+  ],
+  "beta": {                     // null, gdy nie podano `?benchmark=`
+    "key": "WIG20",
+    "symbol": "ETFBW20TR",
+    "label": "WIG20 (przez Beta ETF WIG20TR)",
+    "approximate": true,
+    "value": "0.283949",
+    "observations": 261,
+    "unavailable_reason": null
+  }
+}
+```
+
+**Wszystko liczone z tej samej serii co `/performance`** — ogniwa i indeks łańcuchowy ze snapshotów, nigdy `value_pln` (ADR-101). Wpłata podnosi wartość portfela bez żadnego zysku, więc drawdown na `value_pln` pokazałby dopłatę jako wyjście z obsunięcia, a zmienność liczyłaby ją jako zmienność rynku.
+
+**Każda metryka ma WŁASNY `*_unavailable_reason`.** Przy tej samej serii zmienność bywa policzalna, a Sharpe nie — bo Sharpe dodatkowo wymaga stopy referencyjnej NBP z `nbp_reference_rates` (krok 41a). Jeden wspólny komunikat kłamałby o jednym z nich. Teksty są po polsku i gotowe do wyświetlenia (CLAUDE.md #3.15).
+
+**Sharpe używa stopy ZMIENNEJ W CZASIE.** Dla każdego ogniwa brana jest stopa referencyjna obowiązująca w jego dniu (`max(effective_from) <= D`), podzielona przez 252. Stała stopa na wieloletniej serii dałaby inny wynik — stopa szła w tym okresie od 0,10% do 6,75%. Dni, dla których stopy nie znamy, **wypadają w parze ze swoim zwrotem**; zostawienie zwrotu bez stopy znaczyłoby ciche przyjęcie rf = 0 dla tego dnia. Gdy po odrzuceniu zostaje mniej niż `min_observations` par, `sharpe` to `null` z powodem, nigdy liczba.
+
+**`min_observations` = 20.** Poniżej tego progu zmienność, Sharpe i beta są szumem, nie oszacowaniem, więc API zwraca `null`. **Drawdown progu NIE ma** — jedno obsunięcie jest faktem niezależnie od długości serii, w odróżnieniu od oszacowania rozkładu.
+
+**`max_drawdown.value` jest ujemne**, a `0` znaczy „portfel nigdy nie spadł poniżej szczytu" (prawdziwa odpowiedź). Brak historii to `null` całego obiektu — to co innego niż zero.
+
+**`monthly_returns` składa ogniwa (`Π(1+r)−1`), nie dzieli indeksu z krańców miesiąca.** W miesiącu ze zmianą składu indeks stoi na zerwanym ogniwie, więc iloraz krańców przypisałby miesiącowi zwrot za dni, których nie znamy. `links` mówi, z ilu dni miesiąc powstał — miesiąc z 3 dni i z 20 wygląda na heatmapie identycznie.
+
+**`beta` wymaga `?benchmark=`**; bez niego jest `null` i **nie jest to brak danych**. Ogniwa portfela i zwroty benchmarku są parowane **po datach** (`previous_date → date`), nie zestawiane obok siebie: ogniwa portfela bywają pomijane (zmiana składu), więc naiwne zestawienie przesunęłoby serie i dało betę wyglądającą normalnie i nieprawdziwą.
+
 ## Newsy (Faza 3)
 
 `GET /portfolios/{portfolio_id}/news?limit=&with_sentiment_only=`
@@ -155,6 +209,44 @@ UI ma obowiązek pokazać tę różnicę (CLAUDE.md #3.15). Pole jest **per akty
 Lista `assets` jest **zawężona do aktywów pytającego portfela**. To wymóg izolacji, nie optymalizacja: wiersz `news` jest współdzielony przez wszystkich użytkowników (newsy nie mają FK do `users`), więc nieprzefiltrowana lista powiedziałaby użytkownikowi, co trzymają inni (CLAUDE.md #3.2).
 
 `assets_without_news` wymienia pozycje portfela, dla których nie ma **żadnego** powiązanego newsu. Pole istnieje, bo pusty feed ma dwie różne przyczyny — nic się nie ukazało albo nie umiemy rozpoznać spółki w tekście (dopasowanie jest heurystyką na polskim tekście, patrz `app/modules/news/matching.py`) — a użytkownik widzi w obu przypadkach to samo.
+
+## Dywidendy (Faza 3, krok 47)
+
+`GET /portfolios/{portfolio_id}/dividends?horizon_days=`
+
+Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiada na pytanie „które z moich pozycji mają najbliżej do ex-daty i ile z tego orientacyjnie wyjdzie". `horizon_days` ∈ [1, 365], domyślnie 90 — dalej niż rok w przód żaden darmowy dostawca nie sięga zapowiedziami.
+
+```jsonc
+// GET /portfolios/{id}/dividends → 200
+{
+  "items": [
+    {
+      "symbol": "AAPL",
+      "market_code": "US",
+      "ex_date": "2026-11-09",        // jedyna data zawsze obecna
+      "record_date": "2026-11-09",
+      "pay_date": "2026-11-12",       // null = jeszcze nieogłoszona
+      "declaration_date": "2026-10-29",
+      "amount_per_share": "0.27000000",  // string, BRUTTO, waluta notowania
+      "currency": "USD",
+      "quantity": "10.00000000",
+      "estimated_gross": "2.70000000",   // amount_per_share × quantity
+      "source": "alphavantage",
+      "fetched_at": "2026-08-23T05:15:00Z"
+    }
+  ],
+  "horizon_days": 90,
+  "assets_covered": 1,
+  "assets_without_coverage": ["CDR", "PKN"],
+  "uncovered_markets": ["GPW"]
+}
+```
+
+**Okno zaczyna się dziś.** Zdarzenie z wczorajszą ex-datą jest już nie do złapania, a pokazane w kalendarzu „nadchodzących" sugerowałoby, że da się z nim jeszcze coś zrobić. Historia wypłat to inny zakres (Etap 21).
+
+**Kwoty są brutto, w walucie notowania i bez przeliczenia na PLN.** Kurs właściwy dla wypłaty to kurs z dnia poprzedzającego wypłatę, czyli z przyszłości — liczba w PLN pokazana dziś byłaby prognozą udającą wycenę (CLAUDE.md #3.15). Podatek u źródła i rozliczenie należą do Etapu 21 (CLAUDE.md §22). `estimated_gross` liczy się z **dzisiejszej** wielkości pozycji; dokupienie lub sprzedaż przed ex-datą zmienia wynik.
+
+**`assets_without_coverage` i `uncovered_markets` są najważniejszą częścią tej odpowiedzi.** Dostawcą jest dziś Alpha Vantage (`DIVIDENDS`) — Finnhub `/stock/dividend` zwraca na darmowym planie `403` (sprawdzone 2026-08-23), mimo że plan kroku 47 zakładał właśnie jego. Alpha Vantage **nie pokrywa GPW**: dla `PKN.WAR` oddaje `data: []`, czyli odpowiedź nie do odróżnienia od „spółka nie płaci". Dlatego pokrycie rozstrzyga **mapowanie `asset_source_map` (provider `alphavantage`)**, a nie obecność zdarzeń w bazie: aktywo bez mapowania jest raportowane jako nieobjęte, a nie jako „bez dywidend". Rynek trafia do `uncovered_markets` dopiero wtedy, gdy żadne aktywo portfela z tego rynku nie ma pokrycia.
 
 ## Pomocnicze
 
