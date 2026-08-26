@@ -150,6 +150,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: prod
+    # `DATABASE_URL_APP` (rola `portfel_app`, bez BYPASSRLS) przychodzi
+    # z `.env.prod` razem z resztą sekretów — patrz `.env.example` i
+    # docs/wdrozenie.md, sekcja o kolejności `upgrade head` → `db-roles`.
     env_file: .env.prod
     # Bez tego API było JEDYNĄ usługą bez polityki restartu — po reboocie
     # VPS-a wstawał cały stack poza nim, a Caddy oddawał 502 na `/api/*`.

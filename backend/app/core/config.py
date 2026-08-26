@@ -43,7 +43,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     # --- baza i cache ---
+    # Rola WŁAŚCICIELA: migracje, worker, CLI. Właściciel tabeli omija
+    # polityki RLS i tak ma być — job wyceny liczy snapshoty wszystkich
+    # użytkowników i nie ma czyjegoś `app.user_id` (ADR-002).
     database_url: str = "postgresql+asyncpg://portfel:portfel@postgres:5432/portfel"
+    # Rola APLIKACJI: `portfel_app`, bez `BYPASSRLS` i bez własności tabel,
+    # czyli realnie podlegająca politykom (krok 44). Puste = ten sam
+    # connection string co wyżej, czyli **RLS bez zębów** — dopuszczalne
+    # tylko tam, gdzie role jeszcze nie istnieją (świeży klon repo przed
+    # `make db-roles`), nigdy na produkcji.
+    database_url_app: str = ""
     redis_url: str = "redis://redis:6379/0"
 
     # --- dostawcy danych ---

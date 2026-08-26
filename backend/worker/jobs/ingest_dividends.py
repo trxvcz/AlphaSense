@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.db.advisory_lock import advisory_lock
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.dividends import repository
 from app.modules.dividends.providers.alphavantage_dividends import (
     AlphaVantageDividendsProvider,
@@ -75,7 +75,7 @@ async def ingest_dividends() -> None:
         logger.info("ingest_dividends.no_api_key")
         return
 
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key="ingest_dividends") as acquired:
             if not acquired:
                 logger.info("ingest_dividends.lock_not_acquired")
@@ -87,7 +87,7 @@ async def _run() -> None:
     counters = _Counters()
     fetched_at = datetime.now(UTC)
 
-    async with AsyncSessionLocal() as db:
+    async with OwnerSessionLocal() as db:
         symbols = await repository.list_provider_symbols(db, DIVIDEND_PROVIDER)
         if not symbols:
             # Nie jest to awaria: tak wygląda instalacja z portfelem

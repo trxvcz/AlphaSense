@@ -29,7 +29,7 @@ import structlog
 
 from app.core.errors import ProviderUnavailableError
 from app.db.advisory_lock import advisory_lock
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.marketdata import repository
 from app.modules.marketdata.providers.circuit_breaker import CircuitBreaker
 from app.modules.marketdata.providers.nbp_rates import (
@@ -52,7 +52,7 @@ _REQUESTS_PER_MINUTE = 6
 
 async def ingest_nbp_rates() -> None:
     """Pobiera i zapisuje pełną historię stopy referencyjnej NBP."""
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key="ingest_nbp_rates") as acquired:
             if not acquired:
                 logger.info("ingest_nbp_rates.lock_not_acquired")
@@ -79,7 +79,7 @@ async def _run() -> None:
             logger.warning("ingest_nbp_rates.provider_failed", error=str(exc))
             return
 
-    async with AsyncSessionLocal() as db:
+    async with OwnerSessionLocal() as db:
         stored = await repository.upsert_reference_rates(
             db,
             rates,

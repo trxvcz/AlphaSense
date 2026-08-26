@@ -229,6 +229,18 @@ write_app_version "$TARGET_SHA"
 make prod-build
 make prod-up # `migrate` wykonuje migracje przed startem API
 
+# Rola aplikacji (krok 44, ADR-002 warstwa 3). Idempotentne `ALTER ROLE`,
+# więc leci przy każdym wdrożeniu — pierwsze po migracji `8d1f2a6c40b7`
+# nadaje hasło nowo utworzonej roli, kolejne tylko je potwierdzają.
+# Bez `DATABASE_URL_APP` w `.env.prod` krok jest pomijany, a API łączy się
+# rolą właściciela: aplikacja DZIAŁA, ale RLS jej nie obowiązuje.
+if grep -q '^DATABASE_URL_APP=' .env.prod; then
+	log "Nadaję hasło roli aplikacji (RLS)."
+	make prod-db-roles
+else
+	log "OSTRZEŻENIE: brak DATABASE_URL_APP w .env.prod — API działa bez RLS (ADR-002 warstwa 3)."
+fi
+
 # Seed tylko wtedy, gdy realnie zmienił się słownik rynków. `make prod-seed`
 # restartuje workera, a bezwarunkowy restart przy każdym pushu potrafiłby
 # trafić w okno ingestii EOD i sam wygenerować alert `failed` z kroku 37.

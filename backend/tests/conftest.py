@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_redis
 from app.core.rate_limit import limiter
-from app.db.session import AsyncSessionLocal, engine, get_db
+from app.db.session import AsyncSessionLocal, OwnerSessionLocal, get_db, owner_engine
 from app.main import app
 
 
@@ -37,7 +37,9 @@ app.dependency_overrides[get_db] = _override_get_db
 @pytest_asyncio.fixture(autouse=True)
 async def _clean_auth_tables() -> AsyncGenerator[None, None]:
     """Czyści `users`/`refresh_tokens` przed każdym testem (izolacja testów)."""
-    async with engine.begin() as conn:
+    # Rolą WŁAŚCICIELA: `TRUNCATE` jest prawem właściciela tabeli, a rola
+    # aplikacji (`portfel_app`, krok 44) go nie ma — i nie powinna mieć.
+    async with owner_engine.begin() as conn:
         await conn.execute(text("TRUNCATE TABLE refresh_tokens, users CASCADE"))
     yield
 
@@ -70,8 +72,19 @@ async def _reset_rate_limiter() -> None:
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Sesja do bezpośrednich asercji/setupu w testach (poza żądaniami HTTP)."""
-    async with AsyncSessionLocal() as session:
+    """Sesja do bezpośrednich asercji/setupu w testach (poza żądaniami HTTP).
+
+    **Rola właściciela, nie rola aplikacji** (krok 44). Setup i sprzątanie
+    stoją z definicji poza kontekstem jednego użytkownika: wstawiają aktywa,
+    kasują cudze wiersze, sprawdzają stan bazy „z góry". Pod politykami RLS
+    i bez `app.user_id` widziałyby zero wierszy, a `DELETE` cicho nie
+    usuwałby niczego — testy sypałyby się na sprzątaniu, nie na logice.
+
+    Aplikacja pod testem jedzie osobnym torem: `_override_get_db` używa
+    `AsyncSessionLocal`, czyli roli `portfel_app`. Dzięki temu cała suita
+    integracyjna przechodzi przez RLS naprawdę, a nie obok.
+    """
+    async with OwnerSessionLocal() as session:
         yield session
 
 

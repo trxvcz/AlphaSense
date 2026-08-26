@@ -38,7 +38,7 @@ from datetime import date
 import structlog
 
 from app.db.advisory_lock import advisory_lock
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.portfolio import repository
 from app.modules.portfolio import service as portfolio_service
 
@@ -64,7 +64,7 @@ async def snapshot_portfolios(run_date: date | None = None) -> None:
 
     logger.info("snapshot_portfolios.starting", run_date=effective_date.isoformat())
 
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key=lock_key) as acquired:
             if not acquired:
                 logger.info(
@@ -73,7 +73,7 @@ async def snapshot_portfolios(run_date: date | None = None) -> None:
                 )
                 return
 
-            async with AsyncSessionLocal() as db:
+            async with OwnerSessionLocal() as db:
                 portfolios = await repository.list_all_portfolios(db)
 
                 ok_count = 0

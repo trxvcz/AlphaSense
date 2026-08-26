@@ -28,7 +28,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
 from app.core.observability import init_sentry
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.marketdata.models import Market
 from worker.jobs.ingest_dividends import ingest_dividends
 from worker.jobs.ingest_market import ingest_market
@@ -72,7 +72,7 @@ _NBP_RATES_MINUTE = 20
 
 
 async def _load_markets() -> list[Market]:
-    async with AsyncSessionLocal() as db:
+    async with OwnerSessionLocal() as db:
         result = await db.execute(select(Market).order_by(Market.code))
         return list(result.scalars().all())
 

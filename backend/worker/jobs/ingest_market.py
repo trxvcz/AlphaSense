@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ProviderUnavailableError
 from app.db.advisory_lock import advisory_lock
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.marketdata.models import Asset, IngestionRun, Market
 from app.modules.marketdata.providers.base import Capability
 from app.modules.marketdata.providers.guarded import Guarded
@@ -101,7 +101,7 @@ async def ingest_market(market_code: str, run_date: date | None = None) -> str |
     woła funkcję), ale `app/cli.py ingest` przekłada `"failed"` na niezerowy
     exit code do skryptów/CI (SKILL `job-eod`, sekcja „Diagnostyka").
     """
-    async with AsyncSessionLocal() as lookup_db:
+    async with OwnerSessionLocal() as lookup_db:
         market = await lookup_db.get(Market, market_code)
     if market is None:
         logger.error("ingest_market.unknown_market", market_code=market_code)
@@ -114,7 +114,7 @@ async def ingest_market(market_code: str, run_date: date | None = None) -> str |
         "ingest_market.starting", market_code=market_code, run_date=effective_date.isoformat()
     )
 
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key=lock_key) as acquired:
             if not acquired:
                 logger.info(
@@ -124,7 +124,7 @@ async def ingest_market(market_code: str, run_date: date | None = None) -> str |
                 )
                 return None
 
-            async with AsyncSessionLocal() as db:
+            async with OwnerSessionLocal() as db:
                 status = await _run_ingestion(db, market_code=market_code, run_date=effective_date)
 
     # Snapshot portfeli *po* zwolnieniu blokady rynku (już poza blokiem

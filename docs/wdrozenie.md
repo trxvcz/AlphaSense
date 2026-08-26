@@ -170,6 +170,40 @@ ich mapowania na dostawców. **Bez** demo użytkownika (którego hasło CLI wypi
 konsolę), demo portfela i demo pozycji — na produkcji to byłoby konto do przejęcia i cudze
 dane w bazie użytkownika. Deweloperski `make seed` (pełny) zostaje bez zmian.
 
+### 5.1. Rola aplikacji i RLS (krok 44)
+
+Od migracji `8d1f2a6c40b7` API łączy się z bazą **inną rolą niż właściciel tabel**:
+`portfel_app`, bez `BYPASSRLS`, realnie podlegającą politykom Row Level Security
+(ADR-002 warstwa 3). Wymaga to jednej linii w `.env.prod`:
+
+```
+DATABASE_URL_APP=postgresql+asyncpg://portfel_app:HASLO@postgres:5432/portfel
+```
+
+Kolejność jest istotna: **migracja tworzy rolę bez hasła i bez prawa logowania**
+(hasła nie ma w repo, CLAUDE.md #3.9), dopiero `make prod-db-roles` nadaje jej hasło
+z tej zmiennej. `infra/deploy.sh` robi to sam przy każdym wdrożeniu, o ile zmienna
+jest w `.env.prod`.
+
+**Brak `DATABASE_URL_APP` nie wywraca aplikacji — i to jest celowe.** API schodzi
+wtedy do roli właściciela: działa normalnie, ale polityki go nie obowiązują, bo
+właściciel tabel omija RLS. Tryb awaryjny jest więc „bez trzeciej warstwy obrony",
+a nie „500 na wszystkim". W logu wdrożenia widać wtedy ostrzeżenie.
+
+Weryfikacja po wdrożeniu:
+
+```bash
+make prod-psql
+\du portfel_app          -- ma być BEZ Superuser i BEZ Bypass RLS
+SELECT tablename, policyname FROM pg_policies WHERE schemaname = 'public';  -- 7 polityk
+```
+
+**Wycofanie** (gdyby polityki zablokowały aplikację): `make prod-migrate` w wersji
+wstecz — `alembic downgrade -1` zdejmuje wszystkie polityki i wyłącza RLS na
+tabelach, zostawiając rolę i nadania. Aplikacja wraca do działania bez restartu
+schematu; warstwy 1 i 2 (zależności `get_owned_*`, test izolacji w CI) działają
+przez cały czas niezależnie.
+
 ## 6. Weryfikacja
 
 ```bash
@@ -249,6 +283,9 @@ make prod-ps
 
 Jeżeli zmienił się słownik rynków (`app/db/seed.py`), powtórz `make prod-seed` — seed jest
 idempotentny, a restart workera jest konieczny, żeby zobaczył nowe rynki.
+
+Po migracji dotykającej ról bazy (dziś: `8d1f2a6c40b7`, krok 44) dodatkowo
+`make prod-db-roles` — patrz §5.1.
 
 To jest procedura **awaryjna i ręczna**. Normalnie wdraża CD po pushu na `main` (§11):
 `infra/deploy.sh` robi to samo, ale dodatkowo pilnuje, że commit jest z `origin/main`

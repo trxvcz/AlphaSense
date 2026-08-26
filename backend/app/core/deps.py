@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from app.core.errors import NotFoundError, UnauthorizedError
 from app.core.security import decode_access_token
+from app.db.rls import bind_session_user
 from app.db.session import DbSession
 from app.modules.auth.models import User
 from app.modules.portfolio.models import Holding, Portfolio
@@ -44,6 +45,12 @@ async def get_current_user(
 
     token = authorization.removeprefix(_BEARER_PREFIX).strip()
     user_id = decode_access_token(token)
+
+    # ADR-002 warstwa 3 (krok 44): kontekst RLS ustawiamy **przed** pierwszym
+    # odczytem danych użytkownika i tylko tutaj — to jedyne miejsce w
+    # aplikacji, które wie, kto pyta. Identyfikator pochodzi z podpisanego
+    # tokenu, nie ze ścieżki żądania.
+    await bind_session_user(db, user_id)
 
     user = await db.get(User, user_id)
     if user is None:

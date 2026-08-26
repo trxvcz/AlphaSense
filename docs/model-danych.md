@@ -53,6 +53,32 @@ CREATE INDEX ON tags (user_id);
 CREATE INDEX ON asset_tags (asset_id);
 ```
 
+## Row Level Security (krok 44, ADR-002 warstwa 3)
+
+Polityki po `user_id`, dla roli aplikacji `portfel_app` (bez `BYPASSRLS`, bez własności
+tabel — właściciel i superużytkownik omijają RLS **milcząco**). Kontekst ustawia
+`SET LOCAL app.user_id` przy każdej transakcji (`app/db/rls.py`).
+
+```sql
+-- wprost po user_id
+ALTER TABLE portfolios ENABLE ROW LEVEL SECURITY;   -- tags, watchlists analogicznie
+CREATE POLICY portfolios_owner ON portfolios
+  USING      (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)
+  WITH CHECK (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
+
+-- przez rodzica (holdings, portfolio_valuations → portfolios;
+--                asset_tags → tags; watchlist_items → watchlists)
+CREATE POLICY holdings_owner ON holdings
+  USING      (portfolio_id IN (SELECT id FROM portfolios))
+  WITH CHECK (portfolio_id IN (SELECT id FROM portfolios));
+```
+
+Brak `app.user_id` → `NULL` → **zero wierszy** (nie „wszystkie"). `users` i
+`refresh_tokens` polityk **nie mają**: rejestracja, logowanie i rotacja tokenu dzieją się,
+zanim istnieje `app.user_id`. Słowniki globalne (`assets`, `prices`, `markets`, `fx_rates`,
+`news`, `dividend_events`, `nbp_reference_rates`, `ingestion_runs`) nie mają
+właściciela-użytkownika, więc też nie mają polityk.
+
 ## Ograniczenia
 
 ```sql

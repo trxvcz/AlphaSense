@@ -18,11 +18,13 @@ from datetime import date, datetime, timedelta
 from typing import Literal, cast
 
 import sentry_sdk
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
 from app.core.config import get_settings
 from app.core.observability import init_sentry
 from app.db.seed import seed_all, seed_reference
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal, owner_engine
 from app.modules.portfolio.repository import held_asset_price_coverage
 from app.modules.portfolio.service import today as today_utc
 from worker.jobs.ingest_market import backfill_prices, ingest_market
@@ -31,13 +33,13 @@ from worker.jobs.snapshot_portfolios import snapshot_portfolios
 
 async def _run_seed(*, reference_only: bool) -> None:
     if reference_only:
-        async with AsyncSessionLocal() as session:
+        async with OwnerSessionLocal() as session:
             markets = await seed_reference(session)
         print(f"Zasiano słownik rynków ({markets}) i indeksy referencyjne. Bez danych demo.")
         print("Pamiętaj o restarcie workera — joby EOD czyta raz przy starcie (ADR-102).")
         return
 
-    async with AsyncSessionLocal() as session:
+    async with OwnerSessionLocal() as session:
         result = await seed_all(session)
 
     # `print`, nie `structlog` (docs/konwencje.md „nigdy print" dotyczy kodu
@@ -113,7 +115,7 @@ async def _run_backfill(
     (`--provider`), a nie do liczenia na nich metryk. Zerowy kod przy takim
     stanie oznaczałby, że skrypt/CI przejdzie dalej po cichu.
     """
-    async with AsyncSessionLocal() as session:
+    async with OwnerSessionLocal() as session:
         targets = await backfill_prices(
             session,
             start=start,
@@ -238,7 +240,7 @@ async def _run_seed_history(
         )
         return 2
 
-    async with AsyncSessionLocal() as session:
+    async with OwnerSessionLocal() as session:
         coverage = await held_asset_price_coverage(session)
 
     if not allow_incomplete:
@@ -312,6 +314,55 @@ def _parse_date(value: str) -> date:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"data musi być w formacie YYYY-MM-DD: {value!r}") from exc
+
+
+async def _run_db_roles() -> int:
+    """Nadaje roli aplikacji prawo logowania i hasło (plan krok 44).
+
+    **Hasła nie ma w migracji, bo migracje są w repo** (CLAUDE.md #3.9).
+    Rolę `portfel_app` tworzy migracja `8d1f2a6c40b7` — bez `LOGIN` i bez
+    hasła, czyli jako rolę, którą nie da się jeszcze połączyć. Ta komenda
+    dokłada sekret ze zmiennej środowiskowej `DATABASE_URL_APP`, więc
+    jedynym źródłem prawdy o haśle jest `.env`, a nie dwa miejsca naraz.
+
+    Idempotentna: `ALTER ROLE` można powtarzać, a powtórzenie jest normalnym
+    krokiem po rotacji hasła.
+    """
+    settings = get_settings()
+    if not settings.database_url_app:
+        print(
+            "BŁĄD: DATABASE_URL_APP jest pusty — nie ma czego nadać roli aplikacji.",
+            file=sys.stderr,
+        )
+        return 1
+
+    url = make_url(settings.database_url_app)
+    role, password = url.username, url.password
+    if not role or not password:
+        print(
+            "BŁĄD: DATABASE_URL_APP musi zawierać użytkownika i hasło.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # `owner_engine`, nie `engine`: to jest operacja administracyjna, której
+    # rola aplikacji z definicji nie może wykonać na samej sobie.
+    async with owner_engine.begin() as conn:
+        # `ALTER ROLE ... PASSWORD` nie przyjmuje parametru wiązanego (hasło
+        # musi być literałem), a sklejanie go f-stringiem to wstrzyknięcie
+        # czekające na hasło z apostrofem. Cytowanie zleca się więc
+        # Postgresowi: `format('%I', ...)` dla identyfikatora i `%L` dla
+        # literału, oba z wartości przekazanych jako parametry — dopiero
+        # gotowy, ocytowany tekst leci jako polecenie. Rzutowania `::text`
+        # `CAST(... AS text)` są konieczne: `format` jest wariadyczne, więc
+        # bez nich sterownik nie umie ustalić typu parametru.
+        statement = await conn.scalar(
+            text("SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', CAST(:role AS text), CAST(:pwd AS text))"),
+            {"role": role, "pwd": password},
+        )
+        await conn.execute(text(statement))
+    print(f"Rola {role} może się logować. RLS aktywne dla połączeń tej roli.")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -473,7 +524,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    subparsers.add_parser(
+        "db-roles",
+        help=(
+            "Nadaj roli aplikacji (`portfel_app`) prawo logowania i hasło z "
+            "DATABASE_URL_APP — krok po `alembic upgrade head`, plan krok 44"
+        ),
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "db-roles":
+        return asyncio.run(_run_db_roles())
 
     if args.command == "alert":
         return _run_alert(message=args.message, level=args.level, fingerprint=args.fingerprint)

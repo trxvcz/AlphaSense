@@ -29,6 +29,13 @@ services:
       - "6379:6379"
 
   api:
+    # Rola aplikacji (`portfel_app`) — bez `BYPASSRLS` i bez własności tabel,
+    # więc polityki RLS z migracji `8d1f2a6c40b7` realnie ją obowiązują
+    # (ADR-002 warstwa 3, plan krok 44). Hasło nadaje `make db-roles`.
+    # `worker` tej zmiennej NIE dostaje: liczy snapshoty wszystkich
+    # użytkowników i musi widzieć całą bazę.
+    environment:
+      DATABASE_URL_APP: ${DATABASE_URL_APP:-postgresql+asyncpg://portfel_app:portfel_app@postgres:5432/portfel}
     build:
       context: ./backend
       dockerfile: Dockerfile

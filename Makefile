@@ -1,5 +1,5 @@
-.PHONY: up down logs migrate revision seed backfill seed-history test check smoke fmt shell psql \
-        prod-build prod-up prod-down prod-migrate prod-seed prod-logs prod-ps prod-psql \
+.PHONY: up down logs migrate revision db-roles seed backfill seed-history test check smoke fmt shell psql \
+        prod-build prod-up prod-down prod-migrate prod-db-roles prod-seed prod-logs prod-ps prod-psql \
         backup backup-check backup-restore-test
 
 up:        ## dev: postgres, redis, api, frontend, worker
@@ -16,6 +16,9 @@ migrate:
 
 revision:  ## make revision m="opis zmiany"
 	docker compose exec api alembic revision --autogenerate -m "$(m)"
+
+db-roles:  ## krok 44: nadaj roli `portfel_app` hasło z DATABASE_URL_APP (po `make migrate`)
+	docker compose exec api python -m app.cli db-roles
 
 seed:
 	docker compose exec api python -m app.cli seed
@@ -98,6 +101,9 @@ prod-down:
 
 prod-migrate: ## prod: migracje poza cyklem `up` (np. po samej zmianie schematu)
 	$(PROD) run --rm migrate
+
+prod-db-roles: ## prod: hasło dla roli aplikacji (krok 44) — PO `make prod-migrate`, przed restartem API
+	$(PROD) run --rm --no-deps api python -m app.cli db-roles
 
 prod-seed:    ## prod: słownik rynków i indeksy — BEZ danych demo; potem restart workera
 	$(PROD) run --rm --no-deps api python -m app.cli seed --reference-only

@@ -18,14 +18,17 @@ underwater i heatmapą). Szczegóły w sekcjach kroków 41a i 41b niżej.
 **Zrobione 2026-08-23:** krok 47 (kalendarz dywidend) — backend, job workera, frontend,
 migracja `c03ad7b7217b`. Szczegóły i zmiana dostawcy (Finnhub → Alpha Vantage) w sekcji
 kroku 47 niżej.
-**Zrobione 2026-08-26:** krok **43 w całości** (43a backend + 43b frontend) oraz poprawki
-po code-review kroku 47. Suita **zielona** (backend 540, Vitest 84).
-**Następny ruch:** etap 8, **krok 44**. Decyzją użytkownika (2026-08-25)
+**Zrobione 2026-08-26:** krok **43 w całości** (43a backend + 43b frontend), poprawki
+po code-review kroków 43 i 47 oraz krok **44** (RLS, domknięcie ADR-002).
+Suita **zielona** (backend 548, Vitest 84).
+**Następny ruch:** etap 8, **krok 45** (świece, Lightweight Charts) — ostatni krok etapu 8.
+**UWAGA WDROŻENIOWA:** przed pushem przeczytaj `docs/wdrozenie.md` §5.1 — krok 44 dodaje
+rolę bazy i wymaga `DATABASE_URL_APP` w `.env.prod` (bez niej API działa, ale bez RLS). Decyzją użytkownika (2026-08-25)
 etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
 tryb „krok po kroku" z code-review po każdym. Commity czekają na push — push
 wyzwala wdrożenie produkcyjne z CI.
-**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 44, 45
-nie zaczęte (41 i 43 domknięte). Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
+**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): został krok 45
+(41, 43 i 44 domknięte). Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
 w sekcji „Plan etapu 9", decyzja 1.
 **Ostatnia aktualizacja:** 2026-08-26
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
@@ -42,7 +45,7 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
-| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42, 43 zrobione; 44, 45 zostały |
+| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42, 43, 44 zrobione; **45 zostało** |
 | 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46 i 47 zrobione; następny 48 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
@@ -93,7 +96,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 41 Ryzyko: zmienność, Sharpe, drawdown + underwater, beta, heatmapa miesięczna — 41a (stopa NBP) i 41b (metryki) zrobione 2026-08-25
 [x] 42 Benchmark (WIG20 przez ETFBW20TR, ^GSPC) — `6db8138`, 2026-08-15
 [x] 43 Watchlisty i tagi
-[ ] 44 RLS w Postgres (domknięcie ADR-002)
+[x] 44 RLS w Postgres (domknięcie ADR-002)
 [ ] 45 Wykresy świecowe
 [x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
 [x] 47 Kalendarz dywidend (Alpha Vantage `DIVIDENDS`; GPW nieobjęta i oznaczona) — 2026-08-23
@@ -1075,6 +1078,75 @@ Lookup sprawdzony na realnych datach: 2026-08-25 → 3,75%, 2023-09-06 → 6,75%
 **Nie zrobione (świadomie, to krok 41b):** żadnej metryki ryzyka jeszcze nie ma —
 `nbp_reference_rates` nie ma na razie ani jednego konsumenta poza testami, tabela
 czeka na Sharpe'a. Świeżość tej serii nie jest jeszcze pokazana w `/meta/freshness`.
+
+## Krok 44 — Row Level Security (ZROBIONY 2026-08-26)
+
+Domknięcie ADR-002: trzecia warstwa izolacji danych. Migracja `8d1f2a6c40b7`,
+`app/db/rls.py`, rozdzielenie ról bazy, `make db-roles`, `tests/integration/test_rls.py`.
+
+**Co realnie chroni:** 7 polityk na `portfolios`, `holdings`, `portfolio_valuations`,
+`tags`, `asset_tags`, `watchlists`, `watchlist_items`. Trzy pierwsze i `tags`/`watchlists`
+po `user_id`, tabele bez tej kolumny — przez rodzica (`portfolio_id IN (SELECT id FROM
+portfolios)`), przy czym podzapytanie samo podlega polityce rodzica.
+
+### Decyzje, które okazały się sednem tego kroku
+
+- **Dwie role bazy, nie jedna.** To jest cała różnica między RLS działającym a RLS
+  udawanym: **właściciel tabeli i superużytkownik omijają polityki milcząco**. Aplikacja
+  łączona dotychczasową rolą `portfel` (superużytkownik!) przeszłaby całą suitę zieloną,
+  nie mając włączonej ochrony. Stąd `portfel_app` (`DATABASE_URL_APP`) bez `BYPASSRLS`
+  i bez własności tabel, a `tests/integration/test_rls.py::test_rola_aplikacji_nie_omija_polityk`
+  pilnuje właśnie tego — pada pierwszy, jeśli konfiguracja kiedyś wróci do jednej roli.
+- **`SET LOCAL` przy KAŻDEJ transakcji, nie raz na sesję.** Zwykłe `SET` przeżywa zwrot
+  połączenia do puli, więc następne żądanie odziedziczyłoby cudze `app.user_id` — czyli
+  dokładnie ten wyciek, przed którym RLS broni. Ale `SET LOCAL` żyje tylko do `COMMIT`,
+  a jedno żądanie robi kilka transakcji (serwisy commitują same), więc ustawienie raz
+  w `get_db` znikałoby po pierwszym commicie i reszta żądania widziałaby zero wierszy.
+  Rozwiązanie: listener na zdarzeniu `begin` silnika + `ContextVar` per żądanie
+  (`app/db/rls.py`), plus jawny `set_config` w `get_current_user` dla transakcji,
+  która akurat już trwa.
+- **Brak kontekstu = zero wierszy**, nie „wszystko": `NULLIF(current_setting(...), '')::uuid`
+  daje `NULL`. To jest kryterium akceptacyjne z planu etapu 8 i osobny test.
+- **`users` i `refresh_tokens` bez polityk** — rejestracja, logowanie i rotacja tokenu
+  dzieją się, **zanim** istnieje `app.user_id`; polityka zablokowałaby własne
+  uwierzytelnianie. Ochrona tych tabel zostaje na warstwie 1 (ADR-002).
+- **Worker i CLI na `OwnerSessionLocal`, nie na zmiennej środowiskowej.** Pierwsze podejście
+  (worker bez `DATABASE_URL_APP`) działało w kontenerze, ale wywaliło 5 testów jobu
+  snapshotów uruchamianego w procesie testowym: job widział `portfolios_total=0` zamiast
+  błędu. Joby dostały więc jawną sesję właściciela — „potrzebuję pełnej bazy" ma być
+  widoczne w kodzie, a nie zależne od tego, który kontener dostał którą zmienną.
+- **Hasło roli nie trafia do migracji**, bo migracje są w repo (CLAUDE.md #3.9). Migracja
+  tworzy rolę bez `LOGIN`, `python -m app.cli db-roles` (`make db-roles`) nadaje hasło
+  z `DATABASE_URL_APP`. `ALTER ROLE ... PASSWORD` nie przyjmuje parametru wiązanego, więc
+  cytowanie zleca się Postgresowi (`format('%I ... %L')`), zamiast sklejać hasło f-stringiem.
+- **Tryb awaryjny to „bez RLS", nie „500".** Pusty `DATABASE_URL_APP` = połączenie rolą
+  właściciela: aplikacja działa, ochrony nie ma, a `deploy.sh` krzyczy ostrzeżeniem w logu.
+  Świadomy kompromis: wdrożenie, które gubi jedną zmienną, nie ma kłaść produkcji.
+
+### Weryfikacja
+
+- `alembic downgrade -1` → 0 polityk, `upgrade head` → 7 polityk (sprawdzone na żywo,
+  wymagane planem etapu 8: „gotowa migracja wstecz").
+- `tests/integration/test_rls.py` — 5 testów: rola nie omija polityk, sesja bez
+  `app.user_id` widzi zero wierszy (także po znanym ID), kontekst pokazuje tylko swoje
+  wiersze, dziedziczenie właściciela po rodzicu, brak przecieku kontekstu między sesjami
+  z tej samej puli.
+- **Cała suita integracyjna jedzie teraz przez RLS naprawdę** — `_override_get_db` używa
+  roli aplikacji, a `db_session` (setup/sprzątanie) roli właściciela. Backend **548 passed**.
+- `docker compose up` wstaje w komplecie, `/api/health` `db: up` na roli aplikacji, worker
+  wykonuje joby na roli właściciela.
+
+### Zostaje po kroku 44 (nieblokujące)
+
+- **`FORCE ROW LEVEL SECURITY` nie jest włączone** — właściciel nadal omija polityki, co
+  jest tu funkcją (worker, migracje), ale znaczy też, że pomyłkowe połączenie API rolą
+  właściciela nie zostanie zauważone przez bazę, tylko przez test.
+- **Brak polityk na `users`/`refresh_tokens`** (uzasadnienie wyżej) — do rozważenia
+  osobna polityka „tylko własny wiersz" dla odczytów po zalogowaniu.
+- **`DATABASE_URL_APP` nie jest wymagane przez konfigurację** — pusty string jest legalny
+  i daje cichy tryb bez RLS. Do rozważenia twarda walidacja przy `ENV=prod`.
+- Nowe tabele w przyszłych migracjach **nie dostaną polityk automatycznie**; `ALTER DEFAULT
+  PRIVILEGES` załatwia tylko nadania. Warto dopisać to do skilla `migracja`.
 
 ## Krok 43 — watchlisty i tagi (ZROBIONY 2026-08-26)
 

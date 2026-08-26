@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.db.advisory_lock import advisory_lock
-from app.db.session import AsyncSessionLocal
+from app.db.session import OwnerSessionLocal
 from app.modules.marketdata.providers.circuit_breaker import CircuitBreaker
 from app.modules.marketdata.providers.rate_limiter import RateLimiter
 from app.modules.news import repository
@@ -70,7 +70,7 @@ async def ingest_news() -> None:
 
     logger.info("ingest_news.starting", feeds=len(settings.rss_feed_list))
 
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key="ingest_news") as acquired:
             if not acquired:
                 logger.info("ingest_news.lock_not_acquired")
@@ -94,7 +94,7 @@ async def ingest_news_sentiment() -> None:
         logger.info("ingest_news_sentiment.no_api_key")
         return
 
-    async with AsyncSessionLocal() as lock_session:
+    async with OwnerSessionLocal() as lock_session:
         async with advisory_lock(lock_session, key="ingest_news_sentiment") as acquired:
             if not acquired:
                 logger.info("ingest_news_sentiment.lock_not_acquired")
@@ -131,7 +131,7 @@ async def _run(max_age_days: int) -> None:
     cutoff = fetched_at - timedelta(days=max_age_days)
     counters = _Counters()
 
-    async with AsyncSessionLocal() as db:
+    async with OwnerSessionLocal() as db:
         assets = await repository.list_matchable_assets(db)
         matchers = [build_matcher(a.id, a.symbol, a.name) for a in assets]
         finnhub_symbols = await repository.list_provider_symbols(db, "finnhub")
@@ -219,7 +219,7 @@ async def _run_sentiment(max_age_days: int) -> None:
     cutoff = fetched_at - timedelta(days=max_age_days)
     counters = _Counters()
 
-    async with AsyncSessionLocal() as db:
+    async with OwnerSessionLocal() as db:
         mappings = await repository.list_provider_symbols(db, "alphavantage")
         if not mappings:
             logger.info("ingest_news_sentiment.no_mapped_assets")
