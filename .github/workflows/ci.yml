@@ -28,12 +28,27 @@ jobs:
       - name: Migracje
         run: cd backend && alembic upgrade head
         env: { DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test' }
+      # Krok 44 (ADR-002 warstwa 3): migracja tworzy rolę `portfel_app` BEZ
+      # hasła i bez `LOGIN` (sekret nie może stać w repo), więc bez tego kroku
+      # aplikacja nie ma się czym połączyć. Hasło jest tu jawne i takie ma
+      # zostać: to efemeryczna baza usługi CI, nie środowisko z danymi.
+      # Bez `DATABASE_URL_APP` w krokach testowych API zeszłoby do roli
+      # właściciela, a wtedy polityki RLS **nie obowiązują** — cała suita
+      # przechodziłaby, nie sprawdziwszy trzeciej warstwy izolacji
+      # (patrz `tests/integration/test_rls.py`, docstring modułu).
+      - name: Rola aplikacji (RLS)
+        run: cd backend && python -m app.cli db-roles
+        env:
+          DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
+          DATABASE_URL_APP: 'postgresql+asyncpg://portfel_app:portfel_app@localhost:5432/portfel_test'
       # `markets` to słownik referencyjny (ADR-102), nie dane testowe: `assets`
       # ma FK na `market_code`, więc bez tego kroku KAŻDY test tworzący aktywo
       # kończy się `ForeignKeyViolation` — łącznie z całą bramką izolacji.
       # Dev dostaje słownik przez `make seed`, produkcja przez `make prod-seed`;
       # CI nie miał go wcale i dlatego `make check` świecił zielono lokalnie
       # (pytest w kontenerze `api` uderza w zasianą bazę dev), a CI czerwono.
+      # Seed jedzie rolą WŁAŚCICIELA (bez `*_APP`): to dane słownikowe całej
+      # instalacji, nie zasób użytkownika.
       - name: Seed słownika rynków
         run: cd backend && python -m app.cli seed --reference-only
         env:
@@ -43,11 +58,13 @@ jobs:
         run: cd backend && pytest -q -m "not network"
         env:
           DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
+          DATABASE_URL_APP: 'postgresql+asyncpg://portfel_app:portfel_app@localhost:5432/portfel_test'
           REDIS_URL: 'redis://localhost:6379/0'
       - name: Test izolacji dwóch użytkowników (bramka bezpieczeństwa)
         run: cd backend && pytest -q tests/test_isolation.py
         env:
           DATABASE_URL: 'postgresql+asyncpg://portfel:portfel@localhost:5432/portfel_test'
+          DATABASE_URL_APP: 'postgresql+asyncpg://portfel_app:portfel_app@localhost:5432/portfel_test'
           REDIS_URL: 'redis://localhost:6379/0'
 
   frontend:

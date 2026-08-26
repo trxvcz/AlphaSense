@@ -83,9 +83,7 @@ def upgrade() -> None:
         """
     )
     op.execute(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}")
-    op.execute(
-        f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}"
-    )
+    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}")
     op.execute(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}")
     # Tabele powstałe PÓŹNIEJ (kolejne migracje) mają dostać te same prawa
     # automatycznie — inaczej pierwszy endpoint na nowej tabeli wywaliłby się
