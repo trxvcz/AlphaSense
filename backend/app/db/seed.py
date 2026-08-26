@@ -291,6 +291,14 @@ SOURCE_MAPS: tuple[SourceMapSeed, ...] = (
     # dokładnie tak samo jak `finnhub` wyżej.
     SourceMapSeed("AAPL", "US", "alphavantage", "AAPL", 3),
     SourceMapSeed("MSFT", "US", "alphavantage", "MSFT", 3),
+    # Dywidendy (krok 47) mają **własny klucz dostawcy**, mimo że pod spodem
+    # to ten sam Alpha Vantage. Wspólny klucz `alphavantage` znaczyłby, że
+    # każde aktywo zmapowane dla newsów kalendarz raportuje jako „pokryte
+    # dywidendowo" (i odwrotnie) — a to dwie różne funkcje API o różnym
+    # pokryciu rynków. Rozdzielenie pozwala też włączyć aktywo do jednego
+    # joba bez wciągania go do drugiego, czyli bez palenia dobowego limitu.
+    SourceMapSeed("AAPL", "US", "alphavantage_dividends", "AAPL", 3),
+    SourceMapSeed("MSFT", "US", "alphavantage_dividends", "MSFT", 3),
     # inne indeksy zagraniczne (tylko yfinance — jeden dostawca w łańcuchu
     # dla tych rynków, `finnhub` w łańcuchu wyłącznie dla akcji AAPL/MSFT)
     SourceMapSeed("^GDAXI", "XETRA", "yfinance", "^GDAXI", 1),

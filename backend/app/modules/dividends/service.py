@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date as date_
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,17 @@ from app.modules.dividends.schemas import DividendCalendarOut, DividendEventOut
 # Dostawca, którego mapowanie w `asset_source_map` rozstrzyga o pokryciu
 # kalendarza. Stała tutaj, a nie w `repository`, bo to decyzja produktowa
 # („czym dziś pokrywamy dywidendy"), nie szczegół zapytania.
-DIVIDEND_PROVIDER = "alphavantage"
+DIVIDEND_PROVIDER = "alphavantage_dividends"
+
+# Skala kwot w kontrakcie API = skala kolumn NUMERIC(20,8). Mnożenie
+# `Decimal` sumuje skale czynników (0.27 * 10.00000000 → 16 miejsc po
+# przecinku), więc bez kwantyzacji endpoint zwracałby liczby o dokładności,
+# której nie ma w danych, i niezgodne z resztą kontraktu (CLAUDE.md #3.1).
+_SCALE = Decimal("0.00000001")
+
+
+def _quantize(value: Decimal) -> Decimal:
+    return value.quantize(_SCALE, rounding=ROUND_HALF_UP)
 
 
 async def portfolio_calendar(
@@ -95,7 +105,7 @@ async def portfolio_calendar(
             amount_per_share=event.amount,
             currency=event.currency,
             quantity=quantities[event.asset_id],
-            estimated_gross=event.amount * quantities[event.asset_id],
+            estimated_gross=_quantize(event.amount * quantities[event.asset_id]),
             source=event.source,
             fetched_at=event.fetched_at,
         )

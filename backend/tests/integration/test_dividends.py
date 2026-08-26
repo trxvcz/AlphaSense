@@ -169,7 +169,10 @@ async def test_kalendarz_zwraca_nadchodzace_zdarzenia_z_szacunkiem_kwoty(
     assert item["quantity"] == "10.00000000"
     # Szacunek = kwota na akcję × ilość, w walucie zdarzenia. Bez przeliczeń
     # na PLN: kurs właściwy dla wypłaty jest z przyszłości.
-    assert Decimal(item["estimated_gross"]) == Decimal("2.7")
+    # Dokładny string, nie tylko wartość: kontrakt obiecuje skalę
+    # NUMERIC(20,8), a mnożenie `Decimal` samo z siebie dałoby tu
+    # "2.7000000000000000" (skale czynników się sumują).
+    assert item["estimated_gross"] == "2.70000000"
     assert item["currency"] == "USD"
 
 

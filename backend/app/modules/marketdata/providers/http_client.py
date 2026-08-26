@@ -62,8 +62,46 @@ async def get_with_backoff(
             await limiter.backoff(attempt)
             attempt += 1
             continue
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise _redacted(exc) from None
         return response
+
+
+# Nazwy parametrów zapytania, które są sekretem. `httpx` wkleja pełny URL
+# (razem z query stringiem) do komunikatu `HTTPStatusError`, a ten trafia do
+# logów i do Sentry — bez redakcji klucz API dostawcy wyciekłby przy każdym
+# błędnym statusie (CLAUDE.md #3.9: nie logujemy sekretów).
+_SECRET_PARAMS = frozenset({"apikey", "apiKey", "api_key", "token", "auth_token"})
+_REDACTED = "REDACTED"
+
+
+def _redact_url(url: httpx.URL) -> httpx.URL:
+    present = [key for key in _SECRET_PARAMS if key in url.params]
+    if not present:
+        return url
+    params = url.params
+    for key in present:
+        params = params.set(key, _REDACTED)
+    return url.copy_with(query=str(params).encode())
+
+
+def _redacted(exc: httpx.HTTPStatusError) -> httpx.HTTPStatusError:
+    """Odtwarza wyjątek z URL-em bez sekretów.
+
+    Komunikat budowany jest od zera, a nie podmieniany w oryginale — `httpx`
+    składa go w `__init__` i późniejsza podmiana `request.url` nie zmieniłaby
+    już `str(exc)`, czyli tego, co realnie ląduje w logu.
+    """
+    safe_url = _redact_url(exc.request.url)
+    message = (
+        f"Client error '{exc.response.status_code} {exc.response.reason_phrase}' "
+        f"for url '{safe_url}'"
+    )
+    request = exc.request
+    request.url = safe_url
+    return httpx.HTTPStatusError(message, request=request, response=exc.response)
 
 
 def decimal_or_none(raw: str | float | int | None) -> Decimal | None:

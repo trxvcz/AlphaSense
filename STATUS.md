@@ -1724,7 +1724,7 @@ jest w darmowym planie i oddaje komplet czterech dat (`ex_dividend_date`,
 **GPW nadal nie jest pokryta — zgodnie z tym, co plan przewidywał jako ograniczenie.**
 Alpha Vantage dla `PKN.WAR` oddaje `{"symbol": "PKN.WAR", "data": []}`, czyli odpowiedź
 **nie do odróżnienia od „spółka nie płaci dywidendy"**. Dlatego pokrycie rozstrzyga
-mapowanie `asset_source_map` (provider `alphavantage`), a nie obecność zdarzeń w bazie:
+mapowanie `asset_source_map` (provider `alphavantage_dividends`), a nie obecność zdarzeń w bazie:
 aktywo bez mapowania jest raportowane jako **nieobjęte** (`assets_without_coverage`,
 `uncovered_markets`), a nie jako „bez dywidend" (CLAUDE.md #3.15). UI pokazuje tę notę
 **nad** listą i także wtedy, gdy lista nie jest pusta.
@@ -1789,6 +1789,61 @@ aktywo bez mapowania jest raportowane jako **nieobjęte** (`assets_without_cover
   mapowanych aktywów jest 2.
 - Brak podkomendy CLI (`python -m app.cli ingest-dividends`) — tak samo jak przy newsach
   z kroku 46; ręczne uruchomienie idzie przez `python -c`.
+
+### Poprawki po code-review kroku 47 (2026-08-26)
+
+Cztery znaleziska **blokujące** i dwa „do poprawy" zamknięte:
+
+1. **Klucz API wyciekał komunikatem wyjątku HTTP** (`marketdata/providers/http_client.py`).
+   `httpx` wkleja pełny URL — razem z `apikey=` — do treści `HTTPStatusError`, a ten
+   trafia do logu i do Sentry przy każdym statusie != 2xx. Naprawione **u przyczyny**,
+   w `get_with_backoff`: URL jest odtwarzany z sekretami zamienionymi na `***`
+   (`apikey`, `apiKey`, `api_key`, `token`, `auth_token`), reszta query stringu zostaje.
+   To naprawia jednocześnie dostawców z kroku 46 (`alphavantage_news`, `finnhub_news`),
+   którzy mieli ten sam problem. Zweryfikowane, że nikt poza `auth/service.py` nie łapie
+   `HTTPStatusError`, więc podmiana obiektu nie zmienia niczyjej logiki.
+   Test: `tests/unit/test_http_client_redaction.py`.
+2. **Padnięty symbol kasował dane całego przebiegu** (`worker/jobs/ingest_dividends.py`).
+   `_ingest_symbol` łapał wyłącznie `ProviderUnavailableError` (a `get_with_backoff`
+   wypuszcza `httpx.HTTPStatusError` wprost), a commit był jeden, na końcu przebiegu —
+   więc awaria ósmego symbolu unieważniała sesję i wyrzucała siedem udanych pobrań,
+   czyli spalony dobowy budżet bez zapisu. Teraz: commit **po każdym symbolu**,
+   `rollback()` + `logger.exception` w gałęzi błędu, łapanie szerokie.
+   Test: `tests/integration/test_ingest_dividends_job.py` (fake provider, jeden symbol
+   rzuca, drugi zapisuje).
+3. **`NaN`/`Infinity` w kwocie wywracały cały symbol** (`alphavantage_dividends.py`).
+   `Decimal("NaN")` powstaje bez błędu, ale `Decimal("NaN") <= 0` rzuca
+   `InvalidOperation` — kontrola skończoności musi iść **przed** porównaniem. Dołożony
+   też górny limit `1e12` (pojemność `NUMERIC(20,8)`): większa kwota wysadziłaby dopiero
+   `INSERT`. Testy rozszerzone o `"NaN"`, `"Infinity"`, `"1e12"`.
+4. **Rozdzielone mapowanie dostawców.** `DIVIDEND_PROVIDER` było `"alphavantage"`, czyli
+   ten sam klucz `asset_source_map` co job sentymentu z kroku 46 — każde aktywo zmapowane
+   dla newsów kalendarz raportował jako „pokryte dywidendowo" i odwrotnie, mimo że to dwie
+   różne funkcje API o różnym pokryciu rynków. Teraz `"alphavantage_dividends"`, z własnymi
+   wierszami w `db/seed.py`; `docs/api-kontrakt.md` zaktualizowany.
+5. **`estimated_gross` kwantyzowany do 8 miejsc** (`ROUND_HALF_UP`). Mnożenie `Decimal`
+   sumuje skale czynników, więc endpoint zwracał `"2.7000000000000000"` zamiast
+   obiecanego kontraktem `"2.70000000"`. Test sprawdza dokładny string, nie wartość.
+
+**Weryfikacja:** `ruff format`/`ruff check`/`mypy` (strict, 98 plików) zielone, backend
+**517 passed** (w tym 5 nowych: 3 redakcji URL, 2 odporności joba) — czerwone zostaje
+wyłącznie znane 10 testów `test_isolation.py` z niedokończonego kroku 43
+(`KeyError: 'tag_id'`/`'watchlist_id'`), niezwiązane z tymi poprawkami. Frontend:
+Vitest **77 passed**, `tsc --noEmit` czysty (frontend nietknięty w tej partii).
+
+**Zostaje jako nieblokujące** (poza powyższą listą z kroku 47):
+
+- Nowy dostawca nie jest owinięty w `Guarded`/`CircuitBreaker` (job idzie prosto do
+  providera), a jego `RateLimiter` używa klucza `alphavantage_dividends`, czyli **innego
+  wiadra niż job newsowy**, mimo wspólnego konta i wspólnego limitu 25/dobę. To samo
+  znalezisko co przy `finnhub_news` w kroku 46 — do domknięcia razem.
+- `repository.list_covered_asset_ids` nie filtruje `AssetSourceMap.is_active`.
+- Klasy aktywów, które z definicji nie płacą dywidend (krypto), trafiają na listę
+  „bez pokrycia" — formalnie prawda, ale zaszumia komunikat.
+- Sumowanie ilości po `asset_id` w `service` jest martwe (`uq_holdings_portfolio_asset`
+  gwarantuje jeden wiersz), a komentarz obok twierdzi inaczej.
+- `SOON_DAYS` jako stała w komponencie, `today` liczone przy każdym renderze,
+  brak testu `horizon_days=0/366 → 422`.
 
 ## Backlog po code-review etapu 6 — DOMKNIĘTY 2026-07-29
 

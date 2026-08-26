@@ -231,7 +231,7 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
       "currency": "USD",
       "quantity": "10.00000000",
       "estimated_gross": "2.70000000",   // amount_per_share × quantity
-      "source": "alphavantage",
+      "source": "alphavantage_dividends",
       "fetched_at": "2026-08-23T05:15:00Z"
     }
   ],
@@ -246,7 +246,7 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 
 **Kwoty są brutto, w walucie notowania i bez przeliczenia na PLN.** Kurs właściwy dla wypłaty to kurs z dnia poprzedzającego wypłatę, czyli z przyszłości — liczba w PLN pokazana dziś byłaby prognozą udającą wycenę (CLAUDE.md #3.15). Podatek u źródła i rozliczenie należą do Etapu 21 (CLAUDE.md §22). `estimated_gross` liczy się z **dzisiejszej** wielkości pozycji; dokupienie lub sprzedaż przed ex-datą zmienia wynik.
 
-**`assets_without_coverage` i `uncovered_markets` są najważniejszą częścią tej odpowiedzi.** Dostawcą jest dziś Alpha Vantage (`DIVIDENDS`) — Finnhub `/stock/dividend` zwraca na darmowym planie `403` (sprawdzone 2026-08-23), mimo że plan kroku 47 zakładał właśnie jego. Alpha Vantage **nie pokrywa GPW**: dla `PKN.WAR` oddaje `data: []`, czyli odpowiedź nie do odróżnienia od „spółka nie płaci". Dlatego pokrycie rozstrzyga **mapowanie `asset_source_map` (provider `alphavantage`)**, a nie obecność zdarzeń w bazie: aktywo bez mapowania jest raportowane jako nieobjęte, a nie jako „bez dywidend". Rynek trafia do `uncovered_markets` dopiero wtedy, gdy żadne aktywo portfela z tego rynku nie ma pokrycia.
+**`assets_without_coverage` i `uncovered_markets` są najważniejszą częścią tej odpowiedzi.** Dostawcą jest dziś Alpha Vantage (`DIVIDENDS`) — Finnhub `/stock/dividend` zwraca na darmowym planie `403` (sprawdzone 2026-08-23), mimo że plan kroku 47 zakładał właśnie jego. Alpha Vantage **nie pokrywa GPW**: dla `PKN.WAR` oddaje `data: []`, czyli odpowiedź nie do odróżnienia od „spółka nie płaci". Dlatego pokrycie rozstrzyga **mapowanie `asset_source_map` (provider `alphavantage_dividends`)**, a nie obecność zdarzeń w bazie: aktywo bez mapowania jest raportowane jako nieobjęte, a nie jako „bez dywidend". Rynek trafia do `uncovered_markets` dopiero wtedy, gdy żadne aktywo portfela z tego rynku nie ma pokrycia.
 
 ## Pomocnicze
 

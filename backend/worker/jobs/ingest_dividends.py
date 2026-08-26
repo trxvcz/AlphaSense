@@ -118,7 +118,6 @@ async def _run() -> None:
                     fetched_at=fetched_at,
                     counters=counters,
                 )
-        await db.commit()
 
     logger.info(
         "ingest_dividends.finished",
@@ -140,29 +139,50 @@ async def _ingest_symbol(
     fetched_at: datetime,
     counters: _Counters,
 ) -> None:
-    """Jeden symbol. Błąd dostawcy **nie przerywa przebiegu** (SKILL
+    """Jeden symbol, jedna transakcja. Błąd **nie przerywa przebiegu** (SKILL
     `job-eod`, reguła 6) — reszta symboli ma się zaciągnąć, a pojedyncza
-    awaria zostaje w logu z symbolem, którego dotyczy."""
+    awaria zostaje w logu z symbolem, którego dotyczy.
+
+    **Commit po każdym symbolu, nie raz na końcu przebiegu.** Przy jednym
+    commicie końcowym awaria ósmego symbolu — albo błąd bazy przy zapisie —
+    unieważniałaby sesję i kasowała dane siedmiu poprzednich, czyli spalony
+    dobowy budżet dostawcy bez żadnego zapisu. `rollback()` w gałęzi błędu
+    przywraca sesję do stanu używalnego dla następnego symbolu.
+
+    Łapiemy szeroko (`Exception`), nie tylko `ProviderUnavailableError`:
+    `get_with_backoff` wypuszcza `httpx.HTTPStatusError`/`httpx.TransportError`
+    wprost, a parser dostawcy może rzucić czymkolwiek na nieoczekiwanym
+    kształcie odpowiedzi. Job dobowy ma dowieźć resztę symboli, a nie
+    przewrócić się na jednym.
+    """
     try:
         announcements = await provider.get_dividends(provider_symbol)
+
+        counters.fetched += len(announcements)
+        for announcement in announcements:
+            await _store(
+                db,
+                announcement,
+                asset_id=asset_id,
+                currency=currency,
+                fetched_at=fetched_at,
+                counters=counters,
+            )
+        await db.commit()
     except ProviderUnavailableError as exc:
+        await db.rollback()
         counters.failed_symbols += 1
         logger.warning(
             "ingest_dividends.provider_failed",
             symbol=provider_symbol,
             error=str(exc),
         )
-        return
-
-    counters.fetched += len(announcements)
-    for announcement in announcements:
-        await _store(
-            db,
-            announcement,
-            asset_id=asset_id,
-            currency=currency,
-            fetched_at=fetched_at,
-            counters=counters,
+    except Exception:
+        await db.rollback()
+        counters.failed_symbols += 1
+        logger.exception(
+            "ingest_dividends.symbol_failed",
+            symbol=provider_symbol,
         )
 
 

@@ -46,6 +46,8 @@ logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://www.alphavantage.co/query"
 _REQUEST_TIMEOUT = 15.0
+# Pojemność kolumny `dividend_events.amount` = NUMERIC(20,8).
+_MAX_AMOUNT = Decimal("1e12")
 
 
 def _parse_date(raw: Any) -> date | None:
@@ -153,10 +155,16 @@ class AlphaVantageDividendsProvider:
             amount = Decimal(str(raw.get("amount")).strip())
         except (InvalidOperation, AttributeError):
             return None
+        # `NaN`/`Infinity` przechodzą przez konstruktor `Decimal` bez błędu,
+        # a `Decimal("NaN") <= 0` rzuca `InvalidOperation` — dlatego kontrola
+        # skończoności musi iść **przed** porównaniem, nie po nim. Górny limit
+        # to pojemność kolumny `NUMERIC(20,8)` (12 cyfr przed przecinkiem):
+        # większa kwota i tak wywaliłaby zapis do bazy, więc lepiej odrzucić
+        # ją jako artefakt danych tutaj, bez przewracania całego symbolu.
         # Dywidenda ujemna albo zerowa nie jest zdarzeniem, tylko artefaktem
         # danych — a zerowa kwota w kalendarzu wygląda jak zapowiedź wypłaty
         # niczego.
-        if amount <= 0:
+        if not amount.is_finite() or amount <= 0 or amount >= _MAX_AMOUNT:
             return None
 
         return DividendAnnouncement(

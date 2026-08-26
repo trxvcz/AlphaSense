@@ -119,10 +119,17 @@ async def test_wpis_bez_ex_daty_jest_pomijany() -> None:
 
 
 @respx.mock
-@pytest.mark.parametrize("amount", ["0", "-1.5", "None", ""])
+@pytest.mark.parametrize("amount", ["0", "-1.5", "None", "", "NaN", "Infinity", "1e12"])
 async def test_kwota_niedodatnia_lub_nieparsowalna_jest_pomijana(amount: str) -> None:
     """Zerowa kwota w kalendarzu wygląda jak zapowiedź wypłaty niczego,
-    a ujemna jest artefaktem danych."""
+    a ujemna jest artefaktem danych.
+
+    `"NaN"`/`"Infinity"` to osobna pułapka: `Decimal` przyjmuje je bez
+    błędu, a `Decimal("NaN") <= 0` rzuca `InvalidOperation` — czyli naiwna
+    kontrola znaku wywaliłaby cały symbol zamiast pominąć jeden wiersz.
+    `1e12` przekracza pojemność `NUMERIC(20,8)` i wysadziłaby dopiero
+    `INSERT`, po spaleniu zapytania u dostawcy.
+    """
     respx.get(_URL).mock(
         return_value=httpx.Response(200, json={"symbol": "AAPL", "data": [_row(amount=amount)]})
     )
