@@ -146,6 +146,7 @@ from app.modules.portfolio import repository as portfolio_repository
 from app.modules.portfolio import service as portfolio_service
 from app.modules.portfolio.models import Portfolio
 from app.modules.portfolio.service import ValuedHolding
+from app.modules.tags import repository as tags_repository
 
 # Liczba punktów mini-serii w rankingu rynków (`GET /portfolios/{id}/markets`)
 # — skill `analityka-struktury`: „mini-seria 30 dni".
@@ -469,15 +470,46 @@ def _allocation_from_json(raw: str) -> Allocation:
     )
 
 
-async def allocation(db: AsyncSession, portfolio: Portfolio, *, by: str) -> Allocation:
-    """`GET /portfolios/{portfolio_id}/allocation?by=` — orkiestracja I/O:
+def _tags_cache_segment(tag_names: list[str] | None) -> str:
+    """Segment klucza cache dla filtra tagów.
+
+    **Musi istnieć zawsze, także bez filtra** — inaczej zapytanie z `?tags=`
+    trafiałoby w ten sam klucz co bez filtra i oddawało cudzy, nieprzefiltrowany
+    wynik (albo odwrotnie). Nazwy są sortowane i odduplikowane, bo `?tags=a,b`
+    i `?tags=b,a,a` to to samo pytanie.
+    """
+    if not tag_names:
+        return "tags=-"
+    return "tags=" + ",".join(sorted(set(tag_names)))
+
+
+async def allocation(
+    db: AsyncSession,
+    portfolio: Portfolio,
+    *,
+    by: str,
+    tag_names: list[str] | None = None,
+) -> Allocation:
+    """`GET /portfolios/{portfolio_id}/allocation?by=&tags=` — orkiestracja I/O:
     wycenia portfel na „dziś" (`portfolio_service.current_value`), potem
     deleguje grupowanie do `allocation_from_valued` (czysta, testowana bez
     bazy). Owinięte cache'em Redis (plan krok 31, CLAUDE.md #3.7, docstring
-    modułu „Krok 31") — `by` jest osobnym segmentem klucza, bo każdy wymiar
-    ma inny wynik dla tego samego portfela/dnia."""
+    modułu „Krok 31") — `by` i filtr tagów są osobnymi segmentami klucza, bo
+    każdy z nich daje inny wynik dla tego samego portfela/dnia.
+
+    **Filtr tagów zawęża pozycje PRZED liczeniem wag**, więc wagi sumują się
+    do 100% w obrębie tego, co filtr przepuścił — to jest pytanie, które ten
+    ekran zadaje („jak wygląda struktura mojej części dywidendowej"), a nie
+    „jaki udział w całym portfelu ma część dywidendowa". Semantyka wielu
+    tagów to OR, patrz `tags/repository.asset_ids_for_tag_names`.
+    """
     key = cache_key(
-        "allocation", portfolio.id, portfolio.holdings_version, await _eod_marker(db, portfolio), by
+        "allocation",
+        portfolio.id,
+        portfolio.holdings_version,
+        await _eod_marker(db, portfolio),
+        by,
+        _tags_cache_segment(tag_names),
     )
     cached = await get_cached_json(key)
     if cached is not None:
@@ -485,7 +517,11 @@ async def allocation(db: AsyncSession, portfolio: Portfolio, *, by: str) -> Allo
 
     d = portfolio_service.today()
     value = await portfolio_service.current_value(db, portfolio, d)
-    result = allocation_from_valued(value.holdings, by=by, as_of=d)
+    holdings = value.holdings
+    if tag_names:
+        allowed = await tags_repository.asset_ids_for_tag_names(db, portfolio.user_id, tag_names)
+        holdings = [vh for vh in holdings if vh.asset.id in allowed]
+    result = allocation_from_valued(holdings, by=by, as_of=d)
 
     await set_cached_json(key, _allocation_to_json(result), ttl_seconds=_CACHE_TTL_SECONDS)
     return result

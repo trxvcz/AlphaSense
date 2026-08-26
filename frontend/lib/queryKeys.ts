@@ -17,9 +17,16 @@ export const qk = {
   valuations: (portfolioId: string, range: string) =>
     ["valuations", portfolioId, range] as const,
   assetSearch: (query: string) => ["assetSearch", query] as const,
-  allocation: (portfolioId: string, by: AllocationDimension) =>
-    ["allocation", portfolioId, by] as const,
+  // `tags` jest CZĘŚCIĄ klucza z tego samego powodu co `by`: filtr zawęża
+  // zasób po stronie API, więc odpowiedź z filtrem i bez niego to dwa różne
+  // zasoby (i dwa różne wpisy w cache Redis).
+  allocation: (portfolioId: string, by: AllocationDimension, tags: string | null = null) =>
+    ["allocation", portfolioId, by, tags ?? "none"] as const,
   concentration: (portfolioId: string) => ["concentration", portfolioId] as const,
+  tags: () => ["tags"] as const,
+  tagAssets: (tagId: string) => ["tagAssets", tagId] as const,
+  watchlists: () => ["watchlists"] as const,
+  watchlistItems: (watchlistId: string) => ["watchlistItems", watchlistId] as const,
   // `range` i `benchmark` są CZĘŚCIĄ klucza: obie zawężają/rozszerzają zasób
   // po stronie API (inne okno, druga seria), więc odpowiedzi nie są
   // wymienne. Ta sama zasada co przy `news` niżej.

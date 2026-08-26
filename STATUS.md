@@ -18,16 +18,16 @@ underwater i heatmapą). Szczegóły w sekcjach kroków 41a i 41b niżej.
 **Zrobione 2026-08-23:** krok 47 (kalendarz dywidend) — backend, job workera, frontend,
 migracja `c03ad7b7217b`. Szczegóły i zmiana dostawcy (Finnhub → Alpha Vantage) w sekcji
 kroku 47 niżej.
-**Następny ruch:** etap 8, **krok 43a — DOKOŃCZENIE** (patrz sekcja kroku 43 niżej:
-filtr `?tags=` w `/allocation`, fixture izolacji, testy). **UWAGA: suita jest
-CZERWONA** — 10 testów `test_isolation.py` pada na `KeyError: 'tag_id'`/`'watchlist_id'`. Decyzją użytkownika (2026-08-25)
+**Zrobione 2026-08-26:** krok **43 w całości** (43a backend + 43b frontend) oraz poprawki
+po code-review kroku 47. Suita **zielona** (backend 540, Vitest 84).
+**Następny ruch:** etap 8, **krok 44**. Decyzją użytkownika (2026-08-25)
 etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
 tryb „krok po kroku" z code-review po każdym. Commity czekają na push — push
 wyzwala wdrożenie produkcyjne z CI.
-**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 41, 43, 44, 45
-nie zaczęte. Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
+**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): kroki 44, 45
+nie zaczęte (41 i 43 domknięte). Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
 w sekcji „Plan etapu 9", decyzja 1.
-**Ostatnia aktualizacja:** 2026-08-25
+**Ostatnia aktualizacja:** 2026-08-26
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
 
 ## Postęp etapów
@@ -42,7 +42,7 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
-| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42 zrobione; **43 w toku (niedokończone, suita czerwona)**; 44, 45 zostały |
+| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42, 43 zrobione; 44, 45 zostały |
 | 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46 i 47 zrobione; następny 48 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
@@ -92,7 +92,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 40 Zwroty dzienne (bez dni composition_change) — `25d87ad`, 2026-08-12
 [x] 41 Ryzyko: zmienność, Sharpe, drawdown + underwater, beta, heatmapa miesięczna — 41a (stopa NBP) i 41b (metryki) zrobione 2026-08-25
 [x] 42 Benchmark (WIG20 przez ETFBW20TR, ^GSPC) — `6db8138`, 2026-08-15
-[ ] 43 Watchlisty i tagi
+[x] 43 Watchlisty i tagi
 [ ] 44 RLS w Postgres (domknięcie ADR-002)
 [ ] 45 Wykresy świecowe
 [x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
@@ -1076,13 +1076,12 @@ Lookup sprawdzony na realnych datach: 2026-08-25 → 3,75%, 2023-09-06 → 6,75%
 `nbp_reference_rates` nie ma na razie ani jednego konsumenta poza testami, tabela
 czeka na Sharpe'a. Świeżość tej serii nie jest jeszcze pokazana w `/meta/freshness`.
 
-## Krok 43 — watchlisty i tagi (W TOKU 2026-08-25, NIEDOKOŃCZONY)
+## Krok 43 — watchlisty i tagi (ZROBIONY 2026-08-26)
 
-Podzielony na **43a** (backend) i **43b** (frontend). 43a jest **w połowie** —
-przerwane na limicie sesji. **Drzewo robocze nie jest w stanie „gotowe": suita
-backendu jest czerwona.**
+Podzielony na **43a** (backend) i **43b** (frontend). Backend powstał 2026-08-25
+(w połowie, suita czerwona), dokończony razem z frontendem 2026-08-26.
 
-**Zrobione:**
+**43a — backend:**
 - Cztery tabele + migracja `f76793e14dad` (zastosowana, jedna głowa):
   `watchlists`, `watchlist_items`, `tags`, `asset_tags`. Klucze złożone z par
   naturalnych, FK do `assets` bez kaskady (jak `holdings.asset_id`), kaskada
@@ -1116,25 +1115,72 @@ backendu jest czerwona.**
 - Duplikat nazwy → `ConflictError` (409) z komunikatem po polsku; `UNIQUE`
   w bazie zostaje jako ostatnia linia obrony.
 
-**DO DOKOŃCZENIA w 43a (w tej kolejności):**
-1. **Naprawić czerwoną suitę.** `tests/test_isolation.py` sam wykrywa nowe trasy
-   (`RESOURCE_PARAMS` zawierało już `watchlist_id` i `tag_id`) i pada
-   `KeyError: 'tag_id'`/`'watchlist_id'` — **10 testów**. To **luka w fixture
-   testowym**, nie wyciek: `get_owned_tag`/`get_owned_watchlist` są wpięte na
-   każdej trasie. Trzeba dołożyć tworzenie tagu i watchlisty użytkownika A do
-   fixture'u zasobów w tym pliku.
-2. **Filtr `?tags=` w `GET /portfolios/{id}/allocation`** — parametr zapytania,
-   zawężenie `valued.holdings` po `asset_ids_for_tag_names`, **`tags` jako
-   osobny segment klucza cache** (inaczej filtr oddawałby wynik bez filtru).
-   `service.allocation` i `routes.get_allocation` jeszcze nietknięte.
-3. **Testy**: integracyjne CRUD tagów i watchlist (ścieżka szczęśliwa + 404 na
-   cudzy zasób + 409 na duplikat nazwy + idempotencja `PUT`), test filtru
-   alokacji po tagach.
-4. **`docs/model-danych.md`** (wiersze 28–29 nadal bez kolumn) i
-   **`docs/api-kontrakt.md`** (brak sekcji tagów/watchlist).
+**Dokończone 2026-08-26 (43a):**
+1. **Czerwona suita naprawiona.** Harness `tests/test_isolation.py` sam wykrył nowe
+   trasy i padał `KeyError: 'tag_id'`/`'watchlist_id'` — **luka w fixture, nie
+   wyciek** (`get_owned_tag`/`get_owned_watchlist` były wpięte wszędzie). Fixture
+   tworzy teraz użytkownikowi A tag i listę, a do `ids` doszedł **`asset_id`**:
+   ścieżki wiążące (`/tags/{tag_id}/assets/{asset_id}`) mają w URL-u drugi
+   identyfikator, który nie jest zasobem chronionym, ale musi być czym wypełnić.
+   Wpisane jest **realne** aktywo — losowy UUID dawałby 404 z powodu nieistniejącego
+   aktywa, czyli test przechodziłby nie sprawdzając nic o własności tagu.
+   Harness pokrywa dziś **10 tras** tagów i watchlist automatycznie.
+2. **Filtr `?tags=` w `GET /portfolios/{id}/allocation`.** Zawęża pozycje **przed**
+   policzeniem wag — wagi sumują się do 100% w obrębie tego, co filtr przepuścił
+   („jak wygląda struktura mojej części dywidendowej"), a nie „jaki udział w całości
+   ma część dywidendowa". Semantyka OR. Segment `tags=` jest w kluczu cache
+   **zawsze**, także bez filtra (`tags=-`): gdyby pojawiał się tylko przy filtrze,
+   zapytanie z `?tags=` trafiałoby w klucz zapytania bez filtra. Puste `?tags=`
+   znaczy „bez filtra" (wyczyszczony input), nieznana nazwa tagu nic nie wnosi
+   i **nie jest błędem** — tag mógł zniknąć w innej karcie przeglądarki.
+3. **Testy**: `tests/integration/test_tags.py` (8) i `test_watchlist.py` (5) —
+   CRUD, 404 na cudzy zasób, 409 na duplikat nazwy, idempotencja `PUT`/`DELETE`,
+   ta sama nazwa u dwóch użytkowników, nieistniejące `asset_id` → 404, filtr
+   alokacji z osobnym kluczem cache. Test kształtu `WatchlistItemOut` pilnuje
+   granicy zakresu: **brak `value_pln` i `quantity`** (CLAUDE.md #3.11).
+4. **Dokumentacja**: `docs/model-danych.md` (cztery wiersze tabel + indeksy)
+   i `docs/api-kontrakt.md` (sekcja „Tagi i listy obserwowanych", `?tags=`
+   w tabeli struktury, segment `tags=` w opisie cache).
 
-**43b (frontend) — nie zaczęte:** zarządzanie tagami przy pozycji, filtr tagów
-nad widokiem struktury, widok watchlist.
+**43b — frontend (2026-08-26):**
+- `lib/tags.ts` (+ `lib/tags.test.ts`, 7 testów) i `lib/watchlists.ts` — typy
+  i wywołania 1:1 z kontraktem. Czyste funkcje filtra (`serializeTagFilter`,
+  `parseTagFilter`, `toggleTag`) **sortują i odduplikowują** nazwy, żeby ten sam
+  wybór dawał ten sam klucz TanStack Query i ten sam klucz cache po stronie API
+  niezależnie od kolejności klikania.
+- `components/tags/TagFilterBar.tsx` — chipy nad widokiem struktury. Kolor tagu
+  **nigdy nie jest jedynym nośnikiem informacji** (CLAUDE.md §21): obok zawsze
+  nazwa, stan wyboru niesie `aria-pressed` i obramowanie. Przy wyborze >1 tagu
+  widok mówi wprost, że to suma, a nie przecięcie.
+- `components/tags/PortfolioTagsPanel.tsx` — zarządzanie tagami przy pozycjach,
+  z jawną informacją, że **tag opisuje spółkę, nie pozycję w tym portfelu**.
+  Mapa `aktywo → tagi` składana z `GET /tags` + `GET /tags/{id}/assets`
+  (`useQueries`); osobnego endpointu „tagi tego aktywa" świadomie nie dokładamy.
+- **Pusty wynik filtra ma własny komunikat**, inny niż pusty portfel: „żadna
+  pozycja nie ma wybranych tagów" plus przycisk czyszczenia — inaczej filtr
+  wyglądałby na awarię.
+- `components/watchlist/WatchlistsView.tsx` + trasa `/obserwowane` (z `AuthGuard`).
+  Bez wyboru portfela: watchlista należy do użytkownika, nie do portfela.
+- **Brak wpisu w nawigacji globalnej** — `NAV_ITEMS` ma pięć pozycji i to sufit
+  dolnego paska na 375 px. Wejście z dashboardu portfela, tak jak przy dywidendach.
+
+### Weryfikacja
+
+- `ruff`/`mypy` (strict) zielone, backend **540 passed** — suita po raz pierwszy
+  od 2026-08-25 w całości zielona.
+- Frontend: `npm run lint`, `tsc --noEmit`, Vitest **84 passed**, `next build`
+  z trasą `/obserwowane` w wykazie.
+
+### Zostaje po kroku 43 (nieblokujące)
+
+- **Wybór tagów nie jest w adresie URL** — odświeżenie strony gubi filtr.
+  `parseTagFilter` jest już napisane pod `useSearchParams`, brakuje tylko spięcia.
+- **`PATCH /tags/{id}` bez UI** — nazwy i koloru nie da się dziś zmienić z ekranu
+  (API to umie); tag trzeba usunąć i założyć od nowa.
+- **Notatka przy pozycji watchlisty tylko do odczytu** — `PUT` przyjmuje `note`,
+  ale widok dodaje pozycje z `note: null`.
+- **Brak filtra tagów w innych widokach** (wyniki, ryzyko, kalendarz dywidend) —
+  dziś tylko alokacja przyjmuje `?tags=`.
 
 ## Krok 41b — metryki ryzyka (ZROBIONY 2026-08-25)
 

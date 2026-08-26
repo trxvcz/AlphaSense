@@ -36,7 +36,7 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market` | alokacja (cache Redis, patrz „Cache" niżej) |
+| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market&tags=` | alokacja (cache Redis, patrz „Cache" niżej); `tags` (krok 43) to opcjonalna lista nazw po przecinku, semantyka **OR** |
 | GET | `/portfolios/{portfolio_id}/concentration` | top5, liczba pozycji, HHI + interpretacja (cache Redis) |
 | GET | `/portfolios/{portfolio_id}/markets` | ranking rynków wg wagi + dane indeksów (cache Redis) |
 | GET | `/markets/{code}/index?range=` | seria indeksu referencyjnego — **publiczna** trasa (bez `Authorization`), patrz sekcja „Pomocnicze" niżej. **Bez cache** (świadomie poza zakresem kroku 31 — nie ma `portfolio_id`, propozycja do rozważenia osobno w `analytics/service.py`, sekcja „Krok 31") |
@@ -248,6 +248,29 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 
 **`assets_without_coverage` i `uncovered_markets` są najważniejszą częścią tej odpowiedzi.** Dostawcą jest dziś Alpha Vantage (`DIVIDENDS`) — Finnhub `/stock/dividend` zwraca na darmowym planie `403` (sprawdzone 2026-08-23), mimo że plan kroku 47 zakładał właśnie jego. Alpha Vantage **nie pokrywa GPW**: dla `PKN.WAR` oddaje `data: []`, czyli odpowiedź nie do odróżnienia od „spółka nie płaci". Dlatego pokrycie rozstrzyga **mapowanie `asset_source_map` (provider `alphavantage_dividends`)**, a nie obecność zdarzeń w bazie: aktywo bez mapowania jest raportowane jako nieobjęte, a nie jako „bez dywidend". Rynek trafia do `uncovered_markets` dopiero wtedy, gdy żadne aktywo portfela z tego rynku nie ma pokrycia.
 
+## Tagi i listy obserwowanych (Faza 2, krok 43)
+
+| Metoda | Ścieżka | Opis |
+|---|---|---|
+| GET/POST | `/tags` | tagi użytkownika (alfabetycznie, z `asset_count`) / utworzenie |
+| PATCH/DELETE | `/tags/{tag_id}` | zmiana nazwy lub koloru / usunięcie |
+| GET | `/tags/{tag_id}/assets` | aktywa oznaczone tagiem |
+| PUT/DELETE | `/tags/{tag_id}/assets/{asset_id}` | powiązanie tagu z aktywem (idempotentne, 204) |
+| GET/POST | `/watchlists` | listy obserwowanych (z `item_count`) / utworzenie |
+| PATCH/DELETE | `/watchlists/{watchlist_id}` | zmiana nazwy / usunięcie |
+| GET | `/watchlists/{watchlist_id}/items` | pozycje listy |
+| PUT/DELETE | `/watchlists/{watchlist_id}/items/{asset_id}` | dodanie (z `note`) / usunięcie (idempotentne, 204) |
+
+**Chronionym zasobem jest tag albo lista, nigdy aktywo.** `assets` to słownik globalny — własność niesie `tags.user_id` / `watchlists.user_id`. Stąd kształt `/tags/{tag_id}/assets/{asset_id}`, a nie odwrotnie: identyfikator do zweryfikowania jest pierwszy w ścieżce. Cudzy tag/lista → **404**, nigdy 403.
+
+**Nazwa jest unikalna per użytkownik.** Duplikat → `409` z komunikatem po polsku (`UNIQUE` w bazie zostaje jako ostatnia linia obrony). Ta sama nazwa u dwóch różnych użytkowników jest poprawna — inaczej pierwsza osoba, która założy „dywidendowe", zablokowałaby tę nazwę wszystkim.
+
+**`PUT` zamiast `POST` przy wiązaniu**, bo operacja jest idempotentna: powtórne otagowanie nie jest błędem, a powtórne dodanie do watchlisty aktualizuje `note`. `DELETE` zwraca `204` także wtedy, gdy powiązania nie było — stan końcowy jest ten sam, a `404` kazałoby klientowi rozróżniać przypadki, które go nie obchodzą. Nieistniejące `asset_id` → `404`.
+
+**`PATCH /tags/{tag_id}` rozróżnia „nie zmieniaj" od „skasuj".** Pominięcie `color` zostawia kolor, jawny `"color": null` go kasuje. Kolor jest opcjonalny i **nigdy nie jest jedynym nośnikiem informacji** (CLAUDE.md §21) — UI pokazuje nazwę tagu obok koloru.
+
+**Watchlista to nie drugi portfel** (CLAUDE.md #3.11). `WatchlistItemOut` świadomie nie ma `value_pln`, `quantity` ani zwrotu — obserwowanie nie jest posiadaniem, a dołożenie tam wyceny byłoby cichym rozszerzeniem zakresu v2.
+
 ## Pomocnicze
 
 `GET /assets/search?q=`, `GET /assets/{id}`, `PATCH /assets/{id}/metadata` (override), `GET /meta/freshness`, `GET /health`
@@ -435,13 +458,15 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 `GET /allocation`, `GET /concentration` i `GET /markets` (plan krok 31, CLAUDE.md #3.7) są owinięte cache'em Redis w `analytics/service.py` — klucz wersjonowany, brak inwalidacji:
 
 ```
-allocation:{portfolio_id}:{by}:{holdings_version}:{eod_marker}
+allocation:{portfolio_id}:{by}:tags={nazwy|-}:{holdings_version}:{eod_marker}
 concentration:{portfolio_id}:{holdings_version}:{eod_marker}
 markets:{portfolio_id}:{holdings_version}:{eod_marker}
 performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}:{benchmark}:{benchmark_marker}
 ```
 
 `holdings_version` to znacznik ostatniej zmiany składu portfela (`Portfolio.holdings_version`, bumpowany przy każdym CRUD `holdings`). `eod_marker` to `MAX(prices.date)` wśród aktywów **faktycznie trzymanych** w tym portfelu (`"none"`, jeśli portfel jest pusty albo żadne z jego aktywów nie ma jeszcze notowania) — zmienia się dopiero, gdy dla tego portfela realnie przyjdą nowe dane EOD, nie o północy jak `today()`. TTL: 6 godzin (Redis nie puchnie starymi kluczami; dane EOD i tak nie zmieniają się śróddziennie).
+
+Segment `tags=` (krok 43) jest w kluczu **zawsze**, także bez filtra (`tags=-`). Gdyby pojawiał się tylko przy filtrze, zapytanie z `?tags=` trafiałoby w klucz zapytania bez filtra i oddawało nieprzefiltrowany wynik. Nazwy są sortowane i odduplikowane — `?tags=a,b` i `?tags=b,a,a` to to samo pytanie, więc mają dzielić wpis.
 
 `GET /performance` (krok 40) używa **innego markera**: `valuations_marker` = `MAX(date)` i `COUNT(*)` w `portfolio_valuations` tego portfela (`"none"` przy braku historii). Sam `MAX(date)` by tu nie wystarczył — inaczej niż ceny, snapshoty przybywają też **wstecz** (`seed-history` z kroku zerowego etapu 8 dopisuje pełne lata historii, nie ruszając maksimum), a wtedy klucz oparty na samym maksimum dałby trafienie w cache ze zwrotem policzonym z krótszej serii.
 

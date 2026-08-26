@@ -11,7 +11,14 @@ i ich pierwsi konsumenci (`modules/portfolio/routes.py`, plan kroki 25-28)
 już istnieją, więc `protected_routes(app)` łapie realne trasy
 (`/portfolios/{portfolio_id}...`, `/holdings/{holding_id}`) automatycznie —
 bez zmian w tym pliku poza wypełnieniem `user_a_fixtures.ids` (patrz niżej).
-`watchlists`/`tags` nadal nie istnieją (Faza 2).
+Od kroku 43 harness łapie także trasy `tags`/`watchlists` — fixture tworzy
+więc dla użytkownika A po jednym tagu i jednej liście obserwowanej. Ścieżki
+wiążące (`/tags/{tag_id}/assets/{asset_id}`) mają w URL-u także `asset_id`,
+które **nie jest** zasobem chronionym (`assets` to słownik globalny), ale
+musi być czym wypełnić — stąd `asset_id` w `ids` obok identyfikatorów
+zasobów. Wpisane jest realne aktywo, nie losowy UUID: gdyby trasa zwracała
+404 tylko dlatego, że aktywo nie istnieje, test przechodziłby nie sprawdzając
+niczego o własności tagu.
 
 `user_a_fixtures` tworzy dla użytkownika A jeden portfel i jedną pozycję
 **przez `service`/`repository` bezpośrednio, nie przez HTTP** — ten harness
@@ -48,6 +55,10 @@ from app.core.deps import get_current_user
 from app.main import app
 from app.modules.marketdata.models import Asset
 from app.modules.portfolio import service as portfolio_service
+from app.modules.tags import service as tags_service
+from app.modules.tags.models import Tag
+from app.modules.watchlist import service as watchlist_service
+from app.modules.watchlist.models import Watchlist
 
 # Nazwy parametrów ścieżki oznaczające zasób należący do użytkownika. Nowy
 # typ zasobu (nowa zależność `get_owned_*` w `core/deps.py`) = nowy wpis
@@ -151,13 +162,24 @@ async def user_a_fixtures(
         note=None,
     )
 
+    tag = await tags_service.create_tag(db_session, user.id, name=f"izolacja-{suffix}", color=None)
+    watchlist = await watchlist_service.create_watchlist(
+        db_session, user.id, name=f"izolacja-{suffix}"
+    )
+
     yield UserAFixtures(
         token=token,
         ids={
             "portfolio_id": str(portfolio.id),
             "holding_id": str(valued_holding.holding.id),
+            "tag_id": str(tag.id),
+            "watchlist_id": str(watchlist.id),
+            "asset_id": str(asset.id),
         },
     )
+
+    await db_session.execute(delete(Tag).where(Tag.id == tag.id))
+    await db_session.execute(delete(Watchlist).where(Watchlist.id == watchlist.id))
 
     # `Holding.asset_id` nie kaskaduje z `assets` (`models.py`, docstring
     # `Holding`) — usuwamy najpierw portfel (kaskaduje na `holdings` przez

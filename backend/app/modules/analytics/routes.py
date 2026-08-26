@@ -205,16 +205,33 @@ async def get_risk(
     )
 
 
+def _split_tags(raw: str | None) -> list[str] | None:
+    """`?tags=a,b` → `["a", "b"]`. Puste `?tags=` znaczy „bez filtra",
+    a nie „filtr, który nic nie przepuszcza" — pusty parametr to zwykle
+    wyczyszczony input, nie świadome pytanie o pustkę."""
+    if raw is None:
+        return None
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    return names or None
+
+
 @router.get("/portfolios/{portfolio_id}/allocation", response_model=AllocationOut)
 async def get_allocation(
     portfolio: PortfolioDep,
     db: DbSession,
     by: Annotated[AllocationDimensionParam, Query()],
+    tags: Annotated[str | None, Query()] = None,
 ) -> AllocationOut:
     """`by` jest wymagany (kontrakt nie definiuje domyślnego wymiaru
     alokacji — decyzja: brak wartości domyślnej, 422 zamiast cichego
-    zgadywania, którą alokację użytkownik chciał zobaczyć)."""
-    result = await service.allocation(db, portfolio, by=by.value)
+    zgadywania, którą alokację użytkownik chciał zobaczyć).
+
+    `tags` to opcjonalna lista nazw po przecinku (krok 43). Zawęża portfel
+    do aktywów oznaczonych **którymkolwiek** z tych tagów (OR) przed
+    policzeniem wag. Nieznana nazwa nic nie wnosi — nie jest błędem,
+    bo tag mógł zniknąć w innej karcie przeglądarki.
+    """
+    result = await service.allocation(db, portfolio, by=by.value, tag_names=_split_tags(tags))
     return AllocationOut(
         by=result.by,
         as_of=result.as_of,

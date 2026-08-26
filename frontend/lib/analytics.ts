@@ -50,8 +50,13 @@ export type Concentration = {
 export function getAllocation(
   portfolioId: string,
   by: AllocationDimension,
+  tags: string | null = null,
 ): Promise<Allocation> {
-  return apiFetch<Allocation>(`/portfolios/${portfolioId}/allocation?by=${by}`);
+  // `tags` (krok 43) zawęża portfel do aktywów z którymkolwiek z tych tagów
+  // (OR) PRZED policzeniem wag — wagi sumują się do 100% w obrębie tego, co
+  // filtr przepuścił. Wartość buduje `serializeTagFilter` (`lib/tags.ts`).
+  const suffix = tags ? `&tags=${encodeURIComponent(tags)}` : "";
+  return apiFetch<Allocation>(`/portfolios/${portfolioId}/allocation?by=${by}${suffix}`);
 }
 
 export function getConcentration(portfolioId: string): Promise<Concentration> {

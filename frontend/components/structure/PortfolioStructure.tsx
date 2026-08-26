@@ -24,6 +24,8 @@ import { ApiError } from "@/lib/api";
 import { getAllocation, getConcentration, type AllocationDimension } from "@/lib/analytics";
 import { DIMENSION_LABELS, DIMENSION_NOTES } from "@/lib/allocationLabels";
 import { getPortfolio } from "@/lib/portfolios";
+import { listHoldings } from "@/lib/dashboard";
+import { serializeTagFilter } from "@/lib/tags";
 import { qk } from "@/lib/queryKeys";
 import { formatDate } from "@/lib/dates";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -33,6 +35,8 @@ import { AllocationDonut } from "@/components/charts/AllocationDonut";
 import { AllocationTreemap } from "@/components/charts/AllocationTreemap";
 import { AllocationTable } from "@/components/structure/AllocationTable";
 import { ConcentrationCard } from "@/components/structure/ConcentrationCard";
+import { TagFilterBar } from "@/components/tags/TagFilterBar";
+import { PortfolioTagsPanel } from "@/components/tags/PortfolioTagsPanel";
 
 type PortfolioStructureProps = {
   portfolioId: string;
@@ -58,6 +62,10 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 
 export function PortfolioStructure({ portfolioId }: PortfolioStructureProps) {
   const [dimension, setDimension] = useState<AllocationDimension>(DEFAULT_DIMENSION);
+  // Wybór tagów żyje w stanie widoku, a do API/klucza zapytania idzie już
+  // znormalizowany (posortowany, odduplikowany) — patrz `lib/tags.ts`.
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const tagFilter = serializeTagFilter(selectedTags);
 
   const portfolioQuery = useQuery({
     queryKey: qk.portfolio(portfolioId),
@@ -65,8 +73,13 @@ export function PortfolioStructure({ portfolioId }: PortfolioStructureProps) {
   });
 
   const allocationQuery = useQuery({
-    queryKey: qk.allocation(portfolioId, dimension),
-    queryFn: () => getAllocation(portfolioId, dimension),
+    queryKey: qk.allocation(portfolioId, dimension, tagFilter),
+    queryFn: () => getAllocation(portfolioId, dimension, tagFilter),
+  });
+
+  const holdingsQuery = useQuery({
+    queryKey: qk.holdings(portfolioId),
+    queryFn: () => listHoldings(portfolioId),
   });
 
   const concentrationQuery = useQuery({
@@ -133,6 +146,8 @@ export function PortfolioStructure({ portfolioId }: PortfolioStructureProps) {
           </div>
         </div>
 
+        <TagFilterBar selected={selectedTags} onChange={setSelectedTags} />
+
         {allocationQuery.isLoading && (
           <div
             role="status"
@@ -148,7 +163,23 @@ export function PortfolioStructure({ portfolioId }: PortfolioStructureProps) {
           />
         )}
 
-        {isEmpty && (
+        {isEmpty && tagFilter !== null && (
+          <EmptyState
+            title="Żadna pozycja nie ma wybranych tagów"
+            description="To nie jest awaria filtra — po prostu nic w tym portfelu nie jest tak oznaczone. Wyczyść filtr albo oznacz pozycje niżej."
+            action={
+              <button
+                type="button"
+                onClick={() => setSelectedTags([])}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                Wyczyść filtr
+              </button>
+            }
+          />
+        )}
+
+        {isEmpty && tagFilter === null && (
           <EmptyState
             title="Nie ma jeszcze czego rozłożyć na czynniki"
             description="Struktura pojawi się, gdy portfel będzie miał przynajmniej jedną pozycję z aktualną wyceną."
@@ -220,6 +251,10 @@ export function PortfolioStructure({ portfolioId }: PortfolioStructureProps) {
       )}
       {concentrationQuery.isSuccess && concentrationQuery.data.count > 0 && (
         <ConcentrationCard concentration={concentrationQuery.data} />
+      )}
+
+      {holdingsQuery.isSuccess && holdingsQuery.data.length > 0 && (
+        <PortfolioTagsPanel holdings={holdingsQuery.data} />
       )}
     </section>
   );

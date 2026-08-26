@@ -100,6 +100,12 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
               Zobacz kalendarz dywidend →
             </Link>
             <Link
+              href="/obserwowane"
+              className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+            >
+              Zobacz listy obserwowanych →
+            </Link>
+            <Link
               href={`/portfolios/${portfolioId}/rynki`}
               className="text-sm text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
             >

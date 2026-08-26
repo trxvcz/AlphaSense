@@ -25,8 +25,10 @@ Rozwinięcie sekcji 5 projektu systemu. Przy każdej zmianie schematu aktualizuj
 | `fx_rates` | (currency, date) | rate_pln | NBP tabela A; lookup `max(date) <= D` |
 | `portfolio_valuations` | (portfolio_id, date) | value_pln, **composition_change** | ADR-101, bez kolumny przepływów |
 | `ingestion_runs` | id | market_code, started_at, finished_at, provider, assets_total, assets_ok, status, error | podstawa `/meta/freshness` i alertów |
-| `watchlists`, `watchlist_items` | | | Faza 2 |
-| `tags`, `asset_tags` | | | Faza 2 |
+| `watchlists` | id | user_id, name, created_at; **UNIQUE (user_id, name)** | krok 43; unikalność nazwy **per użytkownik**, nie globalnie. `ON DELETE CASCADE` z `users` |
+| `watchlist_items` | (watchlist_id, asset_id) | note, added_at | krok 43; klucz naturalny daje idempotentne „dodaj do listy". Kaskada tylko od `watchlists` — wygaszenie aktywa nie kasuje listy użytkownika. **Bez ilości i wyceny**: watchlista to nie portfel (CLAUDE.md #3.11) |
+| `tags` | id | user_id, name, color, created_at; **UNIQUE (user_id, name)** | krok 43; `color` (`#rrggbb`) walidowany w Pydantic, nie w bazie — paleta należy do prezentacji i **nigdy nie jest jedynym nośnikiem informacji** (CLAUDE.md §21) |
+| `asset_tags` | (tag_id, asset_id) | created_at | krok 43; tag wisi na **aktywie**, nie na pozycji — „dywidendowe" to cecha spółki, więc działa we wszystkich portfelach użytkownika. `assets` jest globalne, więc każdy odczyt powiązań jest zawężony przez `JOIN tags` po `tags.user_id` |
 | `news` | id | title, url **UNIQUE**, source, published_at, fetched_at, content_hash **UNIQUE**, summary, sentiment, sentiment_source | krok 46; dwa ograniczenia unikalności, bo ta sama depesza PAP chodzi po serwisach pod różnymi URL-ami |
 | `news_assets` | (news_id, asset_id) | published_at (zdenormalizowane), match_confidence | krok 46; `ON DELETE CASCADE` w obie strony, brak FK do `users` — newsy nie są własnością użytkownika. `match_confidence`: `source` (powiązanie podał dostawca pytany o symbol — fakt) albo `heuristic` (dopasowanie tekstu po naszej stronie — przybliżenie, UI ma je oznaczyć, CLAUDE.md #3.15). Domyślnie `heuristic`, bo pominięcie kolumny ma zaniżać deklarowaną pewność, nie zawyżać |
 | `dividend_events` | id | asset_id, ex_date, record_date, pay_date, declaration_date, amount, currency, source, fetched_at; **UNIQUE (asset_id, ex_date)** | krok 47; zapis `ON CONFLICT DO UPDATE` — zapowiedziana kwota/data wypłaty bywa korygowana przed wypłatą, więc świeższa odpowiedź dostawcy wygrywa (odwrotnie niż przy `news`). Brak FK do `users`: zdarzenie nie jest własnością użytkownika, izolacja dzieje się przy odczycie. `amount` w walucie notowania, brutto — bez PLN i bez podatku (to nie jest wpis księgowy, Etap 21) |
@@ -45,6 +47,10 @@ CREATE INDEX ON news_assets (asset_id, published_at DESC);
 CREATE INDEX ON news (published_at DESC);
 -- rosnąco, nie malejąco: kalendarz czyta najbliższe ex-daty od dziś w przód
 CREATE INDEX ON dividend_events (asset_id, ex_date);
+CREATE INDEX ON watchlists (user_id);
+CREATE INDEX ON watchlist_items (asset_id);
+CREATE INDEX ON tags (user_id);
+CREATE INDEX ON asset_tags (asset_id);
 ```
 
 ## Ograniczenia
