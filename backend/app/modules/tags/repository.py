@@ -11,7 +11,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -131,6 +131,31 @@ async def asset_ids_for_tag_names(db: AsyncSession, user_id: UUID, names: list[s
         .where(Tag.user_id == user_id, Tag.name.in_(names))
     )
     return set(result.scalars().all())
+
+
+async def tags_version(db: AsyncSession, user_id: UUID) -> str:
+    """Znacznik wersji powiązań tag↔aktywo tego użytkownika — do klucza cache.
+
+    **Sam `MAX(created_at)` NIE wystarczy**: odpięcie aktywa od tagu usuwa
+    wiersz i nie rusza maksimum, więc klucz oparty tylko na nim oddawałby
+    przez cały TTL wagi policzone ze składem sprzed odpięcia. Stąd para
+    `MAX(created_at)` + `COUNT(*)` — dokładnie ten sam kompromis co przy
+    `benchmark_marker` w `analytics/service.py` (patrz `docs/api-kontrakt.md`,
+    sekcja „Cache").
+
+    Para nie łapie przypadku „odepnij A, przypnij B w tej samej sekundzie"
+    (liczba wraca do tej samej, maksimum bywa niezmienione przy zegarze
+    o rozdzielczości sekundy) — na to jest TTL, ta sama granica co przy
+    nadpisaniu istniejącego wiersza ceny w kroku 31.
+    """
+    result = await db.execute(
+        select(func.max(AssetTag.created_at), func.count())
+        .select_from(AssetTag)
+        .join(Tag, Tag.id == AssetTag.tag_id)
+        .where(Tag.user_id == user_id)
+    )
+    newest, count = result.one()
+    return f"{newest.isoformat() if newest is not None else 'none'}:{count}"
 
 
 async def tags_by_asset(

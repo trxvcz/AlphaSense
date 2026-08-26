@@ -141,7 +141,6 @@ async def test_crud_tagu_od_utworzenia_do_usuniecia(
 
     deleted = await client.delete(f"/api/tags/{tag_id}", headers=_auth(token))
     assert deleted.status_code == 204
-    assert await client.get("/api/tags", headers=_auth(token)) is not None
     assert (await client.get("/api/tags", headers=_auth(token))).json() == []
 
 
@@ -232,6 +231,93 @@ async def test_filtr_tagow_zaweza_alokacje_i_nie_myli_sie_z_cache(
     assert [b["key"] for b in buckets] == ["GPW"]
     # Wagi sumują się do 100% w obrębie tego, co filtr przepuścił.
     assert buckets[0]["weight"] == "1.0000"
+
+
+async def test_zmiana_powiazan_tagu_nie_zostaje_w_cache(
+    client: AsyncClient, tag_assets: list[Asset]
+) -> None:
+    """Odpięcie aktywa od tagu ma być widoczne od razu, nie po TTL.
+
+    Klucz cache nie zmienia się przy edycji `asset_tags` sam z siebie:
+    `holdings_version` bumpuje tylko CRUD `holdings`, a `eod_marker` to
+    `MAX(prices.date)`. Bez znacznika wersji powiązań ten test dostałby
+    w drugim zapytaniu wagi policzone ze składem sprzed odpięcia.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio = await client.post(
+        "/api/portfolios", json={"name": "Portfel tagów", "type": "standard"}, headers=_auth(token)
+    )
+    portfolio_id = portfolio.json()["id"]
+    for asset in tag_assets:
+        await client.post(
+            f"/api/portfolios/{portfolio_id}/holdings",
+            json={"asset_id": str(asset.id), "quantity": "1"},
+            headers=_auth(token),
+        )
+
+    tag_id = await _create_tag(client, token, "dywidendowe")
+    for asset in tag_assets:
+        await client.put(f"/api/tags/{tag_id}/assets/{asset.id}", headers=_auth(token))
+
+    url = f"/api/portfolios/{portfolio_id}/allocation?by=market&tags=dywidendowe"
+    first = await client.get(url, headers=_auth(token))
+    assert {b["key"] for b in first.json()["buckets"]} == {"GPW", "US"}
+
+    await client.delete(f"/api/tags/{tag_id}/assets/{tag_assets[1].id}", headers=_auth(token))
+
+    second = await client.get(url, headers=_auth(token))
+    assert [b["key"] for b in second.json()["buckets"]] == ["GPW"], (
+        "kalendarz wag oddał wynik sprzed odpięcia aktywa od tagu"
+    )
+
+
+async def test_nazwa_tagu_nie_moze_udawac_braku_filtra(
+    client: AsyncClient, tag_assets: list[Asset]
+) -> None:
+    """Sentynel „bez filtra" w kluczu cache musi być nieosiągalny jako nazwa.
+
+    Wcześniej był nim `-`, czyli poprawna nazwa tagu: `?tags=-` zapisywał
+    pustą alokację pod kluczem zapytania BEZ filtra i przez cały TTL widok
+    struktury pokazywał pusty portfel.
+    """
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio = await client.post(
+        "/api/portfolios", json={"name": "Portfel tagów", "type": "standard"}, headers=_auth(token)
+    )
+    portfolio_id = portfolio.json()["id"]
+    await client.post(
+        f"/api/portfolios/{portfolio_id}/holdings",
+        json={"asset_id": str(tag_assets[0].id), "quantity": "1"},
+        headers=_auth(token),
+    )
+
+    poisoned = await client.get(
+        f"/api/portfolios/{portfolio_id}/allocation?by=market&tags=-", headers=_auth(token)
+    )
+    assert poisoned.json()["buckets"] == []
+
+    clean = await client.get(
+        f"/api/portfolios/{portfolio_id}/allocation?by=market", headers=_auth(token)
+    )
+    assert [b["key"] for b in clean.json()["buckets"]] == ["GPW"], (
+        "zapytanie z filtrem zatruło wpis cache zapytania bez filtra"
+    )
+
+
+async def test_zbyt_dluga_lista_tagow_to_422(client: AsyncClient, tag_assets: list[Asset]) -> None:
+    """Ciche obcięcie oddawałoby wynik innego pytania niż zadane."""
+    token = await _register_and_login(client, EMAIL_A)
+    portfolio = await client.post(
+        "/api/portfolios", json={"name": "Portfel tagów", "type": "standard"}, headers=_auth(token)
+    )
+    portfolio_id = portfolio.json()["id"]
+    names = ",".join(f"tag{i}" for i in range(21))
+
+    resp = await client.get(
+        f"/api/portfolios/{portfolio_id}/allocation?by=market&tags={names}", headers=_auth(token)
+    )
+
+    assert resp.status_code == 422, resp.text
 
 
 async def test_pusty_parametr_tags_znaczy_brak_filtra(

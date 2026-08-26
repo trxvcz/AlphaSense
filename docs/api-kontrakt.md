@@ -36,7 +36,7 @@ Refresh token: httpOnly cookie `refresh_token`, `Path=/api/auth`, `SameSite=Lax`
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market&tags=` | alokacja (cache Redis, patrz „Cache" niżej); `tags` (krok 43) to opcjonalna lista nazw po przecinku, semantyka **OR** |
+| GET | `/portfolios/{portfolio_id}/allocation?by=class\|sector\|geo\|currency\|market&tags=` | alokacja (cache Redis, patrz „Cache" niżej); `tags` (krok 43) to opcjonalna lista nazw po przecinku (maks. 20, powyżej `422`), semantyka **OR** |
 | GET | `/portfolios/{portfolio_id}/concentration` | top5, liczba pozycji, HHI + interpretacja (cache Redis) |
 | GET | `/portfolios/{portfolio_id}/markets` | ranking rynków wg wagi + dane indeksów (cache Redis) |
 | GET | `/markets/{code}/index?range=` | seria indeksu referencyjnego — **publiczna** trasa (bez `Authorization`), patrz sekcja „Pomocnicze" niżej. **Bez cache** (świadomie poza zakresem kroku 31 — nie ma `portfolio_id`, propozycja do rozważenia osobno w `analytics/service.py`, sekcja „Krok 31") |
@@ -458,7 +458,7 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 `GET /allocation`, `GET /concentration` i `GET /markets` (plan krok 31, CLAUDE.md #3.7) są owinięte cache'em Redis w `analytics/service.py` — klucz wersjonowany, brak inwalidacji:
 
 ```
-allocation:{portfolio_id}:{by}:tags={nazwy|-}:{holdings_version}:{eod_marker}
+allocation:{portfolio_id}:{by}:tags=[{skrót nazw}:{tags_version}]:{holdings_version}:{eod_marker}
 concentration:{portfolio_id}:{holdings_version}:{eod_marker}
 markets:{portfolio_id}:{holdings_version}:{eod_marker}
 performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}:{benchmark}:{benchmark_marker}
@@ -466,7 +466,11 @@ performance:{portfolio_id}:{holdings_version}:{valuations_marker}:{range}:{bench
 
 `holdings_version` to znacznik ostatniej zmiany składu portfela (`Portfolio.holdings_version`, bumpowany przy każdym CRUD `holdings`). `eod_marker` to `MAX(prices.date)` wśród aktywów **faktycznie trzymanych** w tym portfelu (`"none"`, jeśli portfel jest pusty albo żadne z jego aktywów nie ma jeszcze notowania) — zmienia się dopiero, gdy dla tego portfela realnie przyjdą nowe dane EOD, nie o północy jak `today()`. TTL: 6 godzin (Redis nie puchnie starymi kluczami; dane EOD i tak nie zmieniają się śróddziennie).
 
-Segment `tags=` (krok 43) jest w kluczu **zawsze**, także bez filtra (`tags=-`). Gdyby pojawiał się tylko przy filtrze, zapytanie z `?tags=` trafiałoby w klucz zapytania bez filtra i oddawało nieprzefiltrowany wynik. Nazwy są sortowane i odduplikowane — `?tags=a,b` i `?tags=b,a,a` to to samo pytanie, więc mają dzielić wpis.
+Segment `tags=` (krok 43) jest w kluczu **zawsze**, także bez filtra — wtedy pusty (`tags=`). Gdyby pojawiał się tylko przy filtrze, zapytanie z `?tags=` trafiałoby w klucz zapytania bez filtra i oddawało nieprzefiltrowany wynik. Sentynel „bez filtra" musi być **nieosiągalny jako nazwa tagu**: pusty string jest bezpieczny (`ck_tags_name_not_blank`), a wcześniejszy `-` nie był — `?tags=-` zapisywał pustą alokację pod kluczem bez filtra i przez cały TTL widok struktury pokazywał pusty portfel.
+
+Nazwy idą do klucza przez **skrót** (SHA-256, 16 znaków) po posortowaniu i odduplikowaniu: `?tags=a,b` i `?tags=b,a,a` to to samo pytanie i mają dzielić wpis, a surowe nazwy dawałyby klucz o długości zależnej od wejścia użytkownika. Filtr przyjmuje najwyżej **20 nazw** (powyżej: `422`, bo ciche obcięcie oddawałoby wynik innego pytania niż zadane) i pomija nazwy dłuższe niż 60 znaków — takiego tagu nie da się założyć, więc nic by nie dopasował.
+
+`tags_version` = `MAX(asset_tags.created_at)` + `COUNT(*)` powiązań tego użytkownika. Bez niego przepięcie tagu w ogóle nie zmieniałoby klucza (`holdings_version` bumpuje tylko CRUD `holdings`, `eod_marker` to `MAX(prices.date)`), więc po odpięciu spółki od tagu przez 6 h wracałyby wagi policzone ze starym składem. Sam `MAX` nie wystarczy — usunięcie powiązania nie rusza maksimum, ta sama pułapka co przy `valuations_marker` niżej.
 
 `GET /performance` (krok 40) używa **innego markera**: `valuations_marker` = `MAX(date)` i `COUNT(*)` w `portfolio_valuations` tego portfela (`"none"` przy braku historii). Sam `MAX(date)` by tu nie wystarczył — inaczej niż ceny, snapshoty przybywają też **wstecz** (`seed-history` z kroku zerowego etapu 8 dopisuje pełne lata historii, nie ruszając maksimum), a wtedy klucz oparty na samym maksimum dałby trafienie w cache ze zwrotem policzonym z krótszej serii.
 

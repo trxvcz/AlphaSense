@@ -68,6 +68,15 @@ def init_sentry(component: str) -> bool:
         release=settings.app_version,
         send_default_pii=False,
         max_request_body_size="never",
+        # **Bez zmiennych lokalnych w ramkach stosu.** Domyślnie sentry-sdk
+        # dołącza je do każdego zdarzenia — a lokalnymi w `get_dividends`
+        # i pozostałych dostawcach są `api_key` oraz `params={"apikey": ...}`.
+        # Redakcja URL-a w `providers/http_client.py` zamyka komunikat
+        # wyjątku, ale ta droga jest szersza: obejmuje każdy
+        # `logger.exception` i każdy nieobsłużony wyjątek w ramce, która
+        # widzi klucz. Sekretów nie logujemy (CLAUDE.md #3.9), a nazwy
+        # zmiennych w stacktrace i tak zostają.
+        include_local_variables=False,
         # Śledzenie wydajności (transakcje) świadomie wyłączone: krok 37 to
         # alerty o awariach, a nie profilowanie. Każda transakcja to osobne
         # zdarzenie w limicie darmowego planu — włączać dopiero, gdy pojawi

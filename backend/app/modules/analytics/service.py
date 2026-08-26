@@ -123,6 +123,7 @@ from datetime import date
 # w ciele klasy — kolejne adnotacje (`as_of`) widziałyby wtedy pole, nie typ.
 from datetime import date as date_
 from decimal import ROUND_HALF_UP, Decimal
+from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
@@ -470,17 +471,34 @@ def _allocation_from_json(raw: str) -> Allocation:
     )
 
 
-def _tags_cache_segment(tag_names: list[str] | None) -> str:
+def _tags_cache_segment(tag_names: list[str] | None, version: str) -> str:
     """Segment klucza cache dla filtra tagów.
 
     **Musi istnieć zawsze, także bez filtra** — inaczej zapytanie z `?tags=`
-    trafiałoby w ten sam klucz co bez filtra i oddawało cudzy, nieprzefiltrowany
-    wynik (albo odwrotnie). Nazwy są sortowane i odduplikowane, bo `?tags=a,b`
-    i `?tags=b,a,a` to to samo pytanie.
+    trafiałoby w ten sam klucz co bez filtra i oddawało nieprzefiltrowany
+    wynik (albo odwrotnie).
+
+    **Sentynel „bez filtra" to pusty string, nie jakakolwiek nazwa.** Nazwa
+    tagu nie może być pusta (`ck_tags_name_not_blank`, `TagCreateIn`), więc
+    `tags=` jest nieosiągalne jako zwykły filtr. Wcześniejszy sentynel `-`
+    był poprawną nazwą tagu: `?tags=-` zapisywał pustą alokację pod kluczem
+    „bez filtra" i przez cały TTL każde wejście na widok struktury pokazywało
+    pusty portfel.
+
+    **Nazwy idą przez skrót, nie wprost.** Dowolnie długa lista nazw dawałaby
+    dowolnie długi klucz Redisa (i inny przy każdym żądaniu), a przecinek
+    w nazwie tagu mieszałby granice elementów. Sortowanie i odduplikowanie
+    przed skrótem, bo `?tags=a,b` i `?tags=b,a,a` to to samo pytanie.
+
+    `version` to znacznik powiązań tag↔aktywo (`tags/repository.tags_version`).
+    Bez niego przepięcie tagu nie zmieniałoby klucza — `holdings_version`
+    bumpuje tylko CRUD `holdings`, a `eod_marker` to `MAX(prices.date)` —
+    więc przez cały TTL wracałyby wagi policzone ze składem sprzed zmiany.
     """
     if not tag_names:
-        return "tags=-"
-    return "tags=" + ",".join(sorted(set(tag_names)))
+        return "tags="
+    digest = sha256("\x00".join(sorted(set(tag_names))).encode()).hexdigest()[:16]
+    return f"tags={digest}:{version}"
 
 
 async def allocation(
@@ -503,13 +521,14 @@ async def allocation(
     „jaki udział w całym portfelu ma część dywidendowa". Semantyka wielu
     tagów to OR, patrz `tags/repository.asset_ids_for_tag_names`.
     """
+    tags_version = await tags_repository.tags_version(db, portfolio.user_id) if tag_names else ""
     key = cache_key(
         "allocation",
         portfolio.id,
         portfolio.holdings_version,
         await _eod_marker(db, portfolio),
         by,
-        _tags_cache_segment(tag_names),
+        _tags_cache_segment(tag_names, tags_version),
     )
     cached = await get_cached_json(key)
     if cached is not None:

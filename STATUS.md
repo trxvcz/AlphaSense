@@ -1171,6 +1171,37 @@ Podzielony na **43a** (backend) i **43b** (frontend). Backend powstał 2026-08-2
 - Frontend: `npm run lint`, `tsc --noEmit`, Vitest **84 passed**, `next build`
   z trasą `/obserwowane` w wykazie.
 
+### Poprawki po code-review kroku 43 (2026-08-26)
+
+Trzy znaleziska **blokujące** zamknięte przed pushem:
+
+1. **`?tags=-` zatruwał klucz cache alokacji bez filtra.** Sentynel „brak filtra"
+   (`tags=-`) był poprawną nazwą tagu, więc jedno wejście na `?by=class&tags=-`
+   zapisywało **pustą** alokację pod kluczem zapytania **bez** filtra — przez cały
+   6-godzinny TTL widok struktury pokazywał pusty portfel. Sentynelem jest teraz
+   pusty string, nieosiągalny jako nazwa (`ck_tags_name_not_blank`), a nazwy idą
+   do klucza przez skrót SHA-256, co przy okazji odcina zależność długości klucza
+   Redisa od wejścia użytkownika. Test: `test_nazwa_tagu_nie_moze_udawac_braku_filtra`.
+2. **Filtr tagów nie był wersjonowany.** Żaden segment klucza nie zmieniał się przy
+   edycji `asset_tags` (`holdings_version` bumpuje tylko CRUD `holdings`,
+   `eod_marker` to `MAX(prices.date)`), więc po odpięciu spółki od tagu backend
+   przez 6 h oddawał wagi ze starym składem — mimo że frontend poprawnie
+   unieważniał swój cache. Doszedł `tags/repository.tags_version`:
+   `MAX(asset_tags.created_at)` **+** `COUNT(*)`, bo samo maksimum nie łapie
+   usunięcia wiersza (ta sama pułapka co przy `valuations_marker`). Bez migracji —
+   marker liczony z istniejącej tabeli, nie nowa kolumna. Test
+   `test_zmiana_powiazan_tagu_nie_zostaje_w_cache` **zweryfikowany negatywnie**:
+   po tymczasowym wyzerowaniu markera pada.
+3. **Klucz API trafiał do Sentry w zmiennych lokalnych.** `sentry_sdk.init()` nie
+   ustawiał `include_local_variables`, a domyślną wartością jest `True` — każdy
+   `logger.exception` (w tym nowy, per symbol, w jobie dywidend) wysyłał ramki
+   stosu z `api_key` i `params={"apikey": ...}`. Redakcja URL-a z kroku 47
+   zamykała komunikat wyjątku, ta droga była szersza i obejmowała też Finnhuba
+   oraz newsy z kroku 46. `include_local_variables=False` w `core/observability.py`.
+
+Przy okazji: **limit `?tags=`** — najwyżej 20 nazw (powyżej `422`, bo ciche obcięcie
+oddawałoby wynik innego pytania niż zadane), nazwy dłuższe niż 60 znaków pomijane.
+
 ### Zostaje po kroku 43 (nieblokujące)
 
 - **Wybór tagów nie jest w adresie URL** — odświeżenie strony gubi filtr.
@@ -1179,6 +1210,18 @@ Podzielony na **43a** (backend) i **43b** (frontend). Backend powstał 2026-08-2
   (API to umie); tag trzeba usunąć i założyć od nowa.
 - **Notatka przy pozycji watchlisty tylko do odczytu** — `PUT` przyjmuje `note`,
   ale widok dodaje pozycje z `note: null`.
+- **Karta koncentracji obok przefiltrowanej alokacji** liczy HHI całego portfela
+  i nie mówi tego na ekranie (CLAUDE.md §21) — do dopisania jednym zdaniem.
+- **Licznik przy chipie tagu jest globalny**, a widok struktury dotyczy jednego
+  portfela: „dywidendowe (5)" może dać pusty wynik w tym portfelu.
+- **`holdingsQuery` w widoku struktury bez `ErrorState`** — przy błędzie panel
+  tagów znika bez śladu, nie do odróżnienia od portfela bez pozycji.
+- **Liczniki joba dywidend zawyżają przy błędzie commita** — `fetched`/`stored`
+  inkrementowane przed `commit()`, `rollback()` ich nie cofa.
+- **Harness izolacji: brak strony pozytywnej dla tagów/watchlist** i asercja
+  dopuszczająca `422` (trasa walidująca przed sprawdzeniem własności przeszłaby
+  test, nie sprawdziwszy niczego).
+- **Tag z przecinkiem w nazwie** jest nierozpoznawalny przez `?tags=`.
 - **Brak filtra tagów w innych widokach** (wyniki, ryzyko, kalendarz dywidend) —
   dziś tylko alokacja przyjmuje `?tags=`.
 

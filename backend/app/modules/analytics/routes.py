@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from app.core.deps import PortfolioDep
+from app.core.errors import ValidationError
 from app.db.session import DbSession
 from app.modules.analytics import service
 from app.modules.analytics.schemas import (
@@ -205,13 +206,37 @@ async def get_risk(
     )
 
 
+# Ile nazw tagów przyjmujemy w jednym `?tags=` i jak długa może być nazwa.
+# Bez limitu zalogowany użytkownik wysyłałby tysiące nazw: `IN (...)` z tyloma
+# parametrami przy każdym pudle cache i osobny wpis w Redisie na każdy wariant.
+# Długość równa `TagCreateIn.name` — dłuższa nazwa nie może niczego dopasować,
+# bo nie da się takiego tagu założyć.
+_MAX_TAG_FILTER_NAMES = 20
+_MAX_TAG_NAME_LENGTH = 60
+
+
 def _split_tags(raw: str | None) -> list[str] | None:
     """`?tags=a,b` → `["a", "b"]`. Puste `?tags=` znaczy „bez filtra",
     a nie „filtr, który nic nie przepuszcza" — pusty parametr to zwykle
-    wyczyszczony input, nie świadome pytanie o pustkę."""
+    wyczyszczony input, nie świadome pytanie o pustkę.
+
+    Za długa lista to `422`, nie ciche obcięcie: obcięcie oddawałoby wynik
+    innego pytania niż zadane, a to jest ekran o strukturze pieniędzy.
+    Pojedyncza nazwa dłuższa niż limit kolumny jest po prostu pomijana —
+    nie ma tagu, który mogłaby dopasować.
+    """
     if raw is None:
         return None
-    names = [name.strip() for name in raw.split(",") if name.strip()]
+    names = [
+        name.strip()
+        for name in raw.split(",")
+        if name.strip() and len(name.strip()) <= _MAX_TAG_NAME_LENGTH
+    ]
+    if len(names) > _MAX_TAG_FILTER_NAMES:
+        raise ValidationError(
+            f"Filtr przyjmuje najwyżej {_MAX_TAG_FILTER_NAMES} tagów naraz.",
+            details={"tags": len(names)},
+        )
     return names or None
 
 
