@@ -357,7 +357,9 @@ async def _run_db_roles() -> int:
         # `CAST(... AS text)` są konieczne: `format` jest wariadyczne, więc
         # bez nich sterownik nie umie ustalić typu parametru.
         statement = await conn.scalar(
-            text("SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', CAST(:role AS text), CAST(:pwd AS text))"),
+            text(
+                "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', CAST(:role AS text), CAST(:pwd AS text))"
+            ),
             {"role": role, "pwd": password},
         )
         await conn.execute(text(statement))

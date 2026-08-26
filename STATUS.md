@@ -19,16 +19,16 @@ underwater i heatmapą). Szczegóły w sekcjach kroków 41a i 41b niżej.
 migracja `c03ad7b7217b`. Szczegóły i zmiana dostawcy (Finnhub → Alpha Vantage) w sekcji
 kroku 47 niżej.
 **Zrobione 2026-08-26:** krok **43 w całości** (43a backend + 43b frontend), poprawki
-po code-review kroków 43 i 47 oraz krok **44** (RLS, domknięcie ADR-002).
-Suita **zielona** (backend 548, Vitest 84).
-**Następny ruch:** etap 8, **krok 45** (świece, Lightweight Charts) — ostatni krok etapu 8.
+po code-review kroków 43 i 47, krok **44** (RLS, domknięcie ADR-002) i krok **45**
+(świece) — **ETAP 8 ZAMKNIĘTY**. Suita **zielona** (backend 560, Vitest 89).
+**Następny ruch:** etap 9, **krok 48** (import CSV — opcjonalny) albo **49** (PWA).
 **UWAGA WDROŻENIOWA:** przed pushem przeczytaj `docs/wdrozenie.md` §5.1 — krok 44 dodaje
 rolę bazy i wymaga `DATABASE_URL_APP` w `.env.prod` (bez niej API działa, ale bez RLS). Decyzją użytkownika (2026-08-25)
 etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
 tryb „krok po kroku" z code-review po każdym. Commity czekają na push — push
 wyzwala wdrożenie produkcyjne z CI.
-**Etap 8 zostaje otwarty świadomą decyzją użytkownika** (2026-08-10): został krok 45
-(41, 43 i 44 domknięte). Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
+**Etap 8 domknięty 2026-08-26** — kroki 40–45 zrobione, odstępstwo od kolejności
+z CLAUDE.md §5 (etap 9 zaczęty przed 8) zamknięte razem z nim. Odstępstwo od CLAUDE.md §5 — szczegóły i konsekwencje
 w sekcji „Plan etapu 9", decyzja 1.
 **Ostatnia aktualizacja:** 2026-08-26
 **Faza:** 1 **zakończona** (etapy 0–7, cel osiągnięty: wpisujesz pozycje → widzisz wartość, skład % i ranking rynków)
@@ -45,7 +45,7 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 5 | Pozycje i wycena | 🟢 zrobiony |
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
-| 8 | Metryki i ryzyko (Faza 2) | 🟡 40, 41, 42, 43, 44 zrobione; **45 zostało** |
+| 8 | Metryki i ryzyko (Faza 2) | 🟢 **zamknięty 2026-08-26** (kroki 40–45) |
 | 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46 i 47 zrobione; następny 48 |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
@@ -97,7 +97,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 42 Benchmark (WIG20 przez ETFBW20TR, ^GSPC) — `6db8138`, 2026-08-15
 [x] 43 Watchlisty i tagi
 [x] 44 RLS w Postgres (domknięcie ADR-002)
-[ ] 45 Wykresy świecowe
+[x] 45 Wykresy świecowe (Lightweight Charts) — 2026-08-26
 [x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
 [x] 47 Kalendarz dywidend (Alpha Vantage `DIVIDENDS`; GPW nieobjęta i oznaczona) — 2026-08-23
 [ ] 48 Import CSV listy pozycji (opcjonalnie)
@@ -1078,6 +1078,79 @@ Lookup sprawdzony na realnych datach: 2026-08-25 → 3,75%, 2023-09-06 → 6,75%
 **Nie zrobione (świadomie, to krok 41b):** żadnej metryki ryzyka jeszcze nie ma —
 `nbp_reference_rates` nie ma na razie ani jednego konsumenta poza testami, tabela
 czeka na Sharpe'a. Świeżość tej serii nie jest jeszcze pokazana w `/meta/freshness`.
+
+## Krok 45 — wykresy świecowe (ZROBIONY 2026-08-26) — KONIEC ETAPU 8
+
+`GET /assets/{asset_id}/candles?range=`, `marketdata/candles.py`, komponenty
+`CandleChart`/`CandlePanel` na Lightweight Charts, trasa `/assets/[id]`.
+
+### Sedno: napięcie z zasadą CLAUDE.md #4, zapowiedziane przy planowaniu etapu
+
+`prices` trzyma **surowe** OHLC i skorygowany wyłącznie `close_adj` — dostawcy oddają
+OHLC w cenach z dnia notowania. Narysowanie świec wprost z tych kolumn złamałoby zasadę
+„wykresy zawsze na `close_adj`" w najbardziej mylący sposób: knoty i korpusy sprzed splitu
+wisiałyby kilka razy wyżej niż linia zamknięcia, którą użytkownik zna z wykresu wartości
+portfela. Rozstrzygnięcie zgodne z propozycją z planu: **cała świeca skalowana
+współczynnikiem `close_adj / close`** z tego samego dnia. Split i dywidenda przeskalowują
+cały dzień, nie samo zamknięcie, więc kształt świecy zostaje nietknięty — zmienia się
+poziom. Dla serii bez korekt (Stooq/Finnhub/Binance wpisują `close_adj := close`)
+współczynnik wynosi dokładnie 1 i wynik jest identyczny z surowym OHLC.
+
+### Pozostałe decyzje
+
+- **`close` bierzemy wprost z `close_adj`**, nie z `close * współczynnik` — matematycznie
+  to samo, ale bez błędu zaokrąglenia mnożenia i dzielenia. To jest liczba, którą
+  użytkownik widzi też w wycenie pozycji, więc musi zgadzać się co do grosza.
+- **`volume` bez skalowania** — to sztuki, nie cena; skalowanie wolumenu współczynnikiem
+  cenowym byłoby osobną decyzją, nie efektem ubocznym korekty cen. W kontrakcie zostaje
+  liczbą, nie stringiem (nie jest kwotą, więc CLAUDE.md #3.1 go nie dotyczy).
+- **Niekompletna sesja wypada z serii i jest POLICZONA** (`skipped` w odpowiedzi).
+  Wiersz bez kompletu OHLC nie daje się skorygować, a domalowanie świecy z `close_adj`
+  w każdym rogu byłoby wymyślaniem danych. Wykres z dziurą wygląda dokładnie jak
+  kompletny, więc liczba musi dojechać do UI (CLAUDE.md #3.15) — panel pokazuje ją
+  zdaniem nad wykresem.
+- **Jedna trasa na aktywo i indeks.** Bliźniacze `/markets/{code}/candles` napisałem
+  i **usunąłem**: indeks referencyjny jest zwykłym aktywem (ADR-102), a panel „Twoje
+  rynki" zna jego `asset_id`, więc druga trasa byłaby endpointem bez konsumenta —
+  dokładnie tym, co przy kroku 34 zostało zapisane w backlogu jako zapach.
+- **Lightweight Charts, nie ECharts** — podział wprost z CLAUDE.md §2. Powód praktyczny:
+  przewijanie i skalowanie osi czasu na dotyku, czyli to, po co ogląda się świece,
+  jest tu wbudowane. Dynamiczny `import()` w `useEffect`, jak `EChart` z kroku 33.
+- **`/assets/[id]` to sam wykres.** Wskaźniki fundamentalne i techniczne to **Etap 10**
+  planu v3 (Single Asset Analysis) — dokładanie ich tutaj byłoby wejściem w zakres,
+  którego v2 nie obejmuje. Wejścia: symbol pozycji w panelu tagów, symbol na watchliście,
+  link „Zobacz świece {indeks} →" w panelu rynków.
+- **Kwoty jako string aż do granicy rysowania.** `toChartCandles` zamienia je na `number`
+  wyłącznie dla biblioteki wykresu — na wykresie utrata cyfr znaczących jest niewidoczna,
+  w liczbie na ekranie byłaby błędem.
+
+### Weryfikacja
+
+- `tests/unit/test_candles.py` (7) — na ręcznie policzonych liczbach: split 2:1 skaluje
+  całą świecę i **zachowuje jej proporcje**, zamknięcie idzie z `close_adj`, wolumen bez
+  zmian, niekompletny wiersz i `close <= 0` wypadają i są policzone.
+- `tests/integration/test_candles.py` (5) — kontrakt: stringi, korekta zastosowana,
+  `skipped` w odpowiedzi, rosnąco po dacie, 404/422.
+- `lib/candles.test.ts` (5) — konwersja do wykresu i polska odmiana „sesja" po liczebniku.
+- **Żywa weryfikacja na dev:** AAPL 2026-08-06, wiersz z realną korektą dywidendową
+  (`close=312.41000366`, `close_adj=312.14080811`): endpoint zwrócił
+  `open=314.06913777` — zgodnie z ręcznym przeliczeniem `314.33999634 × 0.99913833`
+  co do ósmego miejsca. MSFT `range=1M`: 12 świec, `skipped=0`.
+- Backend **560 passed**, frontend: lint, `tsc`, Vitest **89 passed**, `next build`
+  z trasą `/assets/[id]`.
+
+### Zostaje po kroku 45 (nieblokujące)
+
+- **Brak wolumenu na wykresie** — dane są w odpowiedzi, ale panel ich nie rysuje
+  (osobna seria histogramu pod świecami to naturalne rozszerzenie).
+- **Brak wskaźników technicznych** (MA50/MA200, RSI) — świadomie: to Etap 10 planu v3.
+- **`/assets/[id]` nie pokazuje pozycji użytkownika w tym aktywie** (ilość, wynik) —
+  ekran jest czysto rynkowy; powiązanie z portfelem wymagałoby decyzji, czy to już
+  Single Asset Analysis.
+- **Trasa wymaga zalogowania, choć endpoint jest publiczny** — decyzja produktowa
+  (wchodzi się tu z portfela), ale to niespójność warta odnotowania.
+- Świece nie mają cache Redis, w odróżnieniu od analityki portfela — seria cen jest
+  tania, ale przy szerokim `range=max` na ruchliwym instrumencie warto zmierzyć.
 
 ## Krok 44 — Row Level Security (ZROBIONY 2026-08-26)
 

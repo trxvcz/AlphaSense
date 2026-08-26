@@ -95,6 +95,14 @@ function MarketRow({ item }: { item: MarketRankingItem }) {
           </div>
           <div className="min-w-0 flex-1">
             <MarketSparkline series={item.index.series_30d} symbol={item.index.symbol} />
+            {/* Indeks jest zwykłym aktywem (ADR-102), więc świece czyta ta
+                sama trasa co dla spółki — krok 45. */}
+            <Link
+              href={`/assets/${item.index.asset_id}`}
+              className="text-xs text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+            >
+              Zobacz świece {item.index.symbol} →
+            </Link>
           </div>
         </div>
       ) : (

@@ -248,6 +248,30 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 
 **`assets_without_coverage` i `uncovered_markets` są najważniejszą częścią tej odpowiedzi.** Dostawcą jest dziś Alpha Vantage (`DIVIDENDS`) — Finnhub `/stock/dividend` zwraca na darmowym planie `403` (sprawdzone 2026-08-23), mimo że plan kroku 47 zakładał właśnie jego. Alpha Vantage **nie pokrywa GPW**: dla `PKN.WAR` oddaje `data: []`, czyli odpowiedź nie do odróżnienia od „spółka nie płaci". Dlatego pokrycie rozstrzyga **mapowanie `asset_source_map` (provider `alphavantage_dividends`)**, a nie obecność zdarzeń w bazie: aktywo bez mapowania jest raportowane jako nieobjęte, a nie jako „bez dywidend". Rynek trafia do `uncovered_markets` dopiero wtedy, gdy żadne aktywo portfela z tego rynku nie ma pokrycia.
 
+## Świece (Faza 2, krok 45)
+
+| Metoda | Ścieżka | Opis |
+|---|---|---|
+| GET | `/assets/{asset_id}/candles?range=1M\|3M\|1Y\|YTD\|max` | świece OHLC instrumentu; `range` domyślnie `1Y`. **Publiczna** (notowania to słownik globalny) |
+
+```json
+{
+  "symbol": "AAPL", "name": "Apple Inc.", "currency": "USD", "range": "1M", "skipped": 1,
+  "candles": [
+    {"date": "2026-08-06", "open": "314.06913777", "high": "316.01746969",
+     "low": "308.96355556", "close": "312.14080811", "volume": 46139900}
+  ]
+}
+```
+
+**Wszystkie cztery ceny są skorygowane** o splity i dywidendy — współczynnikiem `close_adj / close` z tego samego dnia, tym samym dla całej świecy. `prices` trzyma surowe OHLC i skorygowany wyłącznie `close_adj`, więc narysowanie świec wprost z kolumn złamałoby CLAUDE.md #4: knoty i korpusy sprzed splitu wisiałyby kilka razy wyżej niż linia zamknięcia znana z pozostałych wykresów. `close` bierzemy wprost z `close_adj` (bez mnożenia i dzielenia), żeby zgadzał się co do grosza z wyceną pozycji. `volume` przechodzi **bez** skalowania — to sztuki, nie cena, stąd liczba, a nie string.
+
+**`skipped` to liczba sesji, których nie da się pokazać**: brak kompletu OHLC albo `close <= 0`, czyli brak współczynnika korekty. Jest w odpowiedzi, bo wykres z dziurą wygląda dokładnie jak wykres kompletny (CLAUDE.md #3.15) — UI musi mieć czym to oznaczyć.
+
+**Indeks rynku jedzie tą samą trasą.** Indeks referencyjny jest zwykłym aktywem (`markets.index_asset_id`, ADR-102), a `GET /portfolios/{id}/markets` oddaje jego `asset_id` — osobne `/markets/{code}/candles` byłoby endpointem bez konsumenta.
+
+**404** dla nieznanego `asset_id`; aktywo wygaszone (`is_active = false`) świec **nie** traci — historia notowań pozostaje prawdziwa, wygaszenie mówi tylko „nie pytamy o nowe ceny". Brak notowań w oknie to `200` z pustą listą, nie 404: pojęcie serii istnieje, danych jeszcze nie ma.
+
 ## Tagi i listy obserwowanych (Faza 2, krok 43)
 
 | Metoda | Ścieżka | Opis |

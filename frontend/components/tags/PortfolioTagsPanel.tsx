@@ -14,6 +14,7 @@
  * w cache TanStack Query.
  */
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Holding } from "@/lib/dashboard";
@@ -158,8 +159,13 @@ export function PortfolioTagsPanel({ holdings }: PortfolioTagsPanelProps) {
                 key={holding.id}
                 className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800"
               >
-                <span className="min-w-16 font-medium text-zinc-900 dark:text-zinc-50">
-                  {holding.symbol}
+                <span className="min-w-16 font-medium">
+                  <Link
+                    href={`/assets/${holding.asset_id}`}
+                    className="text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+                  >
+                    {holding.symbol}
+                  </Link>
                 </span>
                 <div
                   role="group"

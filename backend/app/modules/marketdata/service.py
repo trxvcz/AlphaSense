@@ -33,6 +33,7 @@ from app.core.config import get_settings
 from app.core.errors import NotFoundError
 from app.db.session import AsyncSessionLocal
 from app.modules.marketdata import repository
+from app.modules.marketdata.candles import CandleSeries, build_series
 from app.modules.marketdata.models import Asset, Price
 from app.modules.marketdata.providers.binance import BinanceProvider
 from app.modules.marketdata.providers.circuit_breaker import CircuitBreaker
@@ -236,6 +237,40 @@ async def get_market_index_series(
     return await repository.list_prices_in_range(
         db, market.index_asset_id, range_=range_, today=today
     )
+
+
+@dataclass(frozen=True, slots=True)
+class AssetCandles:
+    """Świece razem z metadanymi aktywa — trasa nie dokłada drugiego zapytania
+    o symbol/nazwę/walutę, a UI ma czym podpisać wykres i oś cen."""
+
+    asset: Asset
+    series: CandleSeries
+
+
+async def get_asset_candles(db: AsyncSession, asset_id: uuid.UUID, *, range_: str) -> AssetCandles:
+    """`GET /assets/{asset_id}/candles?range=` (krok 45).
+
+    Adresujemy aktywem, nie rynkiem: indeks referencyjny też jest aktywem
+    (`markets.index_asset_id`, ADR-102), a `GET /portfolios/{id}/markets`
+    oddaje jego `asset_id` — więc bliźniacza trasa `/markets/{code}/candles`
+    byłaby endpointem bez konsumenta. Jedna trasa obsługuje i spółkę,
+    i indeks.
+
+    `NotFoundError` (404) dla nieznanego aktywa. Aktywo **wygaszone**
+    (`is_active = false`) świec nie traci: historia notowań pozostaje
+    prawdziwa, a wygaszenie mówi tylko „nie pytamy już o nowe ceny".
+    Brak notowań w oknie to `200` z pustą listą — pojęcie serii istnieje,
+    danych jeszcze (albo już) nie ma, to samo rozróżnienie co przy
+    `get_market_index_series`.
+    """
+    asset = await repository.get_asset(db, asset_id)
+    if asset is None:
+        raise NotFoundError("Nie znaleziono aktywa")
+
+    today = datetime.now(UTC).date()
+    prices = await repository.list_prices_in_range(db, asset.id, range_=range_, today=today)
+    return AssetCandles(asset=asset, series=build_series(prices))
 
 
 def _guarded(provider_name: str, requests_per_minute: int) -> Guarded:

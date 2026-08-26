@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
@@ -28,6 +29,8 @@ from app.db.session import DbSession
 from app.modules.marketdata import service
 from app.modules.marketdata.schemas import (
     AssetSearchResultOut,
+    CandleOut,
+    CandleSeriesOut,
     FreshnessOut,
     MarketFreshnessOut,
     PricePointOut,
@@ -87,6 +90,48 @@ async def get_freshness(db: DbSession) -> FreshnessOut:
     """
     freshness = await service.get_markets_freshness(db)
     return FreshnessOut(markets=[MarketFreshnessOut.model_validate(item) for item in freshness])
+
+
+@router.get("/assets/{asset_id}/candles", response_model=CandleSeriesOut)
+async def get_asset_candles(
+    asset_id: UUID,
+    db: DbSession,
+    range_: Annotated[MarketIndexRangeParam, Query(alias="range")] = MarketIndexRangeParam.ONE_YEAR,
+) -> CandleSeriesOut:
+    """Świece OHLC pojedynczego aktywa (krok 45).
+
+    Ten sam zestaw `?range=` co `/markets/{code}/index` — inny byłby
+    niespójnością w obrębie jednego modułu. Domyślne `1Y`, bo świece czyta
+    się w kontekście trendu, a nie ostatnich kilkunastu sesji; `/index`
+    domyślnej wartości nie ma, ale tam parametr jest wymagany od kroku 30
+    i zmiana tego byłaby zmianą kontraktu.
+
+    Trasa **publiczna**, jak reszta tego modułu: notowania aktywa nie są
+    zasobem użytkownika (patrz docstring modułu).
+    """
+    result = await service.get_asset_candles(db, asset_id, range_=range_.value)
+    return _candle_series_out(result, range_.value)
+
+
+def _candle_series_out(result: service.AssetCandles, range_: str) -> CandleSeriesOut:
+    return CandleSeriesOut(
+        symbol=result.asset.symbol,
+        name=result.asset.name,
+        currency=result.asset.currency,
+        range=range_,
+        skipped=result.series.skipped,
+        candles=[
+            CandleOut(
+                date=candle.date,
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
+            )
+            for candle in result.series.candles
+        ],
+    )
 
 
 @router.get("/markets/{code}/index", response_model=list[PricePointOut])

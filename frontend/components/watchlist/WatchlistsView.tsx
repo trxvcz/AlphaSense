@@ -13,6 +13,7 @@
  * generowałby zapytanie na literę.
  */
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError } from "@/lib/api";
@@ -269,7 +270,12 @@ export function WatchlistsView() {
                   >
                     <div className="flex flex-col">
                       <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                        {item.symbol}{" "}
+                        <Link
+                          href={`/assets/${item.asset_id}`}
+                          className="text-blue-700 underline underline-offset-2 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-blue-400"
+                        >
+                          {item.symbol}
+                        </Link>{" "}
                         <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
                           {item.market_code} · {item.currency}
                         </span>

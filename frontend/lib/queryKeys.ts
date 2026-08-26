@@ -38,6 +38,10 @@ export const qk = {
   risk: (portfolioId: string, range: string, benchmark: string | null) =>
     ["risk", portfolioId, range, benchmark ?? "none"] as const,
   markets: (portfolioId: string) => ["markets", portfolioId] as const,
+  // `range` w kluczu z tego samego powodu co w `performance`: zawęża zasób
+  // po stronie API, więc odpowiedzi dla 1M i 1Y nie są wymienne.
+  assetCandles: (assetId: string, range: string) =>
+    ["assetCandles", assetId, range] as const,
   // `withSentimentOnly` jest CZĘŚCIĄ klucza, nie parametrem odczytu: filtr
   // zawęża zbiór po stronie API, więc odpowiedzi z `true` i `false` to dwa
   // różne zasoby. Wspólny klucz pokazywałby po przełączeniu filtra dane

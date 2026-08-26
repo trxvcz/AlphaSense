@@ -83,3 +83,42 @@ class PricePointOut(BaseModel):
     @field_serializer("close_adj")
     def _ser_close_adj(self, v: Decimal) -> str:
         return format(v, "f")
+
+
+class CandleOut(BaseModel):
+    """Jedna świeca `GET /assets/{id}/candles` (krok 45).
+
+    Wszystkie cztery ceny **skorygowane** o splity i dywidendy współczynnikiem
+    `close_adj / close` (`marketdata/candles.py`) — surowe OHLC z `prices`
+    złamałoby CLAUDE.md #4 i rozjechałoby świece z linią zamknięcia na
+    pozostałych wykresach aplikacji. Kwoty jako string (CLAUDE.md #3.1),
+    `volume` jako liczba całkowita: to sztuki, nie pieniądze.
+    """
+
+    date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int | None
+
+    @field_serializer("open", "high", "low", "close")
+    def _ser_price(self, v: Decimal) -> str:
+        return format(v, "f")
+
+
+class CandleSeriesOut(BaseModel):
+    """Wyjście `GET /assets/{id}/candles` (krok 45).
+
+    `skipped` to liczba dni, których **nie da się** pokazać: brak kompletu
+    OHLC albo `close <= 0`, czyli brak współczynnika korekty. Jest w
+    odpowiedzi, bo wykres z dziurą wygląda dokładnie jak wykres kompletny,
+    a dane niepełne mają być oznaczone (CLAUDE.md #3.15).
+    """
+
+    symbol: str
+    name: str
+    currency: str
+    range: str
+    skipped: int
+    candles: list[CandleOut]
