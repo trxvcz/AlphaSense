@@ -43,3 +43,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# PWA (krok 49) — Serwist generuje service workera przy każdym `next build`.
+# To artefakt buildu, nie źródło: źródłem jest `app/sw.ts`.
+public/sw.js
+public/sw.js.map
+public/swe-worker-*.js

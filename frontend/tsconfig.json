@@ -1,7 +1,13 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    // `webworker` dołożone dla `app/sw.ts` (krok 49) — service worker używa
+    // `ServiceWorkerGlobalScope`, którego nie ma w bibliotece DOM. Świadomy
+    // kompromis: alternatywą był osobny tsconfig tylko dla workera, co
+    // wyjęłoby ten plik spod `tsc --noEmit` w `make check`. Koszt: kod
+    // przeglądarkowy nie dostanie błędu, jeśli sięgnie po globalną nazwę
+    // dostępną tylko w workerze.
+    "lib": ["dom", "dom.iterable", "esnext", "webworker"],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,

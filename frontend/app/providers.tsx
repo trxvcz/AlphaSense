@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { AuthProvider } from "@/lib/auth/AuthProvider";
+import { OfflineCacheProvider } from "@/lib/offline/OfflineCacheProvider";
 
 /**
  * Jedna instancja QueryClient na drzewo komponentów klienckich
@@ -26,7 +27,12 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>{children}</AuthProvider>
+      {/* `OfflineCacheProvider` wewnątrz `AuthProvider`: trwałość cache'u
+          zależy od sesji (zrzut jest przypisany do użytkownika i kasowany
+          przy wylogowaniu — patrz `lib/offlineCache.ts`). */}
+      <AuthProvider>
+        <OfflineCacheProvider>{children}</OfflineCacheProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

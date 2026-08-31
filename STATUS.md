@@ -22,7 +22,10 @@ kroku 47 niżej.
 po code-review kroków 43 i 47, krok **44** (RLS, domknięcie ADR-002) i krok **45**
 (świece) — **ETAP 8 ZAMKNIĘTY**. Suita **zielona** (backend 560, Vitest 89).
 **Zrobione 2026-08-30:** krok **48** (import CSV listy pozycji) — bez migracji, patrz sekcja niżej.
-**Następny ruch:** etap 9, **krok 49** (PWA: Serwist, manifest, IndexedDB).
+**Zrobione 2026-08-31:** poprawki po code-review kroku 48 (w tym dwa blokujące) + naprawa
+czerwonego CI (`test_tags.py` zakładał kurs USD) oraz krok **49** (PWA).
+**Następny ruch:** etap 9, **krok 50** (Web Push + struktura i18n) — **wymaga decyzji**:
+kluczy VAPID nie ma w `.env.example`, a push to nowe sekrety i nowa tabela subskrypcji.
 **UWAGA WDROŻENIOWA:** przed pushem przeczytaj `docs/wdrozenie.md` §5.1 — krok 44 dodaje
 rolę bazy i wymaga `DATABASE_URL_APP` w `.env.prod` (bez niej API działa, ale bez RLS). Decyzją użytkownika (2026-08-25)
 etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
@@ -47,7 +50,7 @@ w sekcji „Plan etapu 9", decyzja 1.
 | 6 | Analityka i dashboard | 🟢 zrobiony |
 | 7 | Wdrożenie produkcyjne | 🟢 zrobiony 2026-08-10 — **KONIEC FAZY 1** |
 | 8 | Metryki i ryzyko (Faza 2) | 🟢 **zamknięty 2026-08-26** (kroki 40–45) |
-| 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46, 47 i 48 zrobione; następny 49 |
+| 9 | Otoczka (Faza 3) | 🟡 w realizacji — kroki 46–49 zrobione; został **50** (Web Push + i18n) |
 
 Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 
@@ -102,7 +105,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 46 Newsy (RSS + Finnhub + Alpha Vantage) — `aa97b8a` + `cc677fb` (naprawy z recenzji), 2026-08-15
 [x] 47 Kalendarz dywidend (Alpha Vantage `DIVIDENDS`; GPW nieobjęta i oznaczona) — 2026-08-23
 [x] 48 Import CSV listy pozycji — 2026-08-30
-[ ] 49 PWA: Serwist, manifest, IndexedDB
+[x] 49 PWA: Serwist, manifest, IndexedDB — 2026-08-31
 [ ] 50 Web Push + i18n
 ```
 
@@ -507,3 +510,37 @@ zrobione, zanim krok 32 ma sens.
 | 2026-08-03 | **Krok 37 (etap 7): Sentry + `GET /api/health` + alerty jobów EOD.** Pełny opis w sekcji „Krok 37" wyżej. Nowe: `app/core/observability.py`, `app/core/health.py`, `tests/unit/test_observability.py`, `tests/integration/test_health.py`, `frontend/{instrumentation-client,instrumentation,sentry.server.config}.ts`. Zmienione: `main.py` (init Sentry przed budową `FastAPI` — integracja Starlette opakowuje aplikację w momencie tworzenia, odwrotna kolejność zostawiłaby wyjątki żądań poza raportowaniem), `worker/scheduler.py`, `app/cli.py` (ręczne `ingest`/`snapshot` raportują tak samo jak automatyczne; `seed` świadomie nie — administracyjna, pod okiem człowieka), `worker/jobs/ingest_market.py` (`_alert_ingestion_problem`: `failed`→`error`, `partial`→`warning`, `fingerprint` po rynku+statusie), `next.config.ts` (`withSentryConfig`, source mapy tylko przy `SENTRY_AUTH_TOKEN`), `docker-compose.prod.yml` (readiness healthcheck po polu `db`, rotacja logów `x-logging`, `caddy` na `service_started`), `ci.yml` (job `obrazy-prod`), oba `.env*.example` (`APP_VERSION`, `SENTRY_*`), `docs/{api-kontrakt,wdrozenie}.md`. **Dwa defekty spoza zakresu, znalezione przy okazji i naprawione**: (1) limit domyślny rate limitu nie działał na ŻADNEJ trasie od czasu FastAPI 0.139 (`SlowAPIMiddleware` nie znajduje handlera przez `_IncludedRouter`, a `handler is None` traktuje jak zwolnienie z limitu — ta sama zmiana routingu, która w etapie 5 cicho zepsuła harness izolacji) → własny `DefaultRateLimitMiddleware`; (2) `_BrokenRedis` w testach mockował tylko `get`/`set`, więc nowy middleware wywalał się na nim `AttributeError` zamiast degradować → doszedł test „limit domyślny przepuszcza ruch przy padniętym Redisie". Fallback yfinance dla WIG20 (`WIG20.WA`) dopisany do `SOURCE_MAPS` — bez niego każda odmowa Stooqa dawałaby `partial`, czyli powtarzalny alert, który nauczyłby ignorować alerty. Zweryfikowane: `make check` zielone (**247 passed**, ruff, mypy strict 55 plików, Vitest 29/29, `next build`), Playwright **5/5**, `GET /api/health` → `status: ok`, **120× `/api/health` → 120× 200** vs **120× `/api/meta/freshness` → 100× 200 + 20× 429** (zwolnienie i limit domyślny udowodnione na żywo), `ingest --market GPW` → `status=ok` 3/3 z WIG20 przez fallback. Domknięte przy okazji cztery nieblokujące wpisy z kroku 36 (`caddy` na `service_started`, rotacja logów, CI `--target prod`, `NEXT_PUBLIC_SENTRY_DSN` w `args:`). | **Krok 37 zamknięty.** Cały tor Sentry zweryfikowany wyłącznie w trybie WYŁĄCZONYM — dwa DSN-y wciąż po stronie użytkownika (patrz „Decyzje oczekujące"), więc realne dostarczenie zdarzenia do projektu Sentry pozostaje niezweryfikowane; naturalny moment to pierwsze wdrożenie. Dwie pułapki środowiskowe trafione i dopisane do „Notatek operacyjnych": wolumen nazwany `frontend_node_modules` przesłania nowe zależności npm mimo `--build`, a `frontend/.next` dzielony z hostowym `next build` potrafi dać `ChunkLoadError`/500 (oba objawiały się jako 5 czerwonych testów Playwright, które okazały się fałszywym alarmem — padnięty kontener, nie kod). Baza dev wyczyszczona z 22 osieroconych aktywów testowych; wyciek zweryfikowany jako NIEaktywny. Następny krok: 38 (nocny `pg_dump` poza VPS) — wymaga bucketu S3 i klucza od użytkownika. |
 | 2026-08-05 | **Krok 39 (etap 7): smoke test 375 px + desktop — koniec Fazy 1 po stronie repo.** Pełny opis w sekcji „Krok 39" wyżej. Nowe: `frontend/e2e/smoke.spec.ts` (cała ścieżka produktu wyłącznie przez UI: rejestracja → portfel → pozycja → wartość → struktura % → ranking rynków), projekt `desktop` w `playwright.config.ts`, `make smoke`, `docs/wdrozenie.md` §10 (automat + ręczna lista kontrolna na telefonie + sprzątanie konta smoke z produkcji). **Defekt środowiskowy znaleziony przez ten test i naprawiony u przyczyny**: dev-serwer oddawał `HTTP 404` na `/portfolios/{id}/struktura` i `/rynki` przy działających pozostałych trasach — trzecia twarz rozjazdu współdzielonego `.next` (hostowy `next build` z `make check` vs `next dev` w kontenerze); `docker-compose.yml` dostał wolumen anonimowy `/app/.next`, tak samo jak wcześniej `node_modules`. Odrzucono alternatywę z `NEXT_DIST_DIR`/`distDir` — działa, ale ESLint zaczyna czytać wygenerowany kod, a `next build` sam dopisuje katalog do `tsconfig.json`. Zweryfikowane: `make smoke` 2/2, pełna suita **7/7**, sekwencja `make check` → `playwright test` (ta, która wcześniej niezawodnie psuła dev-serwer) zielona, realna wartość `12 194,86 zł` na zrzucie mobilnym. Przy okazji: `expect.timeout` podniesiony do 10 s (smoke z założenia biegnie po zimnym stacku), a wpis o `.next` w „Notatkach operacyjnych" przepisany na naprawiony. | **Kryterium ukończenia etapu 7 NIE jest jeszcze spełnione** i nie może być z poziomu repo: wymaga wejścia na `https://alphasense.cedron.net.pl` z telefonu. Po Twojej stronie zostają: rekord A `alphasense` → IP VPS-a (TTL 300), `.env.prod` z `chmod 600`, dwa DSN-y Sentry, redirect URI w Google Cloud Console, a po wdrożeniu `E2E_BASE_URL=https://alphasense.cedron.net.pl make smoke` + ręczna lista kontrolna §10.2. **Otwarte z code-review etapu:** job CD w `ci.yml` (niezacommitowany) — `curl --fail` na zawsze-200 `/api/health` niczego nie dowodzi, brak ADR dla zmiany modelu wdrożenia, klucz SSH bez `command=`/`restrict` na koncie z dostępem do gniazda Dockera. |
 | 2026-08-05 | **CD: trzy blokujące z code-review naprawione + ADR-103.** Pełny opis w sekcji „Wdrożenie ciągłe (CD)" wyżej. Nowe: `infra/deploy.sh` (bramka po stronie VPS-a — jedyne polecenie, które klucz z GitHuba może uruchomić przez `restrict,command=`), `docs/adr/ADR-103-wdrozenie-ciagle.md`, `docs/wdrozenie.md` §11 (konto wdrożeniowe, `authorized_keys`, sekrety, co CD robi i czego NIE robi, ręczne cofnięcie). Job `deploy` w `ci.yml` przepisany: nie zawiera już procedury wdrożenia (i nie może — serwer i tak uruchomi swój skrypt), woła `ssh <host> <SHA>`, ma `permissions: {}`, `timeout-minutes: 30`, `BatchMode`/`IdentitiesOnly`, `umask 077` przy zapisie klucza i osobny krok sprawdzający `/api/health` **z parsowaniem ciała przez `jq`** zamiast `curl --fail` (trasa zawsze oddaje 200, więc kod HTTP niczego nie dowodził). Przy okazji ścieżka repo na VPS-ie ujednolicona na `/opt/alphasense/Alphasense` w runbooku, jednostce systemd i **cronie backupu** — ten ostatni nie znalazłby swoich skryptów. | Zweryfikowane w piaskownicy (klon + atrapy `make`/`docker`): wstrzyknięcie w argument, skrócony SHA, commit spoza `origin/main` i commit starszy niż wdrożony — wszystkie odbite przed zmianą czegokolwiek; ścieżka szczęśliwa zostaje na gałęzi `main` z ustawionym `APP_VERSION`; nieudany `prod-up` wycofuje i alarmuje, nieudane wycofanie eskaluje do `fatal`; kod wyjścia 1 w każdej ścieżce błędu. `shellcheck` czysty. **Nie do sprawdzenia z repo:** żywy przebieg na VPS-ie i poprawność wpisu `command=` w `authorized_keys` — procedura w §11.1, do zrobienia PRZED podłączeniem klucza do GitHuba. |
+
+### Krok 49 — PWA na pełnej mocy (2026-08-31)
+
+Serwist (`app/sw.ts` → `public/sw.js` przez `next.config.ts`), manifest z ikonami,
+persystencja cache'u TanStack Query w IndexedDB i baner „brak połączenia — dane sprzed…".
+
+**Nowe zależności:** `@serwist/next`, `serwist`, `idb-keyval`. Mieszczą się w zakresie kroku 49
+z planu (który wprost nazywa Serwist i IndexedDB), więc nie wymagały osobnej decyzji z §10.
+
+**Ryzyko z planu etapu 9 (SW blokujący aktualizację) domknięte dwiema rzeczami:**
+`skipWaiting` + `clientsClaim` (nowa wersja przejmuje kontrolę od razu — na PWA z ekranu
+głównego „zamknij wszystkie karty" znaczy w praktyce „nigdy") oraz opisana ścieżka wyjścia:
+build z `disable: true` generuje workera, który sam się wyrejestrowuje i czyści cache.
+Serwist jest **wyłączony w devie** — SW obok Fast Refresh daje „zmiana nie działa aż do
+hard reloadu". PWA testujemy na `npm run build && npm run start`.
+
+**Izolacja danych, część wrażliwa.** `lib/queryKeys.ts` nie ma segmentu użytkownika, a
+`AuthProvider` czyści cache przy zmianie sesji właśnie dlatego. Zrzut na dysk znosiłby to
+zabezpieczenie, więc: wpis jest **przypisany do właściciela** (`sub` z tokenu), wczytywany
+wyłącznie przy zgodnym właścicielu i nie starszy niż 7 dni, wylogowanie kasuje wszystko, a sam
+token nigdy nie trafia na dysk. Pokryte testami (`lib/offlineCache.test.ts`, w tym „NIE wczytuje
+cudzego zrzutu"). Payload JWT dekodujemy bez weryfikacji podpisu — to etykieta „czyj to cache",
+nie dowód tożsamości; autoryzacja pozostaje w całości po stronie backendu.
+
+**Baner offline to oznaczenie jakości danych** (#3.15), nie ozdoba: niesie tekst z wiekiem
+zrzutu („dane sprzed 30 min" / „dane z godz. 11:00" / „dane z 27.08"), siedzi w `role="status"`
+i nie polega na kolorze (§21). Online milczy — pasek nad treścią kosztowałby miejsce na 375 px.
+
+**`tsconfig.json` dostał `"webworker"` w `lib`** — świadomy kompromis: alternatywą był osobny
+tsconfig dla workera, co wyjęłoby `app/sw.ts` spod `tsc --noEmit` w `make check`. Koszt: kod
+przeglądarkowy nie dostanie błędu, gdy sięgnie po globalną nazwę dostępną tylko w workerze.
+
+**Backlog (niezablokowany):** brak testu Playwright na tryb offline; `public/sw.js` powstaje przy
+buildzie i jest w `.gitignore` (źródłem jest `app/sw.ts`).

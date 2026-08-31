@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { BottomNav } from "@/components/nav/BottomNav";
 import { SideNav } from "@/components/nav/SideNav";
 import { Providers } from "@/app/providers";
+import { OfflineBanner } from "@/components/ui/OfflineBanner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,6 +20,34 @@ export const metadata: Metadata = {
   title: "AlphaSense",
   description:
     "Monitoring i analiza składu portfela inwestycyjnego — wycena, struktura, rynki.",
+  // PWA (krok 49): manifest czyni aplikację instalowalną, `appleWebApp`
+  // odpowiada za tryb pełnoekranowy na iOS, który manifestu nie czyta.
+  manifest: "/manifest.webmanifest",
+  applicationName: "AlphaSense",
+  appleWebApp: {
+    capable: true,
+    title: "AlphaSense",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/icons/apple-touch-icon.png",
+  },
+};
+
+/**
+ * `themeColor` musi być w `viewport`, nie w `metadata` (wymóg Next 15+).
+ * Dwa warianty, bo pasek systemowy ma pasować do motywu, który realnie
+ * widzi użytkownik — inaczej ciemny motyw dostaje jasny pasek u góry.
+ */
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#2563eb" },
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+  ],
 };
 
 /**
@@ -59,6 +88,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-full overflow-x-hidden bg-white font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
         <Providers>
+          <OfflineBanner />
           <div className="flex min-h-screen flex-col md:flex-row">
             <SideNav />
             <main className="min-w-0 flex-1 pb-16 md:pb-0">{children}</main>
