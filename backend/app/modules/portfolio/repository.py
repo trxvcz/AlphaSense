@@ -185,6 +185,31 @@ async def list_holdings_with_assets(
     return [(holding, asset) for holding, asset in result.all()]
 
 
+async def get_assets_by_symbols(db: AsyncSession, symbols: list[str]) -> dict[str, Asset]:
+    """Mapa `UPPER(symbol) -> Asset` dla podanej listy symboli (plan krok 48).
+
+    Jedno zapytanie na cały plik importu, nie jedno na wiersz: 500 pozycji
+    razy `SELECT` po symbolu to 500 round-tripów w jednym żądaniu HTTP.
+
+    Dopasowanie jest **bez rozróżniania wielkości liter** — użytkownik wpisuje
+    `cdr` albo `Cdr`, a `assets.symbol` trzyma `CDR`. Indeks `ix_assets_symbol`
+    tego wariantu nie obsłuży (to indeks na surowej kolumnie), ale lista
+    symboli jest ograniczona przez `csv_import.MAX_ROWS`, więc skan po
+    `assets` jest tu tańszy niż osobny indeks funkcyjny utrzymywany przy
+    każdym zapisie.
+
+    Aktywa nieaktywne (`is_active = false`) są pomijane — pozycja w wygaszonym
+    aktywie nie dostanie wyceny, a użytkownik dowie się o tym dopiero z
+    pustego `value_pln`. Lepiej odrzucić wiersz z powodem.
+    """
+    if not symbols:
+        return {}
+    wanted = {symbol.upper() for symbol in symbols}
+    stmt = select(Asset).where(func.upper(Asset.symbol).in_(wanted), Asset.is_active.is_(True))
+    result = await db.execute(stmt)
+    return {asset.symbol.upper(): asset for asset in result.scalars().all()}
+
+
 async def create_holding(
     db: AsyncSession,
     portfolio: Portfolio,
@@ -213,6 +238,28 @@ async def create_holding(
     await db.commit()
     await db.refresh(holding)
     return holding
+
+
+async def apply_import(
+    db: AsyncSession,
+    portfolio: Portfolio,
+    *,
+    new_holdings: list[Holding],
+    changed_at: date_,
+) -> None:
+    """Zapisuje wynik importu CSV: nowe pozycje plus zmiany naniesione już
+    przez `service.py` na pozycjach istniejących (plan krok 48).
+
+    **Jeden `commit()` na cały plik**, nie na wiersz. Import jest dla
+    użytkownika jedną czynnością — częściowy zapis przerwany błędem bazy w
+    połowie zostawiłby portfel w stanie, którego nie ma ani przed, ani po
+    imporcie. Bump `holdings_version` idzie w tej samej transakcji, raz
+    (wersja cache oznacza „skład się zmienił", a nie „ile pozycji").
+    """
+    for holding in new_holdings:
+        db.add(holding)
+    bump_holdings_version(portfolio, changed_at=changed_at)
+    await db.commit()
 
 
 async def update_holding_row(

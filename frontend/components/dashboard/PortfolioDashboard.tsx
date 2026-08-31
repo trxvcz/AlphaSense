@@ -19,6 +19,7 @@ import { SummaryCard } from "@/components/dashboard/SummaryCard";
 import { TopMovers } from "@/components/dashboard/TopMovers";
 import { ValueChart } from "@/components/charts/ValueChart";
 import { HoldingForm } from "@/components/forms/HoldingForm";
+import { HoldingsImport } from "@/components/forms/HoldingsImport";
 
 type PortfolioDashboardProps = {
   portfolioId: string;
@@ -34,6 +35,7 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
   // dla którego użytkownik tu wchodzi. W portfelu pustym rozwija go CTA ze
   // stanu pustego — tam formularz JEST najważniejszą treścią ekranu.
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
 
   const portfolioQuery = useQuery({
     queryKey: qk.portfolio(portfolioId),
@@ -124,7 +126,12 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
       )}
 
       {holdingsQuery.isSuccess && holdingsQuery.data.length === 0 ? (
-        isFormOpen ? (
+        isImportOpen ? (
+          <HoldingsImport
+            portfolioId={portfolioId}
+            onCancel={() => setIsImportOpen(false)}
+          />
+        ) : isFormOpen ? (
           <HoldingForm
             portfolioId={portfolioId}
             onAdded={() => setIsFormOpen(false)}
@@ -135,32 +142,53 @@ export function PortfolioDashboard({ portfolioId }: PortfolioDashboardProps) {
             title="Ten portfel nie ma jeszcze żadnej pozycji"
             description="Dodaj pierwszą pozycję, żeby zobaczyć wartość, wykres i strukturę portfela."
             action={
-              <button
-                type="button"
-                onClick={() => setIsFormOpen(true)}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
-              >
-                Dodaj pierwszą pozycję
-              </button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsFormOpen(true)}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+                >
+                  Dodaj pierwszą pozycję
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsImportOpen(true)}
+                  className="rounded-md border border-zinc-300 px-4 py-2 text-sm outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:border-zinc-700"
+                >
+                  Importuj z CSV
+                </button>
+              </div>
             }
           />
         )
       ) : holdingsQuery.isSuccess ? (
         <>
-          {isFormOpen ? (
+          {isImportOpen ? (
+            <HoldingsImport
+              portfolioId={portfolioId}
+              onCancel={() => setIsImportOpen(false)}
+            />
+          ) : isFormOpen ? (
             <HoldingForm
               portfolioId={portfolioId}
               onAdded={() => setIsFormOpen(false)}
               onCancel={() => setIsFormOpen(false)}
             />
           ) : (
-            <div>
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setIsFormOpen(true)}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
               >
                 Dodaj pozycję
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsImportOpen(true)}
+                className="rounded-md border border-zinc-300 px-4 py-2 text-sm outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:border-zinc-700"
+              >
+                Importuj z CSV
               </button>
             </div>
           )}

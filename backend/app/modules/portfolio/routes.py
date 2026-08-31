@@ -22,7 +22,10 @@ from app.modules.portfolio.schemas import (
     ChangeOut,
     HoldingCreateIn,
     HoldingOut,
+    HoldingsImportIn,
+    HoldingsImportReportOut,
     HoldingUpdateIn,
+    ImportRowOut,
     PortfolioCreateIn,
     PortfolioOut,
     PortfolioUpdateIn,
@@ -131,6 +134,37 @@ async def create_holding(
         note=body.note,
     )
     return _to_holding_out(valued)
+
+
+@router.post(
+    "/portfolios/{portfolio_id}/holdings/import",
+    response_model=HoldingsImportReportOut,
+)
+async def import_holdings(
+    body: HoldingsImportIn, portfolio: PortfolioDep, db: DbSession
+) -> HoldingsImportReportOut:
+    """Import listy pozycji z kanonicznego CSV `symbol;ilość;cena_nabycia`
+    (plan krok 48).
+
+    Status 200, nie 201: odpowiedzią jest **raport**, nie utworzony zasób —
+    typowy import część wierszy dodaje, część scala, a część pomija, więc
+    nie ma jednego `Location` do wskazania. Wiersz nie do przyjęcia (nieznany
+    symbol, zła liczba) nie unieważnia pliku; 422 leci tylko wtedy, gdy nie
+    da się przetworzyć całego wejścia (przekroczony rozmiar).
+    """
+    report = await service.import_holdings_csv(
+        db, portfolio, content=body.content, dry_run=body.dry_run
+    )
+    return HoldingsImportReportOut(
+        dry_run=report.dry_run,
+        created=report.created,
+        merged=report.merged,
+        skipped=report.skipped,
+        rows=[
+            ImportRowOut(line=row.line, symbol=row.symbol, status=row.status, message=row.message)
+            for row in report.rows
+        ],
+    )
 
 
 @router.patch("/holdings/{holding_id}", response_model=HoldingOut)

@@ -85,6 +85,17 @@ właściciela-użytkownika, więc też nie mają polityk.
 ALTER TABLE holdings ADD CONSTRAINT quantity_nonneg CHECK (quantity >= 0);
 ALTER TABLE holdings ADD CONSTRAINT avg_cost_needs_currency
   CHECK (avg_cost IS NULL OR cost_currency IS NOT NULL);
+```
+
+`avg_cost`/`cost_currency` zapisuje też import CSV (krok 48): trzecia kolumna pliku
+(`cena_nabycia`) trafia właśnie tutaj, z walutą wziętą z `assets.currency` — plik nie ma
+kolumny waluty, a cena instrumentu jest podana w walucie jego notowania. Osobnej kolumny
+na „cenę nabycia tylko do wyświetlenia" **nie ma** i nie należy jej dodawać: byłaby drugim
+polem o tym samym znaczeniu (decyzja użytkownika z 2026-08-30, patrz STATUS.md, krok 48).
+Import scalający pozycje przelicza `avg_cost` na średnią ważoną ilością i zeruje ją do
+`NULL`, gdy któraś strona nie zna ceny albo waluty się różnią.
+
+```sql
 ALTER TABLE prices  ADD CONSTRAINT close_adj_positive CHECK (close_adj > 0);
 -- `prices.source` (migracja 926b382d1715): nazwa dostawcy wiersza. Konwencje
 -- `close_adj` są niekompatybilne (yfinance koryguje o dywidendy/splity,

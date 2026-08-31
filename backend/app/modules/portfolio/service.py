@@ -32,7 +32,7 @@ from app.core.config import get_settings
 from app.core.errors import ConflictError, ValidationError
 from app.modules.marketdata import repository as marketdata_repository
 from app.modules.marketdata.models import Asset
-from app.modules.portfolio import repository
+from app.modules.portfolio import csv_import, repository
 from app.modules.portfolio.models import Holding, Portfolio, PortfolioValuation
 
 
@@ -486,3 +486,215 @@ async def delete_holding(db: AsyncSession, holding: Holding) -> None:
     """Twardy `DELETE` (decyzja produktowa — `Holding` nie jest historią)."""
     portfolio = await _require_portfolio(db, holding.portfolio_id)
     await repository.delete_holding(db, portfolio, holding, changed_at=today())
+
+
+# --- Import CSV (plan krok 48, etap 9) ---------------------------------------
+
+IMPORT_CREATED = "created"
+IMPORT_MERGED = "merged"
+IMPORT_SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class ImportRow:
+    """Los jednego wiersza pliku — materiał na `ImportRowOut`."""
+
+    line: int
+    symbol: str
+    status: str
+    message: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ImportReport:
+    dry_run: bool
+    rows: list[ImportRow]
+
+    @property
+    def created(self) -> int:
+        return sum(1 for row in self.rows if row.status == IMPORT_CREATED)
+
+    @property
+    def merged(self) -> int:
+        return sum(1 for row in self.rows if row.status == IMPORT_MERGED)
+
+    @property
+    def skipped(self) -> int:
+        return sum(1 for row in self.rows if row.status == IMPORT_SKIPPED)
+
+
+def merge_quantity_and_cost(
+    *,
+    old_quantity: Decimal,
+    old_cost: Decimal | None,
+    new_quantity: Decimal,
+    new_cost: Decimal | None,
+    costs_comparable: bool,
+) -> tuple[Decimal, Decimal | None]:
+    """Scala importowany wiersz z istniejącą pozycją (decyzja użytkownika z
+    2026-08-30: import **sumuje** ilości, nie nadpisuje ich).
+
+    Funkcja czysta, bez I/O — cała arytmetyka scalania testuje się na
+    ręcznie policzonych liczbach (`tests/unit/test_csv_import.py`).
+
+    `avg_cost` po scaleniu to **średnia ważona ilością**:
+
+        (q_old × c_old + q_new × c_new) / (q_old + q_new)
+
+    To jedyny wynik spójny z sumowaniem ilości — zostawienie starej ceny
+    dawałoby „średni koszt" opisujący ilość, której w portfelu już nie ma.
+    Nie jest to FIFO ani zrealizowany P/L (CLAUDE.md #12, Etap 21): liczymy
+    wyłącznie średnią z deklarowanych przez użytkownika cen, bez przepływów
+    pieniężnych, dat nabycia i rozchodu.
+
+    **`None`, gdy którakolwiek strona nie zna ceny albo ceny są w różnych
+    walutach.** Średnia z liczby znanej i nieznanej nie istnieje, a średnia
+    z kwot w dwóch walutach jest liczbą bez znaczenia — w obu wypadkach
+    lepiej stracić `avg_cost` (i powiedzieć o tym w raporcie) niż podać
+    wartość, którą wycena potraktuje serio (CLAUDE.md #3.15).
+    """
+    quantity = old_quantity + new_quantity
+    if old_cost is None or new_cost is None or not costs_comparable:
+        return quantity, None
+    if quantity == 0:  # nieosiągalne przy CHECK `quantity >= 0` i `new > 0`
+        return quantity, None
+    weighted = (old_quantity * old_cost + new_quantity * new_cost) / quantity
+    return quantity, _quantize_money(weighted)
+
+
+async def import_holdings_csv(
+    db: AsyncSession, portfolio: Portfolio, *, content: str, dry_run: bool
+) -> ImportReport:
+    """Importuje listę pozycji z kanonicznego CSV (`symbol;ilość;cena_nabycia`).
+
+    Symbol nieznany albo aktywo wygaszone → wiersz `skipped` z powodem;
+    reszta pliku wchodzi normalnie. Nie zakładamy aktywów „w locie" —
+    `assets` to słownik zasilany przez `marketdata` (etap 4), a wpis
+    stworzony z samego tickera z CSV nie miałby ani rynku, ani waluty, ani
+    mapowania na dostawcę, więc pozycja i tak zostałaby bez wyceny.
+
+    `cena_nabycia` trafia do istniejącej kolumny `holdings.avg_cost`
+    (decyzja użytkownika z 2026-08-30 zamiast planowanej osobnej kolumny
+    `acquisition_price_note` — patrz STATUS.md), z walutą wziętą z
+    `assets.currency`: cena nabycia instrumentu jest podana w walucie jego
+    notowania, a nie w PLN.
+
+    `dry_run=True` liczy dokładnie ten sam raport i **nie dotyka bazy** —
+    scalanie ilości jest nieodwracalne jednym kliknięciem, więc frontend
+    pokazuje podgląd, zanim zapisze.
+    """
+    try:
+        parsed = csv_import.parse(content)
+    except csv_import.CsvTooLargeError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    rows: list[ImportRow] = [
+        ImportRow(
+            line=error.line, symbol=error.symbol, status=IMPORT_SKIPPED, message=error.message
+        )
+        for error in parsed.errors
+    ]
+
+    assets = await repository.get_assets_by_symbols(db, [row.symbol for row in parsed.rows])
+    existing = {
+        holding.asset_id: holding
+        for holding, _asset in await repository.list_holdings_with_assets(db, portfolio.id)
+    }
+    created: list[Holding] = []
+
+    for row in parsed.rows:
+        asset = assets.get(row.symbol.upper())
+        if asset is None:
+            rows.append(
+                ImportRow(
+                    line=row.line,
+                    symbol=row.symbol,
+                    status=IMPORT_SKIPPED,
+                    message="Nieznany symbol albo aktywo nieaktywne",
+                )
+            )
+            continue
+
+        holding = existing.get(asset.id)
+        if holding is None:
+            created.append(
+                Holding(
+                    portfolio_id=portfolio.id,
+                    asset_id=asset.id,
+                    quantity=row.quantity,
+                    avg_cost=row.avg_cost,
+                    cost_currency=asset.currency if row.avg_cost is not None else None,
+                    note=None,
+                )
+            )
+            rows.append(
+                ImportRow(line=row.line, symbol=asset.symbol, status=IMPORT_CREATED, message=None)
+            )
+            continue
+
+        comparable = holding.cost_currency is None or holding.cost_currency == asset.currency
+        quantity, avg_cost = merge_quantity_and_cost(
+            old_quantity=holding.quantity,
+            old_cost=holding.avg_cost,
+            new_quantity=row.quantity,
+            new_cost=row.avg_cost,
+            costs_comparable=comparable,
+        )
+        message = _merge_message(
+            had_cost=holding.avg_cost is not None,
+            got_cost=row.avg_cost is not None,
+            comparable=comparable,
+            merged_cost=avg_cost,
+        )
+        if not dry_run:
+            holding.quantity = quantity
+            holding.avg_cost = avg_cost
+            holding.cost_currency = asset.currency if avg_cost is not None else None
+        rows.append(
+            ImportRow(line=row.line, symbol=asset.symbol, status=IMPORT_MERGED, message=message)
+        )
+
+    if dry_run:
+        # Pozycje istniejące nie zostały tknięte (gałąź `if not dry_run`
+        # wyżej), a `created` nigdy nie trafiło do sesji — nie ma czego
+        # wycofywać. `expunge` nie jest potrzebny: obiekty `Holding` powstały
+        # poza `db.add`, więc sesja o nich nie wie.
+        return ImportReport(dry_run=True, rows=_ordered(rows))
+
+    if created or any(row.status == IMPORT_MERGED for row in rows):
+        try:
+            await repository.apply_import(db, portfolio, new_holdings=created, changed_at=today())
+        except IntegrityError as exc:
+            # `UNIQUE(portfolio_id, asset_id)` — stan sprawdzony na początku
+            # importu mógł się zmienić, zanim doszło do `commit()` (drugie
+            # okno przeglądarki, dwa importy naraz). Baza jest tu jedynym
+            # źródłem prawdy o duplikacie, tak samo jak w `create_holding`;
+            # 409 mówi, co się stało, a 500 nie.
+            await db.rollback()
+            raise ConflictError(
+                "Skład portfela zmienił się w trakcie importu — powtórz import"
+            ) from exc
+    return ImportReport(dry_run=False, rows=_ordered(rows))
+
+
+def _merge_message(
+    *, had_cost: bool, got_cost: bool, comparable: bool, merged_cost: Decimal | None
+) -> str:
+    """Komunikat scalenia — zawsze mówi, że ilość została **dodana**, a nie
+    podmieniona, i zawsze tłumaczy zniknięcie `avg_cost` (CLAUDE.md #3.15:
+    utrata danych nie może być cicha)."""
+    base = "Ilość dodana do istniejącej pozycji"
+    if merged_cost is not None:
+        return f"{base}; cena nabycia to teraz średnia ważona"
+    if had_cost and not comparable:
+        return f"{base}; cena nabycia wyczyszczona (różne waluty)"
+    if had_cost or got_cost:
+        return f"{base}; cena nabycia wyczyszczona (znana tylko dla części ilości)"
+    return base
+
+
+def _ordered(rows: list[ImportRow]) -> list[ImportRow]:
+    """Raport w kolejności linii pliku — błędy parsowania powstają przed
+    wierszami poprawnymi, więc bez tego użytkownik dostaje listę, której
+    nie da się zestawić z plikiem."""
+    return sorted(rows, key=lambda row: row.line)

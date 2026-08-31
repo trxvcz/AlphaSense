@@ -202,3 +202,47 @@ class ValuationPointOut(BaseModel):
     @field_serializer("value_pln")
     def _ser_value(self, v: Decimal) -> str:
         return _ser_decimal(v)
+
+
+class HoldingsImportIn(BaseModel):
+    """Wejście `POST /portfolios/{portfolio_id}/holdings/import` (plan krok 48).
+
+    Zawartość pliku leci jako pole JSON, nie `multipart/form-data`: upload
+    pliku wymagałby `python-multipart`, czyli nowej zależności backendu
+    (CLAUDE.md §10 — zależność wymaga decyzji użytkownika), a przeglądarka
+    i tak czyta plik po stronie klienta.
+
+    `dry_run` zwraca ten sam raport, **niczego nie zapisując**. Domyślnie
+    `false`, ale frontend woła najpierw z `true`: import scala ilości z
+    istniejącymi pozycjami, a tego nie da się cofnąć jednym przyciskiem.
+    """
+
+    content: str = Field(min_length=1)
+    dry_run: bool = False
+
+
+class ImportRowOut(BaseModel):
+    """Los pojedynczego wiersza pliku. `line` to numer linii w pliku (od 1),
+    żeby użytkownik znalazł wpis w edytorze."""
+
+    line: int
+    symbol: str
+    status: str
+    """`created` / `merged` / `skipped`."""
+    message: str | None
+
+
+class HoldingsImportReportOut(BaseModel):
+    """Wyjście importu — raport zamiast listy pozycji.
+
+    Import częściowo się udaje z założenia (nieznany symbol nie unieważnia
+    reszty pliku), więc odpowiedź musi umieć powiedzieć „12 dodanych, 3
+    pominięte i dlaczego". Lista wycenionych pozycji jest do pobrania
+    zwykłym `GET .../holdings`.
+    """
+
+    dry_run: bool
+    created: int
+    merged: int
+    skipped: int
+    rows: list[ImportRowOut]
