@@ -18,13 +18,15 @@
  */
 export type NavItem = {
   href: string;
-  label: string;
+  /** Klucz w przestrzeni `nav` katalogu komunikatów (krok 50) — nie gotowa
+   * etykieta: tekst mieszka w `messages/pl.json`, patrz `lib/i18n.ts`. */
+  labelKey: string;
 };
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/portfolios", label: "Portfel" },
-  { href: "/rynki", label: "Rynki" },
-  { href: "/struktura", label: "Struktura" },
-  { href: "/newsy", label: "Newsy" },
+  { href: "/dashboard", labelKey: "dashboard" },
+  { href: "/portfolios", labelKey: "portfolios" },
+  { href: "/rynki", labelKey: "markets" },
+  { href: "/struktura", labelKey: "structure" },
+  { href: "/newsy", labelKey: "news" },
 ];

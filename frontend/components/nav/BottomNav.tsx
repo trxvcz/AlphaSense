@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { NAV_ITEMS } from "@/components/nav/navItems";
 import { AuthStatus } from "@/components/nav/AuthStatus";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
@@ -9,10 +10,14 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
  * fragment (`AuthStatus`, stan zalogowania) jest wydzielony do osobnego
  * Client Component.
  */
-export function BottomNav() {
+export async function BottomNav() {
+  // Server Component, więc tłumaczenia bierzemy z `next-intl/server` —
+  // `useTranslations` działa tylko po stronie klienta.
+  const t = await getTranslations("nav");
+
   return (
     <nav
-      aria-label="Nawigacja główna"
+      aria-label={t("aria")}
       className="fixed inset-x-0 bottom-0 z-10 flex h-16 border-t border-zinc-200 bg-white md:hidden dark:border-zinc-800 dark:bg-zinc-950"
     >
       <ul className="flex w-full">
@@ -22,7 +27,7 @@ export function BottomNav() {
               href={item.href}
               className="flex h-full flex-col items-center justify-center gap-1 text-xs font-medium text-zinc-600 outline-offset-2 hover:text-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 dark:text-zinc-400 dark:hover:text-zinc-50"
             >
-              {item.label}
+              {t(item.labelKey)}
             </Link>
           </li>
         ))}

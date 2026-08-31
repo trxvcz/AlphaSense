@@ -10,26 +10,26 @@
  * Statyczna i bez zależności od API — musi działać, gdy nie działa nic innego.
  */
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 
-export const metadata = {
-  title: "Brak połączenia — AlphaSense",
-};
+export async function generateMetadata() {
+  const t = await getTranslations("offline.page");
+  return { title: t("metaTitle") };
+}
 
-export default function OfflinePage() {
+export default async function OfflinePage() {
+  const t = await getTranslations("offline.page");
+
   return (
     <div className="mx-auto flex max-w-md flex-col gap-4 px-4 py-16 text-center">
-      <h1 className="text-xl font-semibold">Brak połączenia</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        Tej części aplikacji nie mamy zapisanej na urządzeniu, więc nie da się jej otworzyć
-        bez sieci. Ekrany odwiedzone wcześniej działają dalej — z danymi z ostatniego
-        pobrania, wyraźnie oznaczonymi datą.
-      </p>
+      <h1 className="text-xl font-semibold">{t("title")}</h1>
+      <p className="text-sm text-zinc-600 dark:text-zinc-400">{t("body")}</p>
       <div>
         <Link
           href="/dashboard"
           className="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white outline-offset-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
         >
-          Wróć do pulpitu
+          {t("back")}
         </Link>
       </div>
     </div>

@@ -24,8 +24,9 @@ po code-review kroków 43 i 47, krok **44** (RLS, domknięcie ADR-002) i krok **
 **Zrobione 2026-08-30:** krok **48** (import CSV listy pozycji) — bez migracji, patrz sekcja niżej.
 **Zrobione 2026-08-31:** poprawki po code-review kroku 48 (w tym dwa blokujące) + naprawa
 czerwonego CI (`test_tags.py` zakładał kurs USD) oraz krok **49** (PWA).
-**Następny ruch:** etap 9, **krok 50** (Web Push + struktura i18n) — **wymaga decyzji**:
-kluczy VAPID nie ma w `.env.example`, a push to nowe sekrety i nowa tabela subskrypcji.
+**Następny ruch:** etap 9, **krok 50 — została druga połowa: Web Push**. Struktura i18n
+zrobiona 2026-08-31 (sekcja niżej). Push **wymaga decyzji użytkownika**: kluczy VAPID nie ma
+w `.env.example`, a subskrypcje to nowa tabela (migracja) i nowe sekrety.
 **UWAGA WDROŻENIOWA:** przed pushem przeczytaj `docs/wdrozenie.md` §5.1 — krok 44 dodaje
 rolę bazy i wymaga `DATABASE_URL_APP` w `.env.prod` (bez niej API działa, ale bez RLS). Decyzją użytkownika (2026-08-25)
 etap 8 ma pierwszeństwo przed krokami 48–50; kolejność w etapie 8: `43 → 44 → 45`,
@@ -106,7 +107,7 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
 [x] 47 Kalendarz dywidend (Alpha Vantage `DIVIDENDS`; GPW nieobjęta i oznaczona) — 2026-08-23
 [x] 48 Import CSV listy pozycji — 2026-08-30
 [x] 49 PWA: Serwist, manifest, IndexedDB — 2026-08-31
-[ ] 50 Web Push + i18n
+[~] 50 Web Push + i18n — i18n zrobione 2026-08-31, push czeka na decyzję
 ```
 
 ## Decyzje oczekujące na użytkownika
@@ -544,3 +545,35 @@ przeglądarkowy nie dostanie błędu, gdy sięgnie po globalną nazwę dostępn�
 
 **Backlog (niezablokowany):** brak testu Playwright na tryb offline; `public/sw.js` powstaje przy
 buildzie i jest w `.gitignore` (źródłem jest `app/sw.ts`).
+
+### Krok 50a — struktura i18n (2026-08-31)
+
+next-intl w trybie **bez routingu i18n**: katalog `messages/pl.json`, `i18n/request.ts`,
+`NextIntlClientProvider` w layoucie, wtyczka w `next.config.ts`. Polski jest jedynym językiem.
+
+**Decyzja: żadnego segmentu `[locale]` w URL.** Prefiks przy jednym języku oznaczałby
+przeniesienie całego `app/` pod `app/[locale]/`, zmianę każdego linku i middleware z
+przekierowaniem — duży diff bez efektu dla użytkownika. `lib/i18n.ts` jest miejscem, w którym
+zaczyna się zmiana, gdy dojdzie drugi język.
+
+**Migracja stringów jest stopniowa i to też jest decyzja.** Krok 50 przeniósł nawigację
+(`navItems` trzyma teraz `labelKey`, nie `label`), baner offline i stronę `/offline`. Reszta
+ekranów idzie przy okazji ich dotykania — osobny przebieg „przenieś wszystkie teksty" dałby
+ogromny diff bez testowalnego efektu. Konwencja zapisana w `docs/konwencje.md` (przestrzenie
+nazw za obszarem, nie za komponentem; `getTranslations` na serwerze, `useTranslations` na
+kliencie).
+
+**Wzorzec, który warto powtarzać:** `lib/offline/bannerText.ts` zwraca teraz **klucz komunikatu
+i parametry**, a nie gotowe zdanie. Logika („co pokazać") zostaje czysta i testowalna bez
+przeglądarki, treść („jakimi słowami") mieszka w katalogu. Po polsku ma to konkretny powód:
+przyimek zależy od formy („dane **sprzed** 30 min", ale „dane **z** godz. 11:00"), więc sklejanie
+stringów w kodzie i tak by się nie udało.
+
+**Testy:** `lib/i18n.test.ts` pilnuje katalogu (brak pustych komunikatów, sparowane nawiasy ICU,
+każda pozycja nawigacji ma etykietę, strefa czasowa ustalona jawnie — inaczej SSR i przeglądarka
+sformatują tę samą datę inaczej). Vitest **116 passed**.
+
+**Nowa zależność:** `next-intl` — nazwana wprost w kroku 50 planu, więc bez osobnej decyzji z §10.
+
+**Nie zrobione (czeka na decyzję):** Web Push z kroku 50 — klucze VAPID, tabela subskrypcji,
+wysyłka z workera i instrukcja instalacji na ekranie głównym dla iOS.

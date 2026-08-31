@@ -1,0 +1,26 @@
+{
+  "nav": {
+    "aria": "Nawigacja główna",
+    "dashboard": "Dashboard",
+    "portfolios": "Portfel",
+    "markets": "Rynki",
+    "structure": "Struktura",
+    "news": "Newsy"
+  },
+  "offline": {
+    "banner": {
+      "noData": "Brak połączenia. Nie mamy zapisanych danych do pokazania.",
+      "withAge": "Brak połączenia — {age}.",
+      "ageJustNow": "dane sprzed chwili",
+      "ageMinutes": "dane sprzed {minutes} min",
+      "ageToday": "dane z godz. {time}",
+      "ageOlder": "dane z {date}, godz. {time}"
+    },
+    "page": {
+      "title": "Brak połączenia",
+      "metaTitle": "Brak połączenia — AlphaSense",
+      "body": "Tej części aplikacji nie mamy zapisanej na urządzeniu, więc nie da się jej otworzyć bez sieci. Ekrany odwiedzone wcześniej działają dalej — z danymi z ostatniego pobrania, wyraźnie oznaczonymi datą.",
+      "back": "Wróć do pulpitu"
+    }
+  }
+}

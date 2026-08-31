@@ -1,5 +1,6 @@
 import { withSentryConfig } from "@sentry/nextjs";
 import withSerwistInit from "@serwist/next";
+import createNextIntlPlugin from "next-intl/plugin";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
@@ -50,7 +51,14 @@ const withSerwist = withSerwistInit({
  * `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` w `.env.prod` wysyłka
  * włącza się sama, bez zmiany w kodzie.
  */
-export default withSentryConfig(withSerwist(nextConfig), {
+/**
+ * i18n (krok 50) — wtyczka podpina `i18n/request.ts`, dzięki czemu
+ * `getTranslations`/`useTranslations` mają skąd wziąć katalog. Bez routingu
+ * po języku: jeden język, żadnego prefiksu w URL (patrz `lib/i18n.ts`).
+ */
+const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
+
+export default withSentryConfig(withNextIntl(withSerwist(nextConfig)), {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,

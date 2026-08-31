@@ -16,6 +16,23 @@
 - Kwoty ze stringów formatowane przez `lib/money.ts`. Zero obliczeń finansowych na froncie.
 - Klasy Tailwind, bez CSS-in-JS. Kolory z tokenów, nie hexy w komponentach.
 
+### Teksty interfejsu (i18n, krok 50)
+
+- **Nowy tekst widoczny dla użytkownika idzie do `messages/pl.json`**, nie do JSX. Polski jest
+  jedynym językiem; katalog istnieje po to, żeby drugi był dopisaniem pliku, a nie przepisywaniem
+  komponentów.
+- Przestrzenie nazw idą **za obszarem, nie za komponentem** (`nav`, `offline.banner`,
+  `offline.page`) — ten sam tekst bywa użyty w dwóch miejscach, komponenty się zmieniają.
+- Server Component: `await getTranslations("przestrzeń")` z `next-intl/server`.
+  Client Component: `useTranslations("przestrzeń")`.
+- **Logika zwraca klucz i parametry, nie gotowe zdanie** (wzorzec: `lib/offline/bannerText.ts`).
+  Dzięki temu „co pokazać" zostaje testowalne bez przeglądarki, a „jakimi słowami" mieszka
+  w katalogu. Odmiana i przyimki należą do komunikatu, nie do sklejania stringów w kodzie.
+- **Nie ma segmentu `[locale]` w URL** i przy jednym języku nie będzie — patrz `lib/i18n.ts`.
+- Migracja istniejących ekranów jest **stopniowa**: krok 50 przeniósł nawigację i tryb offline,
+  reszta idzie przy okazji dotykania danego widoku. Nie rób osobnego przebiegu „przenieś
+  wszystkie stringi" — to zmiana bez testowalnego efektu, za to z dużym diffem.
+
 ## Testy
 
 | Rodzaj | Gdzie | Zasada |
