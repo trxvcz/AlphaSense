@@ -543,6 +543,16 @@ i nie polega na kolorze (§21). Online milczy — pasek nad treścią kosztował
 tsconfig dla workera, co wyjęłoby `app/sw.ts` spod `tsc --noEmit` w `make check`. Koszt: kod
 przeglądarkowy nie dostanie błędu, gdy sięgnie po globalną nazwę dostępną tylko w workerze.
 
+**Błąd złapany dopiero na produkcji (2026-08-31), warty zapamiętania:** `@serwist/next` nie
+wspiera Turbopacka, a **Next 16 buduje Turbopackiem domyślnie**. Wtyczka nie przerywa wtedy
+buildu — po prostu nic nie emituje. `next build` był zielony, lista tras się wypisywała, a na
+produkcję pojechała aplikacja **bez `sw.js`**: manifest 200, `/sw.js` 404, czyli PWA bez trybu
+offline, o którym mówi baner. Zielony build nie znaczył „PWA działa", bo nikt nie sprawdzał
+artefaktu. Naprawa: `npm run build` woła `next build --webpack`, a po nim
+`scripts/check-pwa-build.mjs`, który wywala build, gdy `public/sw.js` nie powstał. Gdy webpack
+zniknie z Nexta, ścieżką wyjścia jest tryb konfiguratora Serwista (`@serwist/cli` jako osobny
+krok) — nowa zależność, więc osobna decyzja (§10).
+
 **Backlog (niezablokowany):** brak testu Playwright na tryb offline; `public/sw.js` powstaje przy
 buildzie i jest w `.gitignore` (źródłem jest `app/sw.ts`).
 

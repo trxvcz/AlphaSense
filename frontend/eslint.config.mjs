@@ -18,6 +18,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Artefakty buildu Serwista (krok 49): to zminifikowany worker, nie kod
+    // źródłowy — źródłem jest `app/sw.ts`. Bez tego `npm run lint` po buildzie
+    // świeci czerwono na cudzym, wygenerowanym pliku.
+    "public/sw.js",
+    "public/sw.js.map",
+    "public/swe-worker-*.js",
   ]),
 ]);
 

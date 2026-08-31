@@ -20,6 +20,16 @@ const nextConfig: NextConfig = {
  * PWA (krok 49) — Serwist kompiluje `app/sw.ts` do `public/sw.js` i wstrzykuje
  * manifest precache'u bieżącego buildu.
  *
+ * **Build musi iść webpackiem** (`next build --webpack`, patrz `package.json`).
+ * Next 16 domyślnie buduje Turbopackiem, którego `@serwist/next` nie wspiera —
+ * i nie przerywa wtedy buildu, tylko **nic nie emituje**. Efekt: zielony build
+ * i wdrożenie bez `sw.js`, czyli PWA bez trybu offline, o którym mówi baner
+ * (złapane dopiero na produkcji, `curl /sw.js` → 404). Dlatego po buildzie
+ * biegnie `scripts/check-pwa-build.mjs`, który sprawdza sam artefakt.
+ * Ścieżka wyjścia, gdy webpack zniknie z Nexta: tryb konfiguratora Serwista
+ * (`@serwist/cli` jako osobny krok po `next build`) — wymaga nowej zależności,
+ * więc osobnej decyzji (CLAUDE.md §10).
+ *
  * **Wyłączony w devie świadomie.** Service worker w `next dev` serwuje
  * zbuforowane moduły obok Fast Refresh i daje „zmiana nie działa, aż zrobisz
  * hard reload" — objaw, który kosztuje więcej czasu niż jest wart. PWA
