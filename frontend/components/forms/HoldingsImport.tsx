@@ -70,8 +70,19 @@ export function HoldingsImport({ portfolioId, onImported, onCancel }: HoldingsIm
       setPreview(null);
       // Import zmienia skład portfela, więc unieważnia nie tylko listę
       // pozycji, ale i wszystko, co się z niej liczy (wycena, struktura).
+      // Ta sama lista co w `HoldingForm` plus struktura: import zmienia skład
+      // mocniej niż dodanie jednej pozycji, więc zostawienie starej alokacji
+      // czy serii wycen byłoby widoczne od razu.
       void queryClient.invalidateQueries({ queryKey: qk.holdings(portfolioId) });
       void queryClient.invalidateQueries({ queryKey: qk.summary(portfolioId) });
+      void queryClient.invalidateQueries({ queryKey: qk.portfolio(portfolioId) });
+      // Bez `range`/`by` w kluczu — unieważnia wszystkie warianty naraz.
+      void queryClient.invalidateQueries({ queryKey: ["valuations", portfolioId] });
+      void queryClient.invalidateQueries({ queryKey: ["allocation", portfolioId] });
+      void queryClient.invalidateQueries({ queryKey: qk.concentration(portfolioId) });
+      // Bez tego ponowny wybór **tego samego** pliku nie odpali `onChange`
+      // i przycisk „Sprawdź plik" wyglądałby na zepsuty.
+      if (fileInputRef.current !== null) fileInputRef.current.value = "";
       onImported?.();
     },
     onError: (error) => {
@@ -122,7 +133,9 @@ export function HoldingsImport({ portfolioId, onImported, onCancel }: HoldingsIm
         </p>
         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           Jeśli symbol jest już w portfelu, <strong>ilość zostanie dodana</strong> do
-          istniejącej pozycji, a cena nabycia przeliczona na średnią ważoną.
+          istniejącej pozycji, a cena nabycia przeliczona na średnią ważoną —
+          <strong> nadpisze to, co wpisałeś ręcznie</strong>. Podgląd pokaże każdą zmianę
+          przed zapisem.
         </p>
       </div>
 

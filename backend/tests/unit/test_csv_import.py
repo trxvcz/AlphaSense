@@ -58,7 +58,9 @@ def test_liczba_z_przecinkiem_i_kropka_jest_bledem() -> None:
     result = csv_import.parse("CDR;1,234.56;10")
 
     assert result.rows == []
-    assert result.errors[0].message == "Ilość nie jest liczbą"
+    assert result.errors[0].message == (
+        "Ilość: przecinek i kropka naraz — niejednoznaczny format liczby"
+    )
 
 
 def test_pusta_cena_nabycia_jest_legalna() -> None:
@@ -78,6 +80,10 @@ def test_pusta_cena_nabycia_jest_legalna() -> None:
         ("CDR;abc;10", "Ilość nie jest liczbą"),
         ("CDR;10;0", "Cena nabycia musi być większa od zera"),
         ("CDR;10;xyz", "Cena nabycia nie jest liczbą"),
+        (
+            "CDR;1.234,56;10",
+            "Ilość: przecinek i kropka naraz — niejednoznaczny format liczby",
+        ),
         (";10;5", "Brak symbolu"),
         ("CDR", "Oczekiwano formatu symbol;ilość;cena_nabycia"),
     ],
@@ -176,3 +182,23 @@ def test_niepolna_lub_niespojna_cena_daje_none(
 
     assert quantity == Decimal("15")
     assert cost is None
+
+
+def test_pola_w_cudzyslowach_z_excela() -> None:
+    """Excel cytuje pola ze spacjami/separatorem — cudzysłów nie może
+    zamienić symbolu w „nieznany"."""
+    result = csv_import.parse('"CDR";"10";"120,50"')
+
+    assert result.errors == []
+    assert result.rows[0].symbol == "CDR"
+    assert result.rows[0].quantity == Decimal("10")
+    assert result.rows[0].avg_cost == Decimal("120.50")
+
+
+def test_naglowek_po_pustej_linii_wiodacej() -> None:
+    """Plik z arkusza potrafi zacząć się pustą linią; nagłówek nadal jest
+    nagłówkiem, a nie błędnym wierszem."""
+    result = csv_import.parse("\n\nsymbol;ilosc;cena\nCDR;10;120")
+
+    assert result.errors == []
+    assert [row.symbol for row in result.rows] == ["CDR"]

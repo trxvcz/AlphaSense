@@ -347,3 +347,101 @@ async def test_kolizja_przy_zapisie_daje_409(
     )
 
     assert resp.status_code == 409, resp.text
+
+
+async def test_symbol_na_dwoch_rynkach_jest_pomijany_z_powodem(
+    client: AsyncClient, import_assets: ImportAssets, db_session: AsyncSession
+) -> None:
+    """`assets.symbol` nie ma UNIQUE — ten sam ticker bywa na dwóch rynkach.
+
+    Wybranie „któregoś" aktywa dałoby pozycję w obcej walucie i na obcym
+    rynku, bez śladu w raporcie (CLAUDE.md #3.15). Import ma oddać wiersz
+    użytkownikowi razem z listą rynków.
+    """
+    token = await _register_and_login(client, EMAIL)
+    portfolio_id = await _portfolio(client, token)
+
+    twin = Asset(
+        symbol=import_assets.pln.symbol,
+        name=f"{import_assets.pln.name} (US)",
+        asset_class="equity",
+        market_code="US",
+        currency="XTS",
+    )
+    db_session.add(twin)
+    await db_session.commit()
+    twin_id = twin.id
+    try:
+        report = await _import(client, token, portfolio_id, f"{import_assets.pln.symbol};10;100")
+
+        assert report["created"] == 0
+        assert report["skipped"] == 1
+        assert "kilku rynkach" in report["rows"][0]["message"]
+        assert "GPW" in report["rows"][0]["message"] and "US" in report["rows"][0]["message"]
+        resp = await client.get(f"/api/portfolios/{portfolio_id}/holdings", headers=_auth(token))
+        assert resp.json() == []
+    finally:
+        await db_session.execute(delete(Holding).where(Holding.asset_id == twin_id))
+        await db_session.execute(delete(Asset).where(Asset.id == twin_id))
+        await db_session.commit()
+
+
+async def test_dry_run_nie_tworzy_nowych_pozycji(
+    client: AsyncClient, import_assets: ImportAssets
+) -> None:
+    """Podgląd nowej pozycji jest równie „nieszkodliwy" jak podgląd scalenia."""
+    token = await _register_and_login(client, EMAIL)
+    portfolio_id = await _portfolio(client, token)
+
+    report = await _import(
+        client, token, portfolio_id, f"{import_assets.pln.symbol};10;100", dry_run=True
+    )
+
+    assert report["created"] == 1
+    resp = await client.get(f"/api/portfolios/{portfolio_id}/holdings", headers=_auth(token))
+    assert resp.json() == []
+
+
+async def test_same_pominiecia_nie_bumpuja_wersji(
+    client: AsyncClient, import_assets: ImportAssets, db_session: AsyncSession
+) -> None:
+    """Skład się nie zmienił, więc klucz cache ma zostać ten sam — inaczej
+    plik z samymi literówkami unieważniałby całą analitykę portfela."""
+    token = await _register_and_login(client, EMAIL)
+    portfolio_id = await _portfolio(client, token)
+    before = await _version(db_session, portfolio_id)
+
+    report = await _import(client, token, portfolio_id, "NIEZNANY1;10;100\nNIEZNANY2;5")
+
+    assert report["skipped"] == 2
+    assert await _version(db_session, portfolio_id) == before
+
+
+async def test_scalenie_przy_innej_walucie_kosztu_czysci_cene(
+    client: AsyncClient, import_assets: ImportAssets, db_session: AsyncSession
+) -> None:
+    """Średnia ważona z dwóch walut nie ma sensu, więc `avg_cost` idzie na
+    `NULL` — i raport musi powiedzieć dlaczego (CLAUDE.md #3.15)."""
+    token = await _register_and_login(client, EMAIL)
+    portfolio_id = await _portfolio(client, token)
+    symbol = import_assets.fx.symbol
+
+    await _import(client, token, portfolio_id, f"{symbol};10;100")
+    # Ręczna podmiana waluty kosztu na inną niż `assets.currency` — z API
+    # nie da się jej rozjechać, ale w bazie taki stan jest legalny
+    # (CHECK pilnuje tylko „jest cena → jest waluta").
+    holdings = await db_session.execute(
+        select(Holding).where(Holding.portfolio_id == uuid.UUID(portfolio_id))
+    )
+    holding = holdings.scalars().one()
+    holding.cost_currency = "PLN"
+    await db_session.commit()
+
+    report = await _import(client, token, portfolio_id, f"{symbol};10;200")
+
+    assert report["merged"] == 1
+    assert "waluty" in report["rows"][0]["message"]
+    resp = await client.get(f"/api/portfolios/{portfolio_id}/holdings", headers=_auth(token))
+    position = resp.json()[0]
+    assert position["quantity"] == "20.00000000"
+    assert position["avg_cost"] is None

@@ -185,8 +185,8 @@ async def list_holdings_with_assets(
     return [(holding, asset) for holding, asset in result.all()]
 
 
-async def get_assets_by_symbols(db: AsyncSession, symbols: list[str]) -> dict[str, Asset]:
-    """Mapa `UPPER(symbol) -> Asset` dla podanej listy symboli (plan krok 48).
+async def get_assets_by_symbols(db: AsyncSession, symbols: list[str]) -> dict[str, list[Asset]]:
+    """Mapa `UPPER(symbol) -> aktywa` dla podanej listy symboli (plan krok 48).
 
     Jedno zapytanie na cały plik importu, nie jedno na wiersz: 500 pozycji
     razy `SELECT` po symbolu to 500 round-tripów w jednym żądaniu HTTP.
@@ -201,13 +201,22 @@ async def get_assets_by_symbols(db: AsyncSession, symbols: list[str]) -> dict[st
     Aktywa nieaktywne (`is_active = false`) są pomijane — pozycja w wygaszonym
     aktywie nie dostanie wyceny, a użytkownik dowie się o tym dopiero z
     pustego `value_pln`. Lepiej odrzucić wiersz z powodem.
+
+    Wartością jest **lista**, a nie pojedyncze aktywo: `assets.symbol` nie ma
+    UNIQUE, bo ten sam ticker bywa notowany na dwóch rynkach (`CDR` na GPW i
+    `CDR` w US, ETF-y na kilku giełdach). Gdyby ta funkcja zwracała jedno
+    aktywo, import cicho wybrałby dowolne z nich — w innej walucie i na innym
+    rynku — i zepsuł alokację. Rozstrzygnięcie należy do warstwy serwisu.
     """
     if not symbols:
         return {}
     wanted = {symbol.upper() for symbol in symbols}
     stmt = select(Asset).where(func.upper(Asset.symbol).in_(wanted), Asset.is_active.is_(True))
     result = await db.execute(stmt)
-    return {asset.symbol.upper(): asset for asset in result.scalars().all()}
+    by_symbol: dict[str, list[Asset]] = {}
+    for asset in result.scalars().all():
+        by_symbol.setdefault(asset.symbol.upper(), []).append(asset)
+    return by_symbol
 
 
 async def create_holding(

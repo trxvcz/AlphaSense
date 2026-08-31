@@ -71,6 +71,25 @@ class CsvTooLargeError(ValueError):
     pojedynczego wiersza przerywa cały import, bo dotyczy pliku, nie wpisu."""
 
 
+def _fields(line: str) -> list[str]:
+    """Rozbija wiersz na pola i zdejmuje cudzysłowy.
+
+    Excel cytuje pole, gdy zawiera separator albo spacje (`"CDR";10;120,50`).
+    Bez zdjęcia cudzysłowów symbol `"CDR"` nie trafia w żadne aktywo i wiersz
+    ląduje w raporcie jako „nieznany symbol" — czyli parser tolerancyjny na
+    BOM i spacje nierozdzielające przewracałby się na najczęstszym eksporcie.
+    """
+    return [field.strip().strip('"').strip() for field in line.split(SEPARATOR)]
+
+
+def is_ambiguous_number(raw: str) -> bool:
+    """Czy wartość ma naraz przecinek i kropkę — patrz docstring modułu."""
+    text = raw.strip().strip('"')
+    for space in _THOUSANDS:
+        text = text.replace(space, "")
+    return "," in text and "." in text
+
+
 def parse_number(raw: str) -> Decimal | None:
     """Parsuje liczbę z komórki arkusza. `None`, gdy wartość jest pusta albo
     nie da się jej odczytać jednoznacznie.
@@ -78,7 +97,7 @@ def parse_number(raw: str) -> Decimal | None:
     Nigdy nie przechodzi przez `float` (CLAUDE.md #3.1) — `Decimal` bierze
     string wprost, po normalizacji separatorów.
     """
-    text = raw.strip()
+    text = raw.strip().strip('"')
     for space in _THOUSANDS:
         text = text.replace(space, "")
     if not text:
@@ -110,13 +129,19 @@ def parse(content: str) -> ParseResult:
     rows: list[ParsedRow] = []
     errors: list[RowError] = []
     seen: dict[str, int] = {}
+    # Nagłówek rozpoznajemy na **pierwszym niepustym** wierszu, a nie na
+    # linii nr 1: plik z arkusza potrafi zaczynać się pustą linią i wtedy
+    # nagłówek wpadłby do raportu jako błędny wiersz.
+    first_content_line = True
 
     for number, raw_line in enumerate(content.lstrip("\ufeff").splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
-        if number == 1 and _is_header(line):
-            continue
+        if first_content_line:
+            first_content_line = False
+            if _is_header(line):
+                continue
         if len(rows) + len(errors) >= MAX_ROWS:
             raise CsvTooLargeError(f"Plik przekracza {MAX_ROWS} wierszy")
 
@@ -155,14 +180,25 @@ def _is_header(line: str) -> bool:
     0 błędów" — czyli milczy dokładnie tam, gdzie ma powiedzieć, co poprawić
     (złapane testem `test_liczba_z_przecinkiem_i_kropka_jest_bledem`).
     """
-    fields = line.split(SEPARATOR)
+    fields = _fields(line)
     if len(fields) < 2:
         return False
     return all(parse_number(field) is None for field in fields)
 
 
+def _number_error(raw: str, label: str) -> str:
+    """Rozróżnia „to nie liczba" od „liczba, ale niejednoznaczna".
+
+    Użytkownik polskiego Excela, który zobaczy „nie jest liczbą" przy
+    `1,234.56`, nie ma się czego złapać — wartość wygląda poprawnie.
+    """
+    if is_ambiguous_number(raw):
+        return f"{label}: przecinek i kropka naraz — niejednoznaczny format liczby"
+    return f"{label} nie jest liczbą"
+
+
 def _parse_line(number: int, line: str) -> ParsedRow | RowError:
-    fields = [field.strip() for field in line.split(SEPARATOR)]
+    fields = _fields(line)
     symbol = fields[0] if fields else ""
 
     if len(fields) < 2:
@@ -176,7 +212,7 @@ def _parse_line(number: int, line: str) -> ParsedRow | RowError:
 
     quantity = parse_number(fields[1])
     if quantity is None:
-        return RowError(line=number, symbol=symbol, message="Ilość nie jest liczbą")
+        return RowError(line=number, symbol=symbol, message=_number_error(fields[1], "Ilość"))
     if quantity <= 0:
         # Zero nie jest błędem bazy (CHECK dopuszcza `quantity >= 0`), ale w
         # imporcie jest bezużyteczne: dodawałoby pozycję bez zawartości albo,
@@ -187,7 +223,9 @@ def _parse_line(number: int, line: str) -> ParsedRow | RowError:
     if len(fields) > 2 and fields[2]:
         avg_cost = parse_number(fields[2])
         if avg_cost is None:
-            return RowError(line=number, symbol=symbol, message="Cena nabycia nie jest liczbą")
+            return RowError(
+                line=number, symbol=symbol, message=_number_error(fields[2], "Cena nabycia")
+            )
         if avg_cost <= 0:
             return RowError(
                 line=number, symbol=symbol, message="Cena nabycia musi być większa od zera"

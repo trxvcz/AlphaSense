@@ -358,7 +358,8 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 
 // POST /portfolios/{portfolio_id}/holdings/import  → 200 (krok 48, etap 9)
 // body: { "content": "<zawartość pliku CSV>", "dry_run": false }
-// Format kanoniczny: symbol;ilość;cena_nabycia — separator średnik, nagłówek opcjonalny (rozpoznawany po treści),
+// Format kanoniczny: symbol;ilość;cena_nabycia — separator średnik, nagłówek opcjonalny (rozpoznawany po treści
+// pierwszego NIEPUSTEGO wiersza), pola mogą być w cudzysłowach (eksport z Excela),
 // cena_nabycia opcjonalna. Parser przyjmuje BOM, przecinek dziesiętny i spację jako separator tysięcy;
 // liczba z przecinkiem I kropką naraz (1,234.56) jest odrzucana jako niejednoznaczna, nie zgadywana.
 // CSV nie ma kolumny waluty: cena_nabycia trafia do holdings.avg_cost z cost_currency = assets.currency
@@ -368,9 +369,11 @@ Kalendarz jest **zawsze w kontekście portfela**, tak jak feed newsów: odpowiad
 // średnią ważoną ilością. Gdy któraś strona nie zna ceny albo waluty się różnią, avg_cost idzie na null
 // (średnia z wartości znanej i nieznanej nie istnieje) — powód wraca w "message" wiersza.
 // dry_run=true zwraca IDENTYCZNY raport i nie zapisuje niczego. holdings_version bumpuje się RAZ na plik.
+// Symbol notowany na kilku rynkach (assets.symbol nie ma UNIQUE) jest POMIJANY z listą rynków w "message" —
+// import nie zgaduje, które aktywo miał na myśli użytkownik, bo wybór zmienia walutę i rynek pozycji.
 // Wiersz nie do przyjęcia (nieznany symbol, aktywo nieaktywne, zła liczba) jest pomijany z powodem i NIE
 // unieważnia reszty pliku. 422 tylko wtedy, gdy nie da się przetworzyć całego wejścia (pusty plik,
-// >500 wierszy, >100000 znaków). Status 200, nie 201 — odpowiedzią jest raport, nie utworzony zasób.
+// >500 wierszy, >100000 znaków — limit znaków pilnuje już walidacja Pydantic, przed parsowaniem). Status 200, nie 201 — odpowiedzią jest raport, nie utworzony zasób.
 {
   "dry_run": false, "created": 2, "merged": 1, "skipped": 1,
   "rows": [

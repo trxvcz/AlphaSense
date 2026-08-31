@@ -16,9 +16,10 @@ from decimal import Decimal
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.marketdata.models import Asset, Price
+from app.modules.marketdata.models import Asset, FxRate, Price
 from app.modules.portfolio.models import Holding
 from app.modules.portfolio.service import today
 from app.modules.tags.models import AssetTag, Tag
@@ -67,6 +68,15 @@ async def tag_assets(db_session: AsyncSession) -> AsyncGenerator[list[Asset], No
             Price(asset_id=asset.id, date=d, close=Decimal("100"), close_adj=Decimal("100"))
             for asset in assets
         ]
+    )
+    # Pozycja w USD bez kursu NBP nie da się wycenić, więc znika z alokacji
+    # i rozbicie `by=market` ma tylko GPW. Na czystej bazie CI takiego kursu
+    # nie ma — wstawiamy go idempotentnie i **nie kasujemy** przy sprzątaniu,
+    # bo może pochodzić z prawdziwego seeda/ingestii.
+    await db_session.execute(
+        pg_insert(FxRate.__table__)
+        .values(currency="USD", date=d, rate_pln=Decimal("4"))
+        .on_conflict_do_nothing(index_elements=["currency", "date"])
     )
     await db_session.commit()
 

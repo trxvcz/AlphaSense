@@ -18,6 +18,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
+from app.modules.portfolio import csv_import
+
 
 def _ser_decimal(v: Decimal) -> str:
     return format(v, "f")
@@ -217,7 +219,10 @@ class HoldingsImportIn(BaseModel):
     istniejącymi pozycjami, a tego nie da się cofnąć jednym przyciskiem.
     """
 
-    content: str = Field(min_length=1)
+    # `max_length` = ten sam limit, którego pilnuje parser. Bez niego 50 MB
+    # treści przechodzi przez deserializację JSON i ląduje w pamięci procesu,
+    # zanim `CsvTooLargeError` zdąży zwrócić 422.
+    content: str = Field(min_length=1, max_length=csv_import.MAX_CHARS)
     dry_run: bool = False
 
 

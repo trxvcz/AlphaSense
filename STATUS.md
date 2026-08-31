@@ -265,6 +265,34 @@ z testem izolacji dwóch użytkowników.
   `UNIQUE(portfolio_id, asset_id)` w trakcie zapisu), 6 Vitest. Trasa wchodzi automatycznie do
   parametryzowanego testu izolacji (29 tras).
 
+**Poprawki po code-review kroku 48 (2026-08-31):**
+- **Blokujące 1 — ten sam ticker na dwóch rynkach.** `assets.symbol` nie ma UNIQUE (`CDR` na GPW
+  i w US, ETF-y na kilku giełdach), a `get_assets_by_symbols` budowało mapę `symbol → Asset`,
+  więc import cicho wybierał ostatnie aktywo z wyniku — w obcej walucie i na obcym rynku, bez
+  śladu w raporcie (łamie #3.15 i psuje alokację). Repozytorium zwraca teraz **listę** aktywów,
+  a serwis pomija taki wiersz z listą rynków w komunikacie.
+- **Blokujące 2 — limit rozmiaru dopiero po parsowaniu.** `content` ma `max_length=MAX_CHARS`
+  w schemacie, więc wielkie body odpada w walidacji Pydantic, zanim trafi do pamięci procesu.
+- Parser: zdejmowanie cudzysłowów (eksport z Excela cytuje pola), nagłówek rozpoznawany na
+  pierwszym **niepustym** wierszu, osobny komunikat dla `1,234.56` („przecinek i kropka naraz”)
+  zamiast mylącego „nie jest liczbą”.
+- Frontend: import unieważnia teraz to samo co `HoldingForm` plus alokację i koncentrację,
+  czyści `input[type=file]` (ponowny wybór tego samego pliku nie odpalał `onChange`) i ostrzega
+  wprost, że scalenie nadpisuje ręcznie wpisaną cenę nabycia.
+- Testy dopisane: symbol na dwóch rynkach, `dry_run` przy nowej pozycji, plik z samymi
+  pominięciami (brak bumpu `holdings_version`), scalenie przy rozjechanej walucie kosztu,
+  cudzysłowy, nagłówek po pustej linii. Razem **596 backend**, 102 Vitest.
+- Świadomie **nie** poprawione (backlog, niezablokowane): test 409 nadal monkeypatchuje
+  `apply_import`; brak testu komponentu na sekwencję podgląd → zapis; `MAX_CSV_CHARS`
+  w `lib/holdingsImport.ts` jest ręcznym lustrem stałej backendowej.
+
+**Czerwone CI naprawione (2026-08-31):** `test_tags.py` zakładał kurs `USD` w `fx_rates`.
+Lokalnie był (seed/ingestia), na czystej bazie CI nie — pozycja w USD nie dawała się wycenić,
+znikała z alokacji i `by=market` miało tylko `GPW`. Fikstura wstawia kurs idempotentnie
+(`ON CONFLICT DO NOTHING`) i **nie kasuje go** w teardownie, bo może pochodzić z prawdziwej
+ingestii. Wniosek ogólny: fikstura testu integracyjnego nie może polegać na danych rynkowych
+obecnych tylko w bazie deweloperskiej.
+
 **Aktywów nie zakładamy „w locie".** Nieznany symbol → wiersz pominięty z powodem. `assets` to
 słownik zasilany przez `marketdata` (etap 4); wpis stworzony z samego tickera z CSV nie miałby
 rynku, waluty ani mapowania na dostawcę, więc pozycja i tak zostałaby bez wyceny.

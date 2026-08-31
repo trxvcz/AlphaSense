@@ -603,8 +603,8 @@ async def import_holdings_csv(
     created: list[Holding] = []
 
     for row in parsed.rows:
-        asset = assets.get(row.symbol.upper())
-        if asset is None:
+        matches = assets.get(row.symbol.upper(), [])
+        if not matches:
             rows.append(
                 ImportRow(
                     line=row.line,
@@ -614,6 +614,24 @@ async def import_holdings_csv(
                 )
             )
             continue
+        if len(matches) > 1:
+            # Ten sam ticker na kilku rynkach. Zgadywanie oznaczałoby wpisanie
+            # pozycji w obcej walucie i na obcym rynku bez ostrzeżenia
+            # (CLAUDE.md #3.15), więc wiersz wraca do użytkownika.
+            markets = ", ".join(sorted(asset.market_code for asset in matches))
+            rows.append(
+                ImportRow(
+                    line=row.line,
+                    symbol=row.symbol,
+                    status=IMPORT_SKIPPED,
+                    message=(
+                        f"Symbol występuje na kilku rynkach ({markets}) — "
+                        "dodaj tę pozycję formularzem"
+                    ),
+                )
+            )
+            continue
+        asset = matches[0]
 
         holding = existing.get(asset.id)
         if holding is None:
