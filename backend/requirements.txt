@@ -26,3 +26,11 @@ feedparser==6.0.11
 # FastAPI/Starlette — integracje SDK włączają się same, gdy framework jest
 # zainstalowany. Bez `SENTRY_DSN` w środowisku pakiet nic nie robi (dev).
 sentry-sdk[fastapi]==2.66.1
+# AI Fund (ADR-104, Etap AI-1) — kolumna `AILesson.embedding` pod przyszły
+# RAG (Etap AI-3). Sama biblioteka Pythona tylko rejestruje typ `Vector`
+# dla SQLAlchemy/asyncpg; rozszerzenie `vector` w samym Postgresie instaluje
+# migracja (`CREATE EXTENSION IF NOT EXISTS vector`), obraz bazy na produkcji
+# musi je mieć dostępne (`pgvector/pgvector:pg16` albo doinstalowany pakiet
+# `postgresql-16-pgvector` — do ustalenia przy wdrożeniu, poza zakresem tej
+# migracji modelu).
+pgvector==0.4.2

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # --- dostawcy danych ---
     finnhub_api_key: str = ""
     alphavantage_api_key: str = ""
+    # Moduł ai_fund (rozszerzenie poza mapą Etapów 0-23, ADR-104) — oficjalne
+    # SDK Google (`google-genai`), nie LiteLLM (decyzja użytkownika 2026-09-06).
+    # Puste = moduł ai_fund niedostępny/wyłączony, analogicznie do Sentry DSN.
+    gemini_api_key: str = ""
 
     # --- limity dostawców (zapytania na minutę) ---
     rate_limit_stooq: int = 60

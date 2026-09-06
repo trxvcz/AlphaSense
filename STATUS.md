@@ -168,8 +168,11 @@ kodu (tylko JSON parametrów wykonywany przez `backtester.py`), jawne oznaczanie
 danych, izolacja przez `get_owned_portfolio`.
 
 ```
-[ ] AI-1 Modele danych i pamięć „vector-ready" (AIFundSession, AIAgentLog, AssetVibeMetric,
-        AssetAnalystRating, AIPrediction, AILesson + pgvector), migracja, job ingest_analyst_ratings
+[x] AI-1a Modele danych i pamięć „vector-ready" (AIFundSession, AIAgentLog, AssetVibeMetric,
+        AssetAnalystRating, AIPrediction, AILesson + pgvector), migracja z RLS, obraz
+        pgvector/pgvector:pg16 (dev/prod/CI) — zrobione 2026-09-06
+[ ] AI-1b job workera ingest_analyst_ratings (Finnhub, RateLimiter, ON CONFLICT DO UPDATE,
+        GPW ignorowane) — pozostała część pierwotnego zakresu AI-1, jeszcze nie zaczęta
 [ ] AI-2 Silnik 6 agentów (Research, Vibe, Debate, Backtest, Risk, Review)
 [ ] AI-3 Memory decay: worker/jobs/evaluate_ai_sessions.py, wstrzykiwanie AILesson z filtrem TTL
 [ ] AI-4 Single Asset Analysis: sentyment + oceny analityków (endpointy + UI)

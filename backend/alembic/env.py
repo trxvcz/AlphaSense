@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.db.base import Base
+from app.modules.ai_fund import models as ai_fund_models  # noqa: F401
 from app.modules.auth import models as auth_models  # noqa: F401  (rejestracja w Base.metadata)
 from app.modules.dividends import models as dividends_models  # noqa: F401
 from app.modules.marketdata import models as marketdata_models  # noqa: F401

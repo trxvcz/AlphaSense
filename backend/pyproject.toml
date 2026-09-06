@@ -69,6 +69,15 @@ ignore_missing_imports = true
 module = "feedparser.*"
 ignore_missing_imports = true
 
+# pgvector (0.4.2) nie publikuje py.typed/stuby — ten sam przypadek co wyżej.
+# Granica ograniczona do `app/modules/ai_fund/models.py`, jedynego miejsca
+# w zakresie mypy (`files = ["app", "worker"]`) importującego
+# `pgvector.sqlalchemy.Vector` (ADR-104). Migracja Alembic też go importuje,
+# ale `alembic/` leży poza tym zakresem.
+[[tool.mypy.overrides]]
+module = "pgvector.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # Jedna pętla zdarzeń na całą sesję testów — silnik SQLAlchemy/asyncpg

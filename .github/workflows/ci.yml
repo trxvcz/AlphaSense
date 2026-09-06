@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # pgvector/pgvector:pg16 — patrz komentarz w docker-compose.yml (ADR-104).
+        image: pgvector/pgvector:pg16
         env: { POSTGRES_USER: portfel, POSTGRES_PASSWORD: portfel, POSTGRES_DB: portfel_test }
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5

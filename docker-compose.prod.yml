@@ -90,7 +90,8 @@ services:
       retries: 3
 
   postgres:
-    image: postgres:16
+    # pgvector/pgvector:pg16 — patrz komentarz w docker-compose.yml (ADR-104).
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     logging: *default-logging
     # `env_file`, nie `environment: ${...}` — `POSTGRES_*` mają przyjść z

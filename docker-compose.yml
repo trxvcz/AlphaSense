@@ -6,7 +6,11 @@
 
 services:
   postgres:
-    image: postgres:16
+    # pgvector/pgvector:pg16 = oficjalny obraz postgres:16 + prebuildowane
+    # rozszerzenie `vector` (ADR-104, Etap AI-1) — `CREATE EXTENSION vector`
+    # w migracji `20260906_ai_fund_models.py` wymaga go dostępnego w obrazie,
+    # zwykły `postgres:16` go nie ma. Drop-in zamiennik, ta sama wersja majora.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

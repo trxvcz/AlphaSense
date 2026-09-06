@@ -203,3 +203,68 @@ async def test_kontekst_nie_przecieka_miedzy_sesjami(
         ).scalar() in ("", None)
 
     assert current_user_id.get() == ""
+
+
+async def test_ai_fund_session_dziedziczy_wlasciciela_po_portfelu(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """`ai_fund_sessions` (ADR-104, Etap AI-1) — ten sam wzorzec co `holdings`:
+    brak `user_id`, polityka idzie przez `portfolio_id`. Endpointów jeszcze
+    nie ma (Etap AI-2), więc setup jest bezpośrednim `INSERT`-em, tak jak
+    zrobiłby to worker/serwis w kolejnym etapie.
+    """
+    user_a, token_a = await _register_and_login(client, EMAIL_A)
+    portfolio_a = await _create_portfolio(client, token_a, "Portfel A")
+
+    await db_session.execute(
+        text("INSERT INTO ai_fund_sessions (portfolio_id) VALUES (:pid)"),
+        {"pid": portfolio_a},
+    )
+    await db_session.commit()
+
+    set_current_user_id(None)
+    async with AsyncSessionLocal() as anonymous:
+        assert await _count(anonymous, "ai_fund_sessions") == 0
+
+    set_current_user_id(user_a)
+    async with AsyncSessionLocal() as owner:
+        assert await _count(owner, "ai_fund_sessions") == 1
+    assert await _count(db_session, "ai_fund_sessions") == 1
+
+
+async def test_ai_agent_log_dziedziczy_wlasciciela_przez_sesje(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """`ai_agent_logs` jest własnością sesji, która sama jest własnością
+    portfela — dwupoziomowy łańcuch podzapytań (`_OWNED_VIA_PARENT`).
+    Sprawdza, że polityka `ai_fund_sessions` nie blokuje podzapytania
+    użytego przez politykę `ai_agent_logs` (rola aplikacji, nie właściciela).
+    """
+    user_a, token_a = await _register_and_login(client, EMAIL_A)
+    portfolio_a = await _create_portfolio(client, token_a, "Portfel A")
+
+    session_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO ai_fund_sessions (portfolio_id) VALUES (:pid) RETURNING id"
+            ),
+            {"pid": portfolio_a},
+        )
+    ).scalar()
+    await db_session.execute(
+        text(
+            "INSERT INTO ai_agent_logs (session_id, agent_type, parsed_data) "
+            "VALUES (:sid, 'research', '{}'::jsonb)"
+        ),
+        {"sid": session_id},
+    )
+    await db_session.commit()
+
+    set_current_user_id(None)
+    async with AsyncSessionLocal() as anonymous:
+        assert await _count(anonymous, "ai_agent_logs") == 0
+
+    set_current_user_id(user_a)
+    async with AsyncSessionLocal() as owner:
+        assert await _count(owner, "ai_agent_logs") == 1
+    assert await _count(db_session, "ai_agent_logs") == 1
