@@ -152,6 +152,31 @@ Legenda: ⚪ nie zaczęty · 🟡 w toku · 🟢 zrobiony · 🔴 zablokowany
   jest zrobiony i działa bez nich (pusty DSN = Sentry wyłączone, aplikacja bez zmian). DSN-y są
   potrzebne dopiero przy **wdrożeniu produkcyjnym** — do `.env.prod`, patrz `docs/wdrozenie.md`.
   Konsekwencja czekania: pierwsze wdrożenie poleci bez raportowania błędów.
+- [ ] **ADR-104 (moduł AI Fund) — status „Proponowana"**. Użytkownik potwierdził w rozmowie
+  (2026-09-06) świadomą decyzję o rozszerzeniu zakresu poza mapę Etapów 0–23 oraz wybór
+  oficjalnego SDK Google (`google-genai`, nie LiteLLM) — ale formalna akceptacja ADR-u (zmiana
+  statusu na „Zaakceptowana") wciąż czeka. Do uzupełnienia po Twojej stronie przed Etapem AI-1:
+  `GEMINI_API_KEY` w `.env`/`.env.example`, oraz decyzja czy `pgvector` instalujemy już teraz na
+  VPS-ie (obraz Postgresa z rozszerzeniem) czy dopiero przy realnym użyciu w Etapie AI-3.
+
+## Moduł AI Fund — rozszerzenie poza mapą Etapów 0–23 (ADR-104, `ai_fund_gemini_plan.md`)
+
+Numeracja niezależna od kroków 1–50 i Etapów 0–23, żeby nie zaciemniać postępu v2/v3.
+Zasady z `ai_fund_gemini_plan.md` §1 (Złote Reguły) obowiązują na każdym etapie:
+wymuszony JSON z Gemini, SSoT (LLM nie wymyśla cen/wyników), agent Backtest nie generuje
+kodu (tylko JSON parametrów wykonywany przez `backtester.py`), jawne oznaczanie braku
+danych, izolacja przez `get_owned_portfolio`.
+
+```
+[ ] AI-1 Modele danych i pamięć „vector-ready" (AIFundSession, AIAgentLog, AssetVibeMetric,
+        AssetAnalystRating, AIPrediction, AILesson + pgvector), migracja, job ingest_analyst_ratings
+[ ] AI-2 Silnik 6 agentów (Research, Vibe, Debate, Backtest, Risk, Review)
+[ ] AI-3 Memory decay: worker/jobs/evaluate_ai_sessions.py, wstrzykiwanie AILesson z filtrem TTL
+[ ] AI-4 Single Asset Analysis: sentyment + oceny analityków (endpointy + UI)
+[ ] AI-5 Wizualizacja (CandleChart z markerami) i Control Room (ai-fund/page.tsx)
+```
+
+`make check` po backendzie po każdym etapie AI-*, code-review po każdym — jak dla kroków 1–50.
 
 ## Plan etapu 9 — otoczka (uzgodniony 2026-08-10, przed rozpoczęciem)
 
